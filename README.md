@@ -1,30 +1,28 @@
 # ZK Dark Pool DEX
 
-> Privacy-preserving decentralized exchange where all orders are completely hidden until settlement.
+A decentralized exchange where orders stay private until settlement. Traders prove their orders are valid (enough collateral, correct format, within limits) using zero-knowledge proofs, without revealing the pair, price, or size to anyone.
 
-**Stack:** Go · Rust · Solidity · ZK Circuits (halo2 / arkworks)
+Go · Rust · Solidity · ZK Circuits (halo2 / arkworks)
 
 ---
 
-## Overview
+## Why this exists
 
-ZK Dark Pool DEX is a DEX where traders submit cryptographic proofs that their orders are valid — sufficient collateral, correct format, within position limits — without revealing the pair, price, or size to any counterparty or on-chain observer.
+On a normal DEX, your orders sit in a public mempool. Anyone can see them, front-run them, sandwich them. This project takes a different approach: orders are cryptographic commitments. The matching engine never sees the actual order contents, only commitments and proof validity bits. Settlement happens in batches with aggregated ZK proofs verified on-chain.
 
-### Design Goals
+Three things we care about:
 
-- **Pre-trade privacy** — no order data is visible on-chain before matching.
-- **Post-trade verifiability** — every matched trade is accompanied by a ZK proof of correct settlement.
-- **High-throughput matching** — off-chain Go matching engine, up to 100k orders/sec with p99 latency < 1ms.
+1. Orders are invisible on-chain before matching.
+2. Every matched trade comes with a ZK proof that settlement was computed correctly.
+3. The off-chain Go matching engine handles up to 100k orders/sec with p99 latency under 1ms.
 
-### How It Compares
-
-| Dimension | Typical DEX | ZK Dark Pool DEX |
+| | Typical DEX | This project |
 |---|---|---|
 | Order visibility | Public mempool, front-runnable | Private until settlement |
 | Proof system | None | ZK-SNARK per order batch |
 | Matching engine | On-chain (expensive) | Off-chain Go engine, O(log n) |
 | Settlement | Immediate per-order | Batched, gas-efficient |
-| Stack complexity | Solidity only | Go + Rust + Solidity + ZK |
+| Stack | Solidity only | Go + Rust + Solidity + ZK |
 
 ---
 
@@ -78,53 +76,53 @@ flowchart TB
 
 ---
 
-## Order Lifecycle
+## Order lifecycle
 
-1. **Commitment** — trader submits a Pedersen commitment to the order parameters.
-2. **Proof Generation** — trader runs a Rust circuit locally and produces a ZK proof of validity.
-3. **Matching** — the Go engine matches bids and asks using price-time priority, operating only on commitments.
-4. **Settlement** — a batch of matched pairs is submitted on-chain with aggregated proofs; the Solidity verifier checks each proof and transfers tokens atomically.
+1. Trader submits a Pedersen commitment to the order parameters.
+2. Trader runs a Rust circuit locally, gets back a ZK proof that the order is valid.
+3. The Go engine matches bids and asks by price-time priority. It only ever sees commitments, never actual order data.
+4. Matched pairs get batched and sent on-chain with aggregated proofs. The Solidity verifier checks the proofs and transfers tokens atomically.
 
 ---
 
-## Business Rules
+## Rules
 
 ### Matching
 
 - Price-time priority (FIFO within the same price level).
-- Partial fills supported; residual quantity remains in the book.
+- Partial fills are supported. Residual quantity stays in the book.
 - Orders expire after a configurable TTL (default: 10 min).
-- Self-match prevention: orders from the same commitment key cannot match.
-- Minimum order size enforced at the circuit level.
+- Orders from the same commitment key cannot match each other.
+- Minimum order size is enforced at the circuit level, not in the engine.
 
 ### Settlement
 
-- Batches of up to 256 matched pairs.
-- Aggregated proof verified on-chain — if it fails, the entire batch is rejected.
-- Collateral locked in escrow at commitment time, released atomically at settlement.
-- 0.05% protocol fee deducted from the taker side.
+- Batches hold up to 256 matched pairs.
+- If the aggregated proof fails verification, the entire batch is rejected. No partial settlement.
+- Collateral is locked in escrow at commitment time and released atomically at settlement.
+- 0.05% protocol fee is taken from the taker side.
 
-### Privacy Guarantees
+### What's private, what's not
 
-- External observers cannot determine price or size of pending orders from on-chain data.
-- The matching engine operator only sees commitments and proof validity bits.
-- Post-settlement, trade amounts are revealed but unlinkable to wallet addresses.
+- Nobody can determine the price or size of a pending order from on-chain data.
+- The matching engine operator only sees commitments and proof validity bits. Not order contents.
+- After settlement, trade amounts become visible but are unlinkable to wallet addresses without additional info.
 
 ---
 
 ## Components
 
-| Layer | Language | Responsibility |
+| Layer | Language | What it does |
 |---|---|---|
-| ZK Circuit | Rust (halo2 / arkworks) | Generate & verify proofs of order validity |
+| ZK Circuit | Rust (halo2 / arkworks) | Generates and verifies proofs of order validity |
 | Matching Engine | Go | In-memory order book, price-time matching, WAL |
-| Settlement Contract | Solidity | On-chain proof verification, token transfer, escrow |
-| API Gateway | Go (gRPC + REST) | Client-facing order submission and status endpoints |
-| Demo Frontend | TypeScript / Next.js | Anonymized order book depth and trade history |
+| Settlement Contract | Solidity | On-chain proof verification, token transfers, escrow |
+| API Gateway | Go (gRPC + REST) | Order submission and status endpoints |
+| Demo Frontend | TypeScript / Next.js | Shows anonymized order book depth and trade history |
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 darkpool/
@@ -156,6 +154,6 @@ darkpool/
 
 ---
 
-## Target Audience
+## Who this is for
 
-Protocols and institutions that need MEV protection and order confidentiality — hedge funds, market makers, and DeFi protocols building on top of privacy layers.
+Hedge funds, market makers, and DeFi protocols that need MEV protection and don't want their order flow visible to the world.
