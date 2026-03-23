@@ -2,26 +2,49 @@ export default function Footer() {
   return (
     <footer className="relative bg-brand-bg border-t border-brand-border">
       <div className="px-6 md:px-12 lg:px-20 md:pr-[300px] py-16 md:py-20">
-        {/* Brand */}
-        <h3 className="font-display text-[clamp(32px,4vw,48px)] text-white leading-[0.95] mb-5">
-          DARKPOOL
-          <br />
-          <span className="text-brand-accent">PROTOCOL</span>
-        </h3>
-        <p className="font-mono text-[12px] text-brand-muted leading-[1.8] max-w-[360px] mb-12">
-          A decentralized exchange where orders stay private until
-          settlement. Built with zero-knowledge proofs on Arbitrum.
-        </p>
+        {/* Top row — brand left, links center */}
+        <div className="flex flex-col md:flex-row gap-12 md:gap-20 mb-0">
+          {/* Brand */}
+          <div className="flex-shrink-0">
+            <h3 className="font-display text-[clamp(32px,4vw,48px)] text-white leading-[0.95] mb-5">
+              DARKPOOL
+              <br />
+              <span className="text-brand-accent">PROTOCOL</span>
+            </h3>
+            <p className="font-mono text-[12px] text-brand-muted leading-[1.8] max-w-[320px]">
+              A decentralized exchange where orders stay private until
+              settlement. Built with zero-knowledge proofs on Arbitrum.
+            </p>
+          </div>
 
-        {/* Links — horizontal, all left-aligned */}
-        <div className="flex flex-wrap gap-x-16 gap-y-10 mb-0">
-          <div>
-            <span className="font-mono text-[10px] text-brand-accent tracking-[0.2em] block mb-5">
-              PROTOCOL
-            </span>
-            <ul className="space-y-3">
-              {['Documentation', 'Whitepaper', 'Audit Report', 'GitHub'].map(
-                (item) => (
+          {/* Links — spread across center */}
+          <div className="flex flex-wrap gap-x-16 gap-y-10">
+            <div>
+              <span className="font-mono text-[10px] text-brand-accent tracking-[0.2em] block mb-5">
+                PROTOCOL
+              </span>
+              <ul className="space-y-3">
+                {['Documentation', 'Whitepaper', 'Audit Report', 'GitHub'].map(
+                  (item) => (
+                    <li key={item}>
+                      <a
+                        href="#"
+                        className="font-mono text-[12px] text-brand-muted hover:text-white transition-colors duration-150"
+                      >
+                        {item}
+                      </a>
+                    </li>
+                  )
+                )}
+              </ul>
+            </div>
+
+            <div>
+              <span className="font-mono text-[10px] text-brand-accent tracking-[0.2em] block mb-5">
+                COMMUNITY
+              </span>
+              <ul className="space-y-3">
+                {['Twitter', 'Discord', 'Telegram', 'Blog'].map((item) => (
                   <li key={item}>
                     <a
                       href="#"
@@ -30,27 +53,29 @@ export default function Footer() {
                       {item}
                     </a>
                   </li>
-                )
-              )}
-            </ul>
-          </div>
+                ))}
+              </ul>
+            </div>
 
-          <div>
-            <span className="font-mono text-[10px] text-brand-accent tracking-[0.2em] block mb-5">
-              COMMUNITY
-            </span>
-            <ul className="space-y-3">
-              {['Twitter', 'Discord', 'Telegram', 'Blog'].map((item) => (
-                <li key={item}>
-                  <a
-                    href="#"
-                    className="font-mono text-[12px] text-brand-muted hover:text-white transition-colors duration-150"
-                  >
-                    {item}
-                  </a>
-                </li>
-              ))}
-            </ul>
+            <div>
+              <span className="font-mono text-[10px] text-brand-accent tracking-[0.2em] block mb-5">
+                DEVELOPERS
+              </span>
+              <ul className="space-y-3">
+                {['SDK', 'API Reference', 'Smart Contracts', 'Bug Bounty'].map(
+                  (item) => (
+                    <li key={item}>
+                      <a
+                        href="#"
+                        className="font-mono text-[12px] text-brand-muted hover:text-white transition-colors duration-150"
+                      >
+                        {item}
+                      </a>
+                    </li>
+                  )
+                )}
+              </ul>
+            </div>
           </div>
         </div>
       </div>
