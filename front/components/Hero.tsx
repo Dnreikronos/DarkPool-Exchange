@@ -96,26 +96,26 @@ export default function Hero() {
 
           <h1 className="hero-h1 font-display leading-[0.90] mb-8">
             <div style={{ overflow: 'hidden' }}>
-              <span className="line-reveal block text-white text-[clamp(52px,7.5vw,96px)]">
+              <span className="line-reveal block text-white text-[clamp(64px,11vw,148px)]">
                 TRADE WITHOUT
               </span>
             </div>
             <div style={{ overflow: 'hidden' }}>
               <span
-                className="line-reveal block text-transparent text-[clamp(52px,7.5vw,96px)]"
-                style={{ WebkitTextStroke: '2px #D4FF00' }}
+                className="line-reveal block text-transparent text-[clamp(64px,11vw,148px)]"
+                style={{ WebkitTextStroke: '2.5px #D4FF00' }}
               >
                 REVEALING
               </span>
             </div>
             <div style={{ overflow: 'hidden' }}>
-              <span className="line-reveal block text-white text-[clamp(52px,7.5vw,96px)]">
+              <span className="line-reveal block text-white text-[clamp(64px,11vw,148px)]">
                 ANYTHING.
               </span>
             </div>
           </h1>
 
-          <p className="hero-sub font-mono text-[13px] text-brand-muted leading-[1.85] max-w-[420px] mb-8">
+          <p className="hero-sub font-mono text-[14px] text-brand-muted leading-[1.85] max-w-[480px] mb-8">
             Orders are cryptographic commitments.
             <br />
             The engine never sees price, pair or size.
