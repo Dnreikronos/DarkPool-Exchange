@@ -86,7 +86,7 @@ export default function Hero() {
       </div>
 
       {/* Two-column content */}
-      <div className="relative z-10 flex-1 flex items-center px-6 md:px-12 lg:px-20 md:pr-[300px]">
+      <div className="relative z-10 flex-1 flex items-center px-6 md:px-12 lg:px-20 md:pr-[280px]">
         <div className="w-full">
         {/* LEFT — copy */}
         <div>
@@ -94,23 +94,21 @@ export default function Hero() {
             [ PROTOCOL v0.1 — ARBITRUM ]
           </p>
 
-          <h1 className="hero-h1 font-display leading-[0.90] mb-8">
+          <h1 className="hero-h1 font-display leading-[0.88] mb-8">
             <div style={{ overflow: 'hidden' }}>
               <span className="line-reveal block text-white text-[clamp(64px,11vw,148px)]">
                 TRADE WITHOUT
               </span>
             </div>
             <div style={{ overflow: 'hidden' }}>
-              <span
-                className="line-reveal block text-transparent text-[clamp(64px,11vw,148px)]"
-                style={{ WebkitTextStroke: '2.5px #D4FF00' }}
-              >
-                REVEALING
-              </span>
-            </div>
-            <div style={{ overflow: 'hidden' }}>
-              <span className="line-reveal block text-white text-[clamp(64px,11vw,148px)]">
-                ANYTHING.
+              <span className="line-reveal block text-[clamp(64px,11vw,148px)]">
+                <span
+                  className="text-transparent"
+                  style={{ WebkitTextStroke: '2.5px #D4FF00' }}
+                >
+                  REVEALING
+                </span>
+                <span className="text-white">{' '}ANYTHING.</span>
               </span>
             </div>
           </h1>
