@@ -20,14 +20,17 @@ func (s *MemStore) Append(events ...Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i := range events {
+	buf := make([]Event, len(events))
+	copy(buf, events)
+
+	for i := range buf {
 		s.seq++
-		events[i].Seq = s.seq
-		if events[i].Timestamp.IsZero() {
-			events[i].Timestamp = time.Now()
+		buf[i].Seq = s.seq
+		if buf[i].Timestamp.IsZero() {
+			buf[i].Timestamp = time.Now()
 		}
-		s.events = append(s.events, events[i])
 	}
+	s.events = append(s.events, buf...)
 	return nil
 }
 
