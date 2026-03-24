@@ -141,13 +141,17 @@ flowchart TB
 ```
 darkpool/
 ├── engine/
-│   ├── orderbook.go         # Order book projection from event stream
-│   ├── auction.go           # Batch auction logic, clearing price computation
-│   ├── events.go            # Event types and event store interface
-│   ├── store.go             # Append-only event log + compaction
-│   ├── orderbook_test.go    # Unit tests
-│   ├── auction_test.go      # Auction logic tests
-│   └── bench_test.go        # Benchmarks
+│   ├── consts/
+│   │   └── consts.go            # Shared enums: Side, EventType
+│   ├── model/
+│   │   └── model.go             # Domain types: Order, Fill
+│   ├── event/
+│   │   ├── event.go             # Event struct, payloads, Store interface
+│   │   └── store.go             # Append-only event log (in-memory impl)
+│   ├── orderbook.go             # Order book projection from event stream
+│   ├── auction.go               # Batch auction logic, clearing price computation
+│   ├── orderbook_test.go        # Order book unit tests
+│   └── auction_test.go          # Auction logic tests
 ├── zkproof/
 │   ├── circuits/            # Rust: halo2 circuits for order validity
 │   ├── prover/              # Proof generation (native + WASM target)
