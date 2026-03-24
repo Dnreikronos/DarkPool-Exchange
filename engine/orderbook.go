@@ -29,8 +29,9 @@ func (ob *OrderBook) Replay(store event.Store) error {
 	const batchSize = 1024
 
 	ob.mu.Lock()
+	defer ob.mu.Unlock()
+
 	after := ob.seq
-	ob.mu.Unlock()
 
 	for {
 		events, err := store.ReadFrom(after, batchSize)
@@ -40,11 +41,9 @@ func (ob *OrderBook) Replay(store event.Store) error {
 		if len(events) == 0 {
 			break
 		}
-		ob.mu.Lock()
 		for _, e := range events {
 			ob.apply(e)
 		}
-		ob.mu.Unlock()
 		after = events[len(events)-1].Seq
 	}
 	return nil
