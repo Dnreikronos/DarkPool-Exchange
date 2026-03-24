@@ -82,8 +82,9 @@ func computeClearingPrice(bids, asks []model.Order) decimal.Decimal {
 	}
 	sort.Slice(prices, func(i, j int) bool { return prices[i].LessThan(prices[j]) })
 
-	bestPrice := decimal.Zero
 	bestVolume := decimal.Zero
+
+	var tiedPrices []decimal.Decimal
 
 	for _, p := range prices {
 		bidVol := cumulativeVolume(bids, func(o *model.Order) bool { return o.Price.GreaterThanOrEqual(p) })
@@ -92,11 +93,20 @@ func computeClearingPrice(bids, asks []model.Order) decimal.Decimal {
 
 		if matched.GreaterThan(bestVolume) {
 			bestVolume = matched
-			bestPrice = p
+			tiedPrices = []decimal.Decimal{p}
+		} else if matched.Equal(bestVolume) && matched.IsPositive() {
+			tiedPrices = append(tiedPrices, p)
 		}
 	}
 
-	return bestPrice
+	if len(tiedPrices) == 0 {
+		return decimal.Zero
+	}
+
+	// Tie-breaking: use the mid-price of the lowest and highest tied candidates.
+	lo := tiedPrices[0]
+	hi := tiedPrices[len(tiedPrices)-1]
+	return lo.Add(hi).Div(decimal.NewFromInt(2))
 }
 
 func cumulativeVolume(orders []model.Order, pred func(*model.Order) bool) decimal.Decimal {
