@@ -133,18 +133,23 @@ func matchOrders(bids, asks []model.Order, price decimal.Decimal) []event.OrderM
 	}
 
 	var matches []event.OrderMatched
+	askStart := 0
 
 	for bi := 0; bi < len(eligibleBids); bi++ {
 		bid := &eligibleBids[bi]
 
-		for ai := 0; ai < len(eligibleAsks) && bid.RemainingSize.IsPositive(); ai++ {
+		for askStart < len(eligibleAsks) && !eligibleAsks[askStart].RemainingSize.IsPositive() {
+			askStart++
+		}
+
+		for ai := askStart; ai < len(eligibleAsks) && bid.RemainingSize.IsPositive(); ai++ {
 			ask := &eligibleAsks[ai]
 
-			if bid.CommitmentKey == ask.CommitmentKey {
+			if !ask.RemainingSize.IsPositive() {
 				continue
 			}
 
-			if !ask.RemainingSize.IsPositive() {
+			if bid.CommitmentKey == ask.CommitmentKey {
 				continue
 			}
 
