@@ -9,25 +9,35 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type EventData interface {
+	eventData()
+}
+
 type Event struct {
 	Seq       uint64
 	Type      consts.EventType
 	Timestamp time.Time
-	Data      any
+	Data      EventData
 }
 
 type OrderPlaced struct {
 	Order model.Order
 }
 
+func (OrderPlaced) eventData() {}
+
 type OrderCancelled struct {
 	OrderID uuid.UUID
 	Reason  string
 }
 
+func (OrderCancelled) eventData() {}
+
 type OrderExpired struct {
 	OrderID uuid.UUID
 }
+
+func (OrderExpired) eventData() {}
 
 type AuctionExecuted struct {
 	AuctionID     uuid.UUID
@@ -37,6 +47,8 @@ type AuctionExecuted struct {
 	Timestamp     time.Time
 }
 
+func (AuctionExecuted) eventData() {}
+
 type OrderMatched struct {
 	AuctionID uuid.UUID
 	Bid       model.Fill
@@ -45,6 +57,8 @@ type OrderMatched struct {
 	Size      decimal.Decimal
 }
 
+func (OrderMatched) eventData() {}
+
 type BatchSubmitted struct {
 	BatchID   uuid.UUID
 	AuctionID uuid.UUID
@@ -52,10 +66,14 @@ type BatchSubmitted struct {
 	PairCount int
 }
 
+func (BatchSubmitted) eventData() {}
+
 type BatchConfirmed struct {
 	BatchID uuid.UUID
 	TxHash  string
 }
+
+func (BatchConfirmed) eventData() {}
 
 // Store is the interface for the append-only event log.
 type Store interface {
