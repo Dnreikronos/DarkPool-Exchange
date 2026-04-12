@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/darkpool-exchange/engine/consts"
+	"github.com/darkpool-exchange/engine/utils"
 	"github.com/darkpool-exchange/engine/event"
 	"github.com/darkpool-exchange/engine/model"
 	"github.com/google/uuid"
@@ -64,9 +64,9 @@ func (ob *OrderBook) apply(e event.Event) {
 	case event.OrderPlaced:
 		o := d.Order
 		switch o.Side {
-		case consts.Buy:
+		case utils.Buy:
 			ob.bids[o.ID] = &o
-		case consts.Sell:
+		case utils.Sell:
 			ob.asks[o.ID] = &o
 		}
 
@@ -140,7 +140,7 @@ func (ob *OrderBook) ExpireOrders(now time.Time) []event.Event {
 	for _, o := range ob.bids {
 		if !o.ExpiresAt.IsZero() && now.After(o.ExpiresAt) {
 			expired = append(expired, event.Event{
-				Type: consts.OrderExpiredType,
+				Type: utils.OrderExpiredType,
 				Data: event.OrderExpired{OrderID: o.ID},
 			})
 		}
@@ -148,7 +148,7 @@ func (ob *OrderBook) ExpireOrders(now time.Time) []event.Event {
 	for _, o := range ob.asks {
 		if !o.ExpiresAt.IsZero() && now.After(o.ExpiresAt) {
 			expired = append(expired, event.Event{
-				Type: consts.OrderExpiredType,
+				Type: utils.OrderExpiredType,
 				Data: event.OrderExpired{OrderID: o.ID},
 			})
 		}

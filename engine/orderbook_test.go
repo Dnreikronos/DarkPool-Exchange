@@ -4,14 +4,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/darkpool-exchange/engine/consts"
+	"github.com/darkpool-exchange/engine/utils"
 	"github.com/darkpool-exchange/engine/event"
 	"github.com/darkpool-exchange/engine/model"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
-func newOrder(side consts.Side, price, size int64) model.Order {
+func newOrder(side utils.Side, price, size int64) model.Order {
 	return model.Order{
 		ID:            uuid.New(),
 		Pair:          "ETH/USDC",
@@ -27,15 +27,15 @@ func newOrder(side consts.Side, price, size int64) model.Order {
 
 func TestOrderBook_PlaceAndCancel(t *testing.T) {
 	ob := NewOrderBook()
-	o := newOrder(consts.Buy, 1800, 10)
+	o := newOrder(utils.Buy, 1800, 10)
 
-	ob.Apply(event.Event{Seq: 1, Type: consts.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
 
 	if got := ob.ActiveOrderCount(); got != 1 {
 		t.Fatalf("ActiveOrderCount = %d, want 1", got)
 	}
 
-	ob.Apply(event.Event{Seq: 2, Type: consts.OrderCancelledType, Data: event.OrderCancelled{OrderID: o.ID}})
+	ob.Apply(event.Event{Seq: 2, Type: utils.OrderCancelledType, Data: event.OrderCancelled{OrderID: o.ID}})
 
 	if got := ob.ActiveOrderCount(); got != 0 {
 		t.Fatalf("ActiveOrderCount after cancel = %d, want 0", got)
@@ -44,13 +44,13 @@ func TestOrderBook_PlaceAndCancel(t *testing.T) {
 
 func TestOrderBook_PartialFill(t *testing.T) {
 	ob := NewOrderBook()
-	bid := newOrder(consts.Buy, 1800, 10)
-	ask := newOrder(consts.Sell, 1790, 4)
+	bid := newOrder(utils.Buy, 1800, 10)
+	ask := newOrder(utils.Sell, 1790, 4)
 
-	ob.Apply(event.Event{Seq: 1, Type: consts.OrderPlacedType, Data: event.OrderPlaced{Order: bid}})
-	ob.Apply(event.Event{Seq: 2, Type: consts.OrderPlacedType, Data: event.OrderPlaced{Order: ask}})
+	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: bid}})
+	ob.Apply(event.Event{Seq: 2, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: ask}})
 
-	ob.Apply(event.Event{Seq: 3, Type: consts.OrderMatchedType, Data: event.OrderMatched{
+	ob.Apply(event.Event{Seq: 3, Type: utils.OrderMatchedType, Data: event.OrderMatched{
 		Bid:   model.Fill{OrderID: bid.ID, Size: decimal.NewFromInt(4)},
 		Ask:   model.Fill{OrderID: ask.ID, Size: decimal.NewFromInt(4)},
 		Price: decimal.NewFromInt(1795),
@@ -76,7 +76,7 @@ func TestOrderBook_Expiration(t *testing.T) {
 	o := model.Order{
 		ID:            uuid.New(),
 		Pair:          "ETH/USDC",
-		Side:          consts.Buy,
+		Side:          utils.Buy,
 		Price:         decimal.NewFromInt(1800),
 		Size:          decimal.NewFromInt(5),
 		RemainingSize: decimal.NewFromInt(5),
@@ -85,7 +85,7 @@ func TestOrderBook_Expiration(t *testing.T) {
 		ExpiresAt:     time.Now().Add(-1 * time.Second),
 	}
 
-	ob.Apply(event.Event{Seq: 1, Type: consts.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
 
 	expired := ob.ExpireOrders(time.Now())
 	if len(expired) != 1 {
@@ -99,9 +99,9 @@ func TestOrderBook_Expiration(t *testing.T) {
 
 func TestOrderBook_ReplayFromStore(t *testing.T) {
 	store := event.NewMemStore()
-	o := newOrder(consts.Sell, 2000, 7)
+	o := newOrder(utils.Sell, 2000, 7)
 
-	store.Append(event.Event{Type: consts.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	store.Append(event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
 
 	ob := NewOrderBook()
 	if err := ob.Replay(store); err != nil {
