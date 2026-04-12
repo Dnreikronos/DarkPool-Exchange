@@ -92,10 +92,6 @@ func TestOrderBook_Expiration(t *testing.T) {
 		t.Fatalf("expired count = %d, want 1", len(expired))
 	}
 
-	for _, e := range expired {
-		ob.Apply(event.Event{Seq: 2, Type: e.Type, Data: e.Data})
-	}
-
 	if got := ob.ActiveOrderCount(); got != 0 {
 		t.Fatalf("ActiveOrderCount after expiration = %d, want 0", got)
 	}
