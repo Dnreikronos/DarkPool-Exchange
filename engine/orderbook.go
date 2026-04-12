@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -106,6 +107,12 @@ func (ob *OrderBook) Bids() []model.Order {
 	for _, o := range ob.bids {
 		out = append(out, *o)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Price.Equal(out[j].Price) {
+			return out[i].Price.GreaterThan(out[j].Price)
+		}
+		return out[i].SubmittedAt.Before(out[j].SubmittedAt)
+	})
 	return out
 }
 
@@ -116,6 +123,12 @@ func (ob *OrderBook) Asks() []model.Order {
 	for _, o := range ob.asks {
 		out = append(out, *o)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Price.Equal(out[j].Price) {
+			return out[i].Price.LessThan(out[j].Price)
+		}
+		return out[i].SubmittedAt.Before(out[j].SubmittedAt)
+	})
 	return out
 }
 
