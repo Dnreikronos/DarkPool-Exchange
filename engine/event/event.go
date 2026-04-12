@@ -3,7 +3,7 @@ package event
 import (
 	"time"
 
-	"github.com/darkpool-exchange/engine/consts"
+	"github.com/darkpool-exchange/engine/utils"
 	"github.com/darkpool-exchange/engine/model"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -15,7 +15,7 @@ type EventData interface {
 
 type Event struct {
 	Seq       uint64
-	Type      consts.EventType
+	Type      utils.EventType
 	Timestamp time.Time
 	Data      EventData
 }

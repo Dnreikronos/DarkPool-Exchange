@@ -3,7 +3,7 @@ package event
 import (
 	"testing"
 
-	"github.com/darkpool-exchange/engine/consts"
+	"github.com/darkpool-exchange/engine/utils"
 	"github.com/google/uuid"
 )
 
@@ -11,9 +11,9 @@ func TestMemStore_AppendAndRead(t *testing.T) {
 	s := NewMemStore()
 
 	events := []Event{
-		{Type: consts.OrderPlacedType, Data: OrderPlaced{}},
-		{Type: consts.OrderCancelledType, Data: OrderCancelled{OrderID: uuid.New()}},
-		{Type: consts.OrderPlacedType, Data: OrderPlaced{}},
+		{Type: utils.OrderPlacedType, Data: OrderPlaced{}},
+		{Type: utils.OrderCancelledType, Data: OrderCancelled{OrderID: uuid.New()}},
+		{Type: utils.OrderPlacedType, Data: OrderPlaced{}},
 	}
 
 	if err := s.Append(events...); err != nil {

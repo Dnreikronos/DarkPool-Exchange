@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"github.com/darkpool-exchange/engine/consts"
+	"github.com/darkpool-exchange/engine/utils"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -11,7 +11,7 @@ import (
 type Order struct {
 	ID            uuid.UUID
 	Pair          string
-	Side          consts.Side
+	Side          utils.Side
 	Price         decimal.Decimal
 	Size          decimal.Decimal
 	RemainingSize decimal.Decimal
