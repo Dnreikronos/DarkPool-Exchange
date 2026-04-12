@@ -120,8 +120,8 @@ func (ob *OrderBook) Asks() []model.Order {
 }
 
 func (ob *OrderBook) ExpireOrders(now time.Time) []event.Event {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
 
 	var expired []event.Event
 	for _, o := range ob.bids {
@@ -139,6 +139,10 @@ func (ob *OrderBook) ExpireOrders(now time.Time) []event.Event {
 				Data: event.OrderExpired{OrderID: o.ID},
 			})
 		}
+	}
+
+	for _, e := range expired {
+		ob.apply(e)
 	}
 	return expired
 }
