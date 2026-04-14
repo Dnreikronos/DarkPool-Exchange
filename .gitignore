@@ -47,7 +47,8 @@ coverage/
 target/
 Cargo.lock
 
-# go (future)
+# go
+/darkpool
 *.exe
 *.test
 *.out

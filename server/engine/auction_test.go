@@ -3,8 +3,8 @@ package engine
 import (
 	"testing"
 
-	"github.com/darkpool-exchange/engine/utils"
-	"github.com/darkpool-exchange/engine/model"
+	"github.com/darkpool-exchange/server/engine/utils"
+	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/shopspring/decimal"
 )
 
