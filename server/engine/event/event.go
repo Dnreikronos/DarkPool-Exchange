@@ -3,8 +3,8 @@ package event
 import (
 	"time"
 
-	"github.com/darkpool-exchange/engine/utils"
-	"github.com/darkpool-exchange/engine/model"
+	"github.com/darkpool-exchange/server/engine/utils"
+	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -44,6 +44,7 @@ type AuctionExecuted struct {
 	Pair          string
 	ClearingPrice decimal.Decimal
 	MatchedVolume decimal.Decimal
+	MatchCount    int
 	Timestamp     time.Time
 }
 

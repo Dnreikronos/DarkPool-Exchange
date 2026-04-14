@@ -3,7 +3,7 @@ package event
 import (
 	"testing"
 
-	"github.com/darkpool-exchange/engine/utils"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 )
 

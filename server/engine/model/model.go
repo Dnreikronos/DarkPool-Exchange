@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"github.com/darkpool-exchange/engine/utils"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
