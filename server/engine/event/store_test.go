@@ -24,7 +24,6 @@ func TestMemStore_AppendAndRead(t *testing.T) {
 		t.Fatalf("LastSeq = %d, want 3", got)
 	}
 
-	// Read all from beginning.
 	all, err := s.ReadFrom(0, 100)
 	if err != nil {
 		t.Fatalf("ReadFrom(0): %v", err)
@@ -38,7 +37,6 @@ func TestMemStore_AppendAndRead(t *testing.T) {
 		}
 	}
 
-	// Read from middle.
 	tail, err := s.ReadFrom(2, 100)
 	if err != nil {
 		t.Fatalf("ReadFrom(2): %v", err)
@@ -50,7 +48,6 @@ func TestMemStore_AppendAndRead(t *testing.T) {
 		t.Errorf("tail[0].Seq = %d, want 3", tail[0].Seq)
 	}
 
-	// Read past end.
 	empty, err := s.ReadFrom(3, 100)
 	if err != nil {
 		t.Fatalf("ReadFrom(3): %v", err)

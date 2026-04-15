@@ -116,7 +116,6 @@ func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.De
 	return &order, nil
 }
 
-// CancelOrder cancels an active order by ID.
 func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -178,7 +177,6 @@ func (e *Engine) GetOrderBook(pair string) (bids, asks []model.Order) {
 	return bids, asks
 }
 
-// ActiveOrderCount returns the total number of active orders.
 func (e *Engine) ActiveOrderCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
