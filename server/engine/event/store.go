@@ -1,9 +1,10 @@
 package event
 
 import (
-	"fmt"
 	"sync"
 	"time"
+
+	"github.com/darkpool-exchange/server/engine/utils"
 )
 
 type MemStore struct {
@@ -39,7 +40,7 @@ func (s *MemStore) ReadFrom(afterSeq uint64, limit int) ([]Event, error) {
 	defer s.mu.RUnlock()
 
 	if limit <= 0 {
-		return nil, fmt.Errorf("limit must be > 0")
+		return nil, utils.ErrLimitMustBePositive
 	}
 
 	start := s.indexAfter(afterSeq)

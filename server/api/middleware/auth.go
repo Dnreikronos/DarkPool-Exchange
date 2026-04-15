@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 
+	apiutils "github.com/darkpool-exchange/server/api/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -48,16 +49,16 @@ func (a *AuthInterceptor) authorize(ctx context.Context) error {
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Error(codes.Unauthenticated, "missing metadata")
+		return status.Error(codes.Unauthenticated, apiutils.MsgMissingMetadata)
 	}
 
 	keys := md.Get(authHeader)
 	if len(keys) == 0 {
-		return status.Error(codes.Unauthenticated, "missing api key")
+		return status.Error(codes.Unauthenticated, apiutils.MsgMissingAPIKey)
 	}
 
 	if !a.validKeys[keys[0]] {
-		return status.Error(codes.PermissionDenied, "invalid api key")
+		return status.Error(codes.PermissionDenied, apiutils.MsgInvalidAPIKey)
 	}
 
 	return nil

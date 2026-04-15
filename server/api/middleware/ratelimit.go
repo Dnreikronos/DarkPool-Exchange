@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	apiutils "github.com/darkpool-exchange/server/api/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -12,15 +13,15 @@ import (
 )
 
 type bucket struct {
-	tokens    float64
-	lastFill  time.Time
+	tokens   float64
+	lastFill time.Time
 }
 
 type RateLimiter struct {
 	mu       sync.Mutex
 	buckets  map[string]*bucket
-	rate     float64 // tokens per second
-	capacity float64 // max burst
+	rate     float64
+	capacity float64
 }
 
 func NewRateLimiter(ratePerSecond, burst float64) *RateLimiter {
@@ -70,7 +71,7 @@ func (r *RateLimiter) allow(ctx context.Context) error {
 	b.lastFill = now
 
 	if b.tokens < 1 {
-		return status.Error(codes.ResourceExhausted, "rate limit exceeded")
+		return status.Error(codes.ResourceExhausted, apiutils.MsgRateLimitExceeded)
 	}
 
 	b.tokens--

@@ -69,16 +69,16 @@ func (e *Engine) Recover() error {
 // PlaceOrder validates and places a new order into the book.
 func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration) (*model.Order, error) {
 	if pair == "" {
-		return nil, fmt.Errorf("pair is required")
+		return nil, utils.ErrPairRequired
 	}
 	if !price.IsPositive() {
-		return nil, fmt.Errorf("price must be positive")
+		return nil, utils.ErrPriceMustBePositive
 	}
 	if !size.IsPositive() {
-		return nil, fmt.Errorf("size must be positive")
+		return nil, utils.ErrSizeMustBePositive
 	}
 	if commitmentKey == "" {
-		return nil, fmt.Errorf("commitment key is required")
+		return nil, utils.ErrCommitmentKeyRequired
 	}
 
 	if ttl <= 0 {
