@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -18,17 +20,22 @@ type bucket struct {
 }
 
 type RateLimiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*bucket
-	rate     float64
-	capacity float64
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	rate       float64
+	capacity   float64
+	staleAfter time.Duration
 }
 
-func NewRateLimiter(ratePerSecond, burst float64) *RateLimiter {
+func NewRateLimiter(ratePerSecond, burst float64, staleAfter time.Duration) *RateLimiter {
+	if staleAfter <= 0 {
+		staleAfter = 10 * time.Minute
+	}
 	return &RateLimiter{
-		buckets:  make(map[string]*bucket),
-		rate:     ratePerSecond,
-		capacity: burst,
+		buckets:    make(map[string]*bucket),
+		rate:       ratePerSecond,
+		capacity:   burst,
+		staleAfter: staleAfter,
 	}
 }
 
@@ -78,6 +85,31 @@ func (r *RateLimiter) allow(ctx context.Context) error {
 	return nil
 }
 
+func (r *RateLimiter) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				r.evictStale(now)
+			}
+		}
+	}()
+}
+
+func (r *RateLimiter) evictStale(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, b := range r.buckets {
+		if now.Sub(b.lastFill) > r.staleAfter {
+			delete(r.buckets, key)
+		}
+	}
+}
+
 func clientKey(ctx context.Context) string {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if ok {
@@ -86,5 +118,14 @@ func clientKey(ctx context.Context) string {
 			return keys[0]
 		}
 	}
+
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		host, _, err := net.SplitHostPort(p.Addr.String())
+		if err == nil {
+			return host
+		}
+		return p.Addr.String()
+	}
+
 	return "anonymous"
 }

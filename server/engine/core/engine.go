@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -41,6 +43,8 @@ type Engine struct {
 	auctionInterval time.Duration
 	defaultTTL      time.Duration
 
+	auctionLog []event.AuctionExecuted
+
 	subMu       sync.RWMutex
 	subscribers map[string]*Subscriber
 }
@@ -59,11 +63,25 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 	}
 }
 
-// Recover rebuilds the order book from the event store.
+// Recover rebuilds the order book and auction log from the event store.
 func (e *Engine) Recover() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.ob.Replay(e.store)
+
+	if err := e.ob.Replay(e.store); err != nil {
+		return err
+	}
+
+	all, err := e.store.ReadFrom(0, math.MaxInt)
+	if err != nil {
+		return err
+	}
+	for _, ev := range all {
+		if ae, ok := ev.Data.(event.AuctionExecuted); ok {
+			e.auctionLog = append(e.auctionLog, ae)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration) (*model.Order, error) {
@@ -120,7 +138,7 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 	defer e.mu.Unlock()
 
 	if !e.orderExists(orderID) {
-		return fmt.Errorf("order %s not found", orderID)
+		return fmt.Errorf("order %s: %w", orderID, utils.ErrOrderNotFound)
 	}
 
 	if reason == "" {
@@ -143,35 +161,13 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 func (e *Engine) GetOrder(orderID uuid.UUID) *model.Order {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	return nil
+	return e.ob.FindOrder(orderID)
 }
 
 func (e *Engine) GetOrderBook(pair string) (bids, asks []model.Order) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	for _, o := range e.ob.Bids() {
-		if o.Pair == pair {
-			bids = append(bids, o)
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.Pair == pair {
-			asks = append(asks, o)
-		}
-	}
-	return bids, asks
+	return e.pairOrders(pair)
 }
 
 func (e *Engine) ActiveOrderCount() int {
@@ -186,7 +182,9 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 	now := time.Now()
 	expiredEvents := e.ob.ExpireOrders(now)
 	if len(expiredEvents) > 0 {
-		_ = e.store.Append(expiredEvents...)
+		if err := e.store.Append(expiredEvents...); err != nil {
+			log.Printf("failed to persist expiry events: %v", err)
+		}
 	}
 
 	var notifications []AuctionNotification
@@ -222,7 +220,11 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 			})
 		}
 
-		_ = e.store.Append(events...)
+		if err := e.store.Append(events...); err != nil {
+			log.Printf("failed to persist auction events for pair %s: %v", pair, err)
+		} else {
+			e.auctionLog = append(e.auctionLog, auctionEvt.Data.(event.AuctionExecuted))
+		}
 		for _, evt := range events {
 			e.ob.Apply(evt)
 		}
@@ -291,19 +293,13 @@ func (e *Engine) GetAuctionHistory(pair string, limit int) ([]event.AuctionExecu
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	all, err := e.store.ReadFrom(0, int(e.store.LastSeq())+1)
-	if err != nil {
-		return nil, err
-	}
-
 	var results []event.AuctionExecuted
-	for i := len(all) - 1; i >= 0; i-- {
-		if ae, ok := all[i].Data.(event.AuctionExecuted); ok {
-			if pair == "" || ae.Pair == pair {
-				results = append(results, ae)
-				if len(results) >= limit {
-					break
-				}
+	for i := len(e.auctionLog) - 1; i >= 0; i-- {
+		ae := e.auctionLog[i]
+		if pair == "" || ae.Pair == pair {
+			results = append(results, ae)
+			if len(results) >= limit {
+				break
 			}
 		}
 	}
@@ -311,17 +307,7 @@ func (e *Engine) GetAuctionHistory(pair string, limit int) ([]event.AuctionExecu
 }
 
 func (e *Engine) orderExists(orderID uuid.UUID) bool {
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	return false
+	return e.ob.HasOrder(orderID)
 }
 
 func (e *Engine) pairOrders(pair string) ([]model.Order, []model.Order) {
