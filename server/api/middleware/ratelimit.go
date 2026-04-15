@@ -20,17 +20,22 @@ type bucket struct {
 }
 
 type RateLimiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*bucket
-	rate     float64
-	capacity float64
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	rate       float64
+	capacity   float64
+	staleAfter time.Duration
 }
 
-func NewRateLimiter(ratePerSecond, burst float64) *RateLimiter {
+func NewRateLimiter(ratePerSecond, burst float64, staleAfter time.Duration) *RateLimiter {
+	if staleAfter <= 0 {
+		staleAfter = 10 * time.Minute
+	}
 	return &RateLimiter{
-		buckets:  make(map[string]*bucket),
-		rate:     ratePerSecond,
-		capacity: burst,
+		buckets:    make(map[string]*bucket),
+		rate:       ratePerSecond,
+		capacity:   burst,
+		staleAfter: staleAfter,
 	}
 }
 
@@ -78,6 +83,31 @@ func (r *RateLimiter) allow(ctx context.Context) error {
 
 	b.tokens--
 	return nil
+}
+
+func (r *RateLimiter) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				r.evictStale(now)
+			}
+		}
+	}()
+}
+
+func (r *RateLimiter) evictStale(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, b := range r.buckets {
+		if now.Sub(b.lastFill) > r.staleAfter {
+			delete(r.buckets, key)
+		}
+	}
 }
 
 func clientKey(ctx context.Context) string {

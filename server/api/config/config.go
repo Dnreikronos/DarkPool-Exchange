@@ -13,6 +13,7 @@ type Config struct {
 	APIKeys         []string
 	RateLimit       float64
 	RateBurst       float64
+	RateStaleAfter  time.Duration
 }
 
 func Parse() Config {
@@ -22,6 +23,7 @@ func Parse() Config {
 	apiKeys := flag.String("api-keys", "", "comma-separated API keys (empty = auth disabled)")
 	rateLimit := flag.Float64("rate-limit", 10, "requests per second per client")
 	rateBurst := flag.Float64("rate-burst", 20, "max burst size for rate limiter")
+	rateStaleAfter := flag.Duration("rate-stale-after", 10*time.Minute, "evict idle rate-limit buckets after this duration")
 	flag.Parse()
 
 	var keys []string
@@ -36,5 +38,6 @@ func Parse() Config {
 		APIKeys:         keys,
 		RateLimit:       *rateLimit,
 		RateBurst:       *rateBurst,
+		RateStaleAfter:  *rateStaleAfter,
 	}
 }
