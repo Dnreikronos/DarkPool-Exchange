@@ -1,4 +1,4 @@
-package api
+package handler
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
 	apiutils "github.com/darkpool-exchange/server/api/utils"
-	engine "github.com/darkpool-exchange/server/engine"
+	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
@@ -17,10 +17,10 @@ import (
 
 type Server struct {
 	darkpoolv1.UnimplementedDarkPoolServiceServer
-	engine *engine.Engine
+	engine *core.Engine
 }
 
-func NewServer(eng *engine.Engine) *Server {
+func NewServer(eng *core.Engine) *Server {
 	return &Server{engine: eng}
 }
 
