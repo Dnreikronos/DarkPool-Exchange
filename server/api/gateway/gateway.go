@@ -1,4 +1,4 @@
-package api
+package gateway
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
 )
 
-// NewGateway creates an HTTP handler that proxies REST requests to the gRPC server.
 func NewGateway(ctx context.Context, grpcAddr string) (http.Handler, error) {
 	mux := runtime.NewServeMux()
 

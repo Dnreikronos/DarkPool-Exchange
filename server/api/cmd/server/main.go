@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/darkpool-exchange/server/api"
+	"github.com/darkpool-exchange/server/api/gateway"
 	"github.com/darkpool-exchange/server/api/config"
-	"github.com/darkpool-exchange/server/engine"
+	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/event"
 )
 
@@ -20,7 +20,7 @@ func main() {
 	cfg := config.Parse()
 
 	store := event.NewMemStore()
-	eng := engine.NewEngine(store, cfg.AuctionInterval)
+	eng := core.NewEngine(store, cfg.AuctionInterval)
 
 	if err := eng.Recover(); err != nil {
 		log.Fatalf("engine recovery failed: %v", err)
@@ -45,7 +45,7 @@ func main() {
 		}
 	}()
 
-	gw, err := api.NewGateway(ctx, cfg.GRPCAddr)
+	gw, err := gateway.NewGateway(ctx, cfg.GRPCAddr)
 	if err != nil {
 		log.Fatalf("failed to create gateway: %v", err)
 	}

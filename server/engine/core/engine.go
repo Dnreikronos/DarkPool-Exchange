@@ -1,4 +1,4 @@
-package engine
+package core
 
 import (
 	"context"
@@ -66,7 +66,6 @@ func (e *Engine) Recover() error {
 	return e.ob.Replay(e.store)
 }
 
-// PlaceOrder validates and places a new order into the book.
 func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration) (*model.Order, error) {
 	if pair == "" {
 		return nil, utils.ErrPairRequired
@@ -141,7 +140,6 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 	return nil
 }
 
-// GetOrder returns an active order by ID, or nil if not found.
 func (e *Engine) GetOrder(orderID uuid.UUID) *model.Order {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -159,7 +157,6 @@ func (e *Engine) GetOrder(orderID uuid.UUID) *model.Order {
 	return nil
 }
 
-// GetOrderBook returns aggregated depth for a pair.
 func (e *Engine) GetOrderBook(pair string) (bids, asks []model.Order) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -183,7 +180,6 @@ func (e *Engine) ActiveOrderCount() int {
 	return e.ob.ActiveOrderCount()
 }
 
-// RunAuctionTick runs a batch auction for all registered pairs.
 func (e *Engine) RunAuctionTick() []AuctionNotification {
 	e.mu.Lock()
 
@@ -250,7 +246,6 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 	return notifications
 }
 
-// Start begins the auction ticker loop. Blocks until ctx is cancelled.
 func (e *Engine) Start(ctx context.Context) {
 	ticker := time.NewTicker(e.auctionInterval)
 	defer ticker.Stop()
@@ -265,7 +260,6 @@ func (e *Engine) Start(ctx context.Context) {
 	}
 }
 
-// Subscribe registers a listener for auction results. Returns a subscriber ID.
 func (e *Engine) Subscribe(bufSize int) *Subscriber {
 	if bufSize <= 0 {
 		bufSize = 16
@@ -280,7 +274,6 @@ func (e *Engine) Subscribe(bufSize int) *Subscriber {
 	return sub
 }
 
-// Unsubscribe removes a listener and closes its channel.
 func (e *Engine) Unsubscribe(id string) {
 	e.subMu.Lock()
 	if sub, ok := e.subscribers[id]; ok {
@@ -290,7 +283,6 @@ func (e *Engine) Unsubscribe(id string) {
 	e.subMu.Unlock()
 }
 
-// GetAuctionHistory reads recent AuctionExecuted events from the store.
 func (e *Engine) GetAuctionHistory(pair string, limit int) ([]event.AuctionExecuted, error) {
 	if limit <= 0 {
 		limit = 50
