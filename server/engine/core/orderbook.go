@@ -160,6 +160,28 @@ func (ob *OrderBook) ExpireOrders(now time.Time) []event.Event {
 	return expired
 }
 
+func (ob *OrderBook) FindOrder(id uuid.UUID) (*model.Order, bool) {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+	if o, ok := ob.bids[id]; ok {
+		return o, true
+	}
+	if o, ok := ob.asks[id]; ok {
+		return o, true
+	}
+	return nil, false
+}
+
+func (ob *OrderBook) HasOrder(id uuid.UUID) bool {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+	if _, ok := ob.bids[id]; ok {
+		return true
+	}
+	_, ok := ob.asks[id]
+	return ok
+}
+
 func (ob *OrderBook) ActiveOrderCount() int {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -143,18 +144,8 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 func (e *Engine) GetOrder(orderID uuid.UUID) *model.Order {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	return nil
+	o, _ := e.ob.FindOrder(orderID)
+	return o
 }
 
 func (e *Engine) GetOrderBook(pair string) (bids, asks []model.Order) {
@@ -186,7 +177,9 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 	now := time.Now()
 	expiredEvents := e.ob.ExpireOrders(now)
 	if len(expiredEvents) > 0 {
-		_ = e.store.Append(expiredEvents...)
+		if err := e.store.Append(expiredEvents...); err != nil {
+			log.Printf("failed to append expired-order events: %v", err)
+		}
 	}
 
 	var notifications []AuctionNotification
@@ -222,7 +215,9 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 			})
 		}
 
-		_ = e.store.Append(events...)
+		if err := e.store.Append(events...); err != nil {
+			log.Printf("failed to append auction events for pair %s: %v", pair, err)
+		}
 		for _, evt := range events {
 			e.ob.Apply(evt)
 		}
@@ -311,17 +306,7 @@ func (e *Engine) GetAuctionHistory(pair string, limit int) ([]event.AuctionExecu
 }
 
 func (e *Engine) orderExists(orderID uuid.UUID) bool {
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	return false
+	return e.ob.HasOrder(orderID)
 }
 
 func (e *Engine) pairOrders(pair string) ([]model.Order, []model.Order) {

@@ -26,10 +26,10 @@ func main() {
 		log.Fatalf("engine recovery failed: %v", err)
 	}
 
-	grpcServer := config.NewGRPCServer(eng, cfg)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	grpcServer := config.NewGRPCServer(ctx, eng, cfg)
 
 	go eng.Start(ctx)
 
