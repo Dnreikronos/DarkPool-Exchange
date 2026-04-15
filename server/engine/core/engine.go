@@ -120,7 +120,7 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 	defer e.mu.Unlock()
 
 	if !e.orderExists(orderID) {
-		return fmt.Errorf("order %s not found", orderID)
+		return fmt.Errorf("order %s: %w", orderID, utils.ErrOrderNotFound)
 	}
 
 	if reason == "" {
@@ -143,35 +143,13 @@ func (e *Engine) CancelOrder(orderID uuid.UUID, reason string) error {
 func (e *Engine) GetOrder(orderID uuid.UUID) *model.Order {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return &o
-		}
-	}
-	return nil
+	return e.ob.FindOrder(orderID)
 }
 
 func (e *Engine) GetOrderBook(pair string) (bids, asks []model.Order) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	for _, o := range e.ob.Bids() {
-		if o.Pair == pair {
-			bids = append(bids, o)
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.Pair == pair {
-			asks = append(asks, o)
-		}
-	}
-	return bids, asks
+	return e.pairOrders(pair)
 }
 
 func (e *Engine) ActiveOrderCount() int {
@@ -311,17 +289,7 @@ func (e *Engine) GetAuctionHistory(pair string, limit int) ([]event.AuctionExecu
 }
 
 func (e *Engine) orderExists(orderID uuid.UUID) bool {
-	for _, o := range e.ob.Bids() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	for _, o := range e.ob.Asks() {
-		if o.ID == orderID {
-			return true
-		}
-	}
-	return false
+	return e.ob.HasOrder(orderID)
 }
 
 func (e *Engine) pairOrders(pair string) ([]model.Order, []model.Order) {

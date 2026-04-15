@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -86,5 +88,14 @@ func clientKey(ctx context.Context) string {
 			return keys[0]
 		}
 	}
+
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		host, _, err := net.SplitHostPort(p.Addr.String())
+		if err == nil {
+			return host
+		}
+		return p.Addr.String()
+	}
+
 	return "anonymous"
 }

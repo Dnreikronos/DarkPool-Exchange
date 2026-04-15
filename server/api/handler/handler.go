@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
@@ -48,7 +49,13 @@ func (s *Server) PlaceOrder(ctx context.Context, req *darkpoolv1.PlaceOrderReque
 
 	order, err := s.engine.PlaceOrder(req.Pair, side, price, size, req.CommitmentKey, ttl)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		if errors.Is(err, utils.ErrPairRequired) ||
+			errors.Is(err, utils.ErrPriceMustBePositive) ||
+			errors.Is(err, utils.ErrSizeMustBePositive) ||
+			errors.Is(err, utils.ErrCommitmentKeyRequired) {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to place order: %v", err)
 	}
 
 	return &darkpoolv1.PlaceOrderResponse{
@@ -63,7 +70,10 @@ func (s *Server) CancelOrder(ctx context.Context, req *darkpoolv1.CancelOrderReq
 	}
 
 	if err := s.engine.CancelOrder(id, req.Reason); err != nil {
-		return nil, status.Errorf(codes.NotFound, "%v", err)
+		if errors.Is(err, utils.ErrOrderNotFound) {
+			return nil, status.Errorf(codes.NotFound, "%v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to cancel order: %v", err)
 	}
 
 	return &darkpoolv1.CancelOrderResponse{}, nil
