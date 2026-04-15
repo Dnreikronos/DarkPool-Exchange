@@ -5,6 +5,7 @@ import (
 	"time"
 
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
+	apiutils "github.com/darkpool-exchange/server/api/utils"
 	engine "github.com/darkpool-exchange/server/engine"
 	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/darkpool-exchange/server/engine/utils"
@@ -40,7 +41,7 @@ func (s *Server) PlaceOrder(ctx context.Context, req *darkpoolv1.PlaceOrderReque
 	case darkpoolv1.Side_SIDE_SELL:
 		side = utils.Sell
 	default:
-		return nil, status.Error(codes.InvalidArgument, "side must be SIDE_BUY or SIDE_SELL")
+		return nil, status.Error(codes.InvalidArgument, apiutils.MsgInvalidSide)
 	}
 
 	ttl := time.Duration(req.TtlSeconds) * time.Second
@@ -86,7 +87,7 @@ func (s *Server) GetOrder(ctx context.Context, req *darkpoolv1.GetOrderRequest) 
 
 func (s *Server) GetOrderBook(ctx context.Context, req *darkpoolv1.GetOrderBookRequest) (*darkpoolv1.GetOrderBookResponse, error) {
 	if req.Pair == "" {
-		return nil, status.Error(codes.InvalidArgument, "pair is required")
+		return nil, status.Error(codes.InvalidArgument, apiutils.MsgPairRequired)
 	}
 
 	bids, asks := s.engine.GetOrderBook(req.Pair)
