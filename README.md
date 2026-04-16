@@ -127,11 +127,11 @@ flowchart TB
 | Layer | Language | What it does |
 |---|---|---|
 | ZK Circuit | Rust (halo2 / arkworks) | Generates and verifies proofs of order validity |
-| Matching Engine | Go | Batch auction logic, clearing price computation, event sourcing |
+| Matching Engine | Go | Batch auction logic, clearing price computation, event sourcing (`engine/core/`) |
 | Event Store | Go | Append-only event log for state reconstruction and auditability |
 | Proof Aggregator | Rust (CLI binary) | Combines individual proofs into a single batch proof |
 | Settlement Contract | Solidity | On-chain proof verification, token transfers, escrow |
-| API Gateway | Go (gRPC + REST) | Order submission and status endpoints |
+| API Gateway | Go (gRPC + REST) | gRPC handler + REST gateway, order submission and status endpoints |
 | Demo Frontend | TypeScript / Next.js | Auction history, clearing prices, aggregated depth |
 
 ---
@@ -139,37 +139,43 @@ flowchart TB
 ## Project structure
 
 ```
-darkpool/
+server/
+├── api/
+│   ├── cmd/server/
+│   │   └── main.go              # Entrypoint
+│   ├── config/
+│   │   ├── config.go            # Server configuration
+│   │   └── router.go            # Route setup
+│   ├── gateway/
+│   │   └── gateway.go           # gRPC-Gateway (REST translation)
+│   ├── handler/
+│   │   └── handler.go           # gRPC server implementation
+│   ├── middleware/
+│   │   ├── auth.go              # Authentication middleware
+│   │   └── ratelimit.go         # Rate limiting
+│   ├── utils/
+│   │   └── errors.go            # Centralized gRPC error constants
+│   ├── gen/                     # Protobuf generated code
+│   └── proto/                   # Protobuf definitions
 ├── engine/
-│   ├── consts/
-│   │   └── consts.go            # Shared enums: Side, EventType
-│   ├── model/
-│   │   └── model.go             # Domain types: Order, Fill
+│   ├── core/
+│   │   ├── engine.go            # Engine orchestration
+│   │   ├── engine_test.go
+│   │   ├── orderbook.go         # Order book projection from event stream
+│   │   ├── orderbook_test.go
+│   │   ├── auction.go           # Batch auction logic, clearing price
+│   │   └── auction_test.go
 │   ├── event/
 │   │   ├── event.go             # Event struct, payloads, Store interface
 │   │   └── store.go             # Append-only event log (in-memory impl)
-│   ├── orderbook.go             # Order book projection from event stream
-│   ├── auction.go               # Batch auction logic, clearing price computation
-│   ├── orderbook_test.go        # Order book unit tests
-│   └── auction_test.go          # Auction logic tests
-├── zkproof/
-│   ├── circuits/            # Rust: halo2 circuits for order validity
-│   ├── prover/              # Proof generation (native + WASM target)
-│   └── aggregator/          # Rust CLI binary for batch proof aggregation
-├── contracts/
-│   ├── DarkPool.sol         # Main escrow + settlement contract
-│   ├── Verifier.sol         # Auto-generated from circuit (halo2-verifier)
-│   └── test/                # Foundry tests
-├── api/
-│   ├── server.go            # gRPC server + REST gateway
-│   ├── proto/               # Protobuf definitions
-│   └── middleware/          # Rate limiting, auth
-├── frontend/
-│   └── ...                  # Next.js demo UI
-├── docs/
-│   ├── whitepaper.md        # Technical design document
-│   └── benchmarks.md        # Public performance results
-└── docker-compose.yml       # Local dev stack
+│   ├── model/
+│   │   └── model.go             # Domain types: Order, Fill
+│   └── utils/
+│       ├── constants.go         # Shared enums: Side, EventType
+│       └── errors.go            # Engine error definitions
+├── go.mod
+└── go.sum
+front/                           # Next.js demo UI
 ```
 
 ---
