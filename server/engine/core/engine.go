@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"sync"
 	"time"
 
@@ -63,23 +62,30 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 	}
 }
 
-// Recover rebuilds the order book and auction log from the event store.
+// Recover rebuilds the order book and auction log from the event store
+// in a single batched pass.
 func (e *Engine) Recover() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := e.ob.Replay(e.store); err != nil {
-		return err
-	}
+	const batchSize = 1024
+	var after uint64
 
-	all, err := e.store.ReadFrom(0, math.MaxInt)
-	if err != nil {
-		return err
-	}
-	for _, ev := range all {
-		if ae, ok := ev.Data.(event.AuctionExecuted); ok {
-			e.auctionLog = append(e.auctionLog, ae)
+	for {
+		events, err := e.store.ReadFrom(after, batchSize)
+		if err != nil {
+			return err
 		}
+		if len(events) == 0 {
+			break
+		}
+		for _, ev := range events {
+			e.ob.Apply(ev)
+			if ae, ok := ev.Data.(event.AuctionExecuted); ok {
+				e.auctionLog = append(e.auctionLog, ae)
+			}
+		}
+		after = events[len(events)-1].Seq
 	}
 	return nil
 }
