@@ -87,9 +87,14 @@ func TestOrderBook_Expiration(t *testing.T) {
 
 	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
 
-	expired := ob.ExpireOrders(time.Now())
+	expired := ob.CollectExpired(time.Now())
 	if len(expired) != 1 {
 		t.Fatalf("expired count = %d, want 1", len(expired))
+	}
+
+	// CollectExpired is read-only; apply events to mutate the orderbook.
+	for _, evt := range expired {
+		ob.Apply(evt)
 	}
 
 	if got := ob.ActiveOrderCount(); got != 0 {

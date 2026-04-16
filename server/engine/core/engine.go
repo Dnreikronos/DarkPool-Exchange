@@ -180,10 +180,14 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 	e.mu.Lock()
 
 	now := time.Now()
-	expiredEvents := e.ob.ExpireOrders(now)
+	expiredEvents := e.ob.CollectExpired(now)
 	if len(expiredEvents) > 0 {
 		if err := e.store.Append(expiredEvents...); err != nil {
 			log.Printf("failed to persist expiry events: %v", err)
+		} else {
+			for _, evt := range expiredEvents {
+				e.ob.Apply(evt)
+			}
 		}
 	}
 
@@ -222,9 +226,9 @@ func (e *Engine) RunAuctionTick() []AuctionNotification {
 
 		if err := e.store.Append(events...); err != nil {
 			log.Printf("failed to persist auction events for pair %s: %v", pair, err)
-		} else {
-			e.auctionLog = append(e.auctionLog, auctionEvt.Data.(event.AuctionExecuted))
+			continue
 		}
+		e.auctionLog = append(e.auctionLog, auctionEvt.Data.(event.AuctionExecuted))
 		for _, evt := range events {
 			e.ob.Apply(evt)
 		}
