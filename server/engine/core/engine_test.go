@@ -1,7 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,7 +18,7 @@ import (
 func TestPlaceOrder(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	order, err := e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1800), decimal.NewFromInt(10), "key-1", 0)
+	order, err := e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1800), decimal.NewFromInt(10), "key-1", 0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +51,7 @@ func TestPlaceOrderValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := e.PlaceOrder(tt.pair, utils.Buy, tt.price, tt.size, tt.commitmentKey, 0)
+			_, err := e.PlaceOrder(tt.pair, utils.Buy, tt.price, tt.size, tt.commitmentKey, 0, nil)
 			if err == nil {
 				t.Error("expected error, got nil")
 			}
@@ -58,7 +62,7 @@ func TestPlaceOrderValidation(t *testing.T) {
 func TestCancelOrder(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	order, _ := e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1800), decimal.NewFromInt(10), "key-1", 0)
+	order, _ := e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1800), decimal.NewFromInt(10), "key-1", 0, nil)
 
 	if err := e.CancelOrder(order.ID, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -75,8 +79,8 @@ func TestCancelOrder(t *testing.T) {
 func TestRunAuctionTick(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0, nil)
+	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0, nil)
 
 	notifications := e.RunAuctionTickCtx(context.Background())
 	if len(notifications) != 1 {
@@ -101,8 +105,8 @@ func TestSubscribeReceivesNotifications(t *testing.T) {
 	sub := e.Subscribe(4)
 	defer e.Unsubscribe(sub.ID)
 
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0, nil)
+	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0, nil)
 
 	e.RunAuctionTickCtx(context.Background())
 
@@ -138,8 +142,8 @@ func TestStartStopsOnContextCancel(t *testing.T) {
 func TestGetAuctionHistory(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0, nil)
+	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0, nil)
 	e.RunAuctionTickCtx(context.Background())
 
 	history, err := e.GetAuctionHistory("ETH/USDC", 10)
@@ -154,12 +158,156 @@ func TestGetAuctionHistory(t *testing.T) {
 	}
 }
 
+func encodeDecrypted(t *testing.T, d DecryptedOrder) []byte {
+	t.Helper()
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal DecryptedOrder: %v", err)
+	}
+	return b
+}
+
+func TestPlaceEncryptedOrder_NoopRoundTrip(t *testing.T) {
+	e := NewEngine(event.NewMemStore(), time.Second)
+
+	d := DecryptedOrder{
+		Pair:          "ETH/USDC",
+		Side:          utils.Buy,
+		Price:         decimal.NewFromInt(1800),
+		Size:          decimal.NewFromInt(10),
+		CommitmentKey: "ck-1",
+		TTL:           60 * time.Second,
+	}
+	ct := encodeDecrypted(t, d)
+	commitment := ComputeCommitment(d)
+
+	order, err := e.PlaceEncryptedOrder(context.Background(), commitment, []byte("stub-proof"), ct)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if order.Pair != "ETH/USDC" {
+		t.Errorf("pair = %s, want ETH/USDC", order.Pair)
+	}
+	if order.Side != utils.Buy {
+		t.Errorf("side = %v, want Buy", order.Side)
+	}
+	if e.ActiveOrderCount() != 1 {
+		t.Errorf("active count = %d, want 1", e.ActiveOrderCount())
+	}
+}
+
+func TestPlaceEncryptedOrder_CommitmentMismatch(t *testing.T) {
+	e := NewEngine(event.NewMemStore(), time.Second)
+
+	d := DecryptedOrder{
+		Pair:          "ETH/USDC",
+		Side:          utils.Buy,
+		Price:         decimal.NewFromInt(1800),
+		Size:          decimal.NewFromInt(10),
+		CommitmentKey: "ck-1",
+		TTL:           60 * time.Second,
+	}
+	ct := encodeDecrypted(t, d)
+
+	other := d
+	other.Price = decimal.NewFromInt(9999)
+	wrongCommitment := ComputeCommitment(other)
+
+	_, err := e.PlaceEncryptedOrder(context.Background(), wrongCommitment, []byte("stub-proof"), ct)
+	if !errors.Is(err, utils.ErrCommitmentMismatch) {
+		t.Fatalf("err = %v, want ErrCommitmentMismatch", err)
+	}
+	if e.ActiveOrderCount() != 0 {
+		t.Errorf("active count = %d, want 0 (order must not land)", e.ActiveOrderCount())
+	}
+}
+
+// xorDecrypter is a test-only obfuscating decrypter. Real crypto is deferred
+// to later phases; here we need *any* scheme whose ciphertext bytes don't
+// contain the plaintext so the privacy canary is meaningful.
+type xorDecrypter struct{ key byte }
+
+func (x xorDecrypter) Encrypt(plaintext []byte) []byte {
+	out := make([]byte, len(plaintext))
+	for i, b := range plaintext {
+		out[i] = b ^ x.key
+	}
+	return out
+}
+
+func (x xorDecrypter) Decrypt(_ context.Context, ct []byte) (DecryptedOrder, error) {
+	return NoopDecrypter{}.Decrypt(context.Background(), x.Encrypt(ct))
+}
+
+// TestEventStoreContainsNoPlaintext is the dark-pool privacy invariant: a
+// distinctive plaintext price must never appear in any persisted event's
+// serialized bytes. If it does, the event log is leaking order data.
+func TestEventStoreContainsNoPlaintext(t *testing.T) {
+	store := event.NewMemStore()
+	e := NewEngine(store, time.Second)
+	dec := xorDecrypter{key: 0x5A}
+	e.SetDecrypter(dec)
+
+	d := DecryptedOrder{
+		Pair:          "ETH/USDC",
+		Side:          utils.Buy,
+		Price:         decimal.RequireFromString("1234.5678"),
+		Size:          decimal.RequireFromString("42.1337"),
+		CommitmentKey: "secret-key-abc",
+		TTL:           60 * time.Second,
+	}
+	ct := dec.Encrypt(encodeDecrypted(t, d))
+	commitment := ComputeCommitment(d)
+
+	if _, err := e.PlaceEncryptedOrder(context.Background(), commitment, []byte("stub"), ct); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+
+	needles := [][]byte{
+		[]byte("1234.5678"),
+		[]byte("42.1337"),
+		[]byte("secret-key-abc"),
+	}
+
+	var after uint64
+	for {
+		evts, err := store.ReadFrom(after, 256)
+		if err != nil {
+			t.Fatalf("ReadFrom: %v", err)
+		}
+		if len(evts) == 0 {
+			break
+		}
+		for _, ev := range evts {
+			var buf bytes.Buffer
+			if err := gob.NewEncoder(&buf).Encode(ev); err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			for _, needle := range needles {
+				if bytes.Contains(buf.Bytes(), needle) {
+					t.Errorf("plaintext %q leaked into event seq=%d type=%v", needle, ev.Seq, ev.Type)
+				}
+			}
+		}
+		after = evts[len(evts)-1].Seq
+	}
+}
+
+func TestPlaceEncryptedOrder_BadCiphertext(t *testing.T) {
+	e := NewEngine(event.NewMemStore(), time.Second)
+
+	_, err := e.PlaceEncryptedOrder(context.Background(), []byte("x"), []byte("stub-proof"), []byte("not-json"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 func TestRecoverFromEventStore(t *testing.T) {
 	store := event.NewMemStore()
 	e1 := NewEngine(store, time.Second)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0, nil)
 
 	// Simulate crash: new engine, same store
 	e2 := NewEngine(store, time.Second)
@@ -180,8 +328,8 @@ func TestRecoverFromFileStore(t *testing.T) {
 	}
 	e1 := NewEngine(store1, time.Second)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0, nil)
 	e1.RunAuctionTickCtx(context.Background())
 
 	if err := store1.Close(); err != nil {

@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/darkpool-exchange/server/api/gateway"
 	"github.com/darkpool-exchange/server/api/config"
+	"github.com/darkpool-exchange/server/api/gateway"
 	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/event"
 )

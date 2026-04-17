@@ -46,10 +46,10 @@ flowchart TB
     end
 
     subgraph Engine["Matching Engine (Go)"]
-        C["Decrypt order\n(operator private key)"]
+        C["Decrypter seam\n(operator private key)"]
         D["Collect orders into\ntime-bounded batch"]
         D2["Compute clearing price\n+ match crossing orders"]
-        ES["Event Store\n(append-only log)"]
+        ES["Event Store\n(ciphertext + commitment + proof;\nno plaintext)"]
     end
 
     subgraph Aggregator["Proof Aggregator (Rust CLI)"]
@@ -91,7 +91,7 @@ flowchart TB
 1. Trader submits a Pedersen commitment to the order parameters and locks collateral in escrow.
 2. Trader runs a Rust circuit locally, gets back a ZK proof that the order is valid.
 3. Trader encrypts the full order to the operator's public key and submits commitment + proof + encrypted payload.
-4. The operator decrypts, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders.
+4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log contains ciphertext + commitment + proof only — never plaintext.**
 5. Matched pairs are batched (up to 256) and sent on-chain with an aggregated ZK proof. The Solidity verifier checks the proof and transfers tokens atomically.
 
 ---

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/darkpool-exchange/server/api/handler"
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
+	"github.com/darkpool-exchange/server/api/handler"
 	"github.com/darkpool-exchange/server/api/middleware"
 	"github.com/darkpool-exchange/server/engine/core"
 	"google.golang.org/grpc"

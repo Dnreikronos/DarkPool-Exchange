@@ -43,13 +43,13 @@ service DarkPoolService {
 
 // --- Place Order ---
 
+// PlaceOrderRequest carries only the encrypt-only trio. The engine never
+// sees plaintext on the wire; the operator decrypts server-side and the
+// commitment binds the ciphertext to the proof.
 message PlaceOrderRequest {
-  string pair = 1;
-  Side side = 2;
-  string price = 3;  // decimal as string for precision
-  string size = 4;
-  string commitment_key = 5;
-  int32 ttl_seconds = 6;  // 0 = default (10 min)
+  bytes commitment        = 1; // binds proof to ciphertext
+  bytes proof             = 2; // aggregated or per-order ZK proof
+  bytes encrypted_payload = 3; // opaque ciphertext to operator pubkey
 }
 
 message PlaceOrderResponse {
