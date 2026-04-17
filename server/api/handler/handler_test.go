@@ -323,7 +323,7 @@ func TestGetAuctionHistory_WithAuction(t *testing.T) {
 	placeTestOrder(t, srv, "ETH/USDC", darkpoolv1.Side_SIDE_BUY, "1850", "5")
 	placeTestOrder(t, srv, "ETH/USDC", darkpoolv1.Side_SIDE_SELL, "1800", "5")
 
-	srv.engine.RunAuctionTick()
+	srv.engine.RunAuctionTickCtx(context.Background())
 
 	resp, err := srv.GetAuctionHistory(context.Background(), &darkpoolv1.GetAuctionHistoryRequest{
 		Pair: "ETH/USDC",
@@ -366,7 +366,7 @@ func TestStreamAuctions_ReceivesEvent(t *testing.T) {
 	// let goroutine subscribe before running auction
 	time.Sleep(20 * time.Millisecond)
 
-	srv.engine.RunAuctionTick()
+	srv.engine.RunAuctionTickCtx(context.Background())
 
 	// let stream loop receive the notification
 	time.Sleep(50 * time.Millisecond)
@@ -403,7 +403,7 @@ func TestStreamAuctions_FiltersByPair(t *testing.T) {
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	srv.engine.RunAuctionTick()
+	srv.engine.RunAuctionTickCtx(context.Background())
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	<-done

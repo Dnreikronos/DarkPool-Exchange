@@ -58,7 +58,12 @@ func (ob *OrderBook) Apply(e event.Event) {
 }
 
 func (ob *OrderBook) apply(e event.Event) {
-	ob.seq = e.Seq
+	// Monotonic advance. submitBatch drops e.mu between store.Append and
+	// ob.Apply; a concurrent PlaceOrder can slip Seq N+1 in first, so an
+	// unconditional assign here would regress ob.seq and make Replay skip.
+	if e.Seq > ob.seq {
+		ob.seq = e.Seq
+	}
 
 	switch d := e.Data.(type) {
 	case event.OrderPlaced:
@@ -81,6 +86,11 @@ func (ob *OrderBook) apply(e event.Event) {
 	case event.OrderMatched:
 		ob.applyFill(d.Bid)
 		ob.applyFill(d.Ask)
+
+	case event.AuctionExecuted, event.BatchSubmitted, event.BatchConfirmed:
+		// Projection cares only about order state. These events exist for
+		// downstream consumers (auction log, batch lifecycle); applying them
+		// only advances ob.seq so Replay resumes correctly.
 	}
 }
 
@@ -133,15 +143,16 @@ func (ob *OrderBook) Asks() []model.Order {
 }
 
 // CollectExpired returns expiry events for orders past their TTL without
-// mutating the orderbook. The caller must Apply them after successful persistence.
-func (ob *OrderBook) CollectExpired(now time.Time) []event.Event {
+// mutating the orderbook. The caller must Apply them after successful
+// persistence.
+func (ob *OrderBook) CollectExpired(now time.Time) []*event.Event {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
 
-	var expired []event.Event
+	var expired []*event.Event
 	for _, o := range ob.bids {
 		if !o.ExpiresAt.IsZero() && now.After(o.ExpiresAt) {
-			expired = append(expired, event.Event{
+			expired = append(expired, &event.Event{
 				Type: utils.OrderExpiredType,
 				Data: event.OrderExpired{OrderID: o.ID},
 			})
@@ -149,7 +160,7 @@ func (ob *OrderBook) CollectExpired(now time.Time) []event.Event {
 	}
 	for _, o := range ob.asks {
 		if !o.ExpiresAt.IsZero() && now.After(o.ExpiresAt) {
-			expired = append(expired, event.Event{
+			expired = append(expired, &event.Event{
 				Type: utils.OrderExpiredType,
 				Data: event.OrderExpired{OrderID: o.ID},
 			})

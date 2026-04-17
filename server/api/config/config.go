@@ -14,6 +14,7 @@ type Config struct {
 	RateLimit       float64
 	RateBurst       float64
 	RateStaleAfter  time.Duration
+	EventLogPath    string
 }
 
 func Parse() Config {
@@ -24,6 +25,7 @@ func Parse() Config {
 	rateLimit := flag.Float64("rate-limit", 10, "requests per second per client")
 	rateBurst := flag.Float64("rate-burst", 20, "max burst size for rate limiter")
 	rateStaleAfter := flag.Duration("rate-stale-after", 10*time.Minute, "evict idle rate-limit buckets after this duration")
+	eventLogPath := flag.String("event-log", "", "path to durable event log file (empty = in-memory only)")
 	flag.Parse()
 
 	var keys []string
@@ -39,5 +41,6 @@ func Parse() Config {
 		RateLimit:       *rateLimit,
 		RateBurst:       *rateBurst,
 		RateStaleAfter:  *rateStaleAfter,
+		EventLogPath:    *eventLogPath,
 	}
 }
