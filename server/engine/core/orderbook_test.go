@@ -94,7 +94,7 @@ func TestOrderBook_Expiration(t *testing.T) {
 
 	// CollectExpired is read-only; apply events to mutate the orderbook.
 	for _, evt := range expired {
-		ob.Apply(evt)
+		ob.Apply(*evt)
 	}
 
 	if got := ob.ActiveOrderCount(); got != 0 {
@@ -106,7 +106,7 @@ func TestOrderBook_ReplayFromStore(t *testing.T) {
 	store := event.NewMemStore()
 	o := newOrder(utils.Sell, 2000, 7)
 
-	store.Append(event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	store.Append(&event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
 
 	ob := NewOrderBook()
 	if err := ob.Replay(store); err != nil {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -77,7 +78,7 @@ func TestRunAuctionTick(t *testing.T) {
 	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
 	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
 
-	notifications := e.RunAuctionTick()
+	notifications := e.RunAuctionTickCtx(context.Background())
 	if len(notifications) != 1 {
 		t.Fatalf("notifications = %d, want 1", len(notifications))
 	}
@@ -103,7 +104,7 @@ func TestSubscribeReceivesNotifications(t *testing.T) {
 	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
 	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
 
-	e.RunAuctionTick()
+	e.RunAuctionTickCtx(context.Background())
 
 	select {
 	case n := <-sub.Ch:
@@ -139,7 +140,7 @@ func TestGetAuctionHistory(t *testing.T) {
 
 	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
 	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
-	e.RunAuctionTick()
+	e.RunAuctionTickCtx(context.Background())
 
 	history, err := e.GetAuctionHistory("ETH/USDC", 10)
 	if err != nil {
@@ -167,5 +168,46 @@ func TestRecoverFromEventStore(t *testing.T) {
 	}
 	if e2.ActiveOrderCount() != 2 {
 		t.Errorf("active count after recovery = %d, want 2", e2.ActiveOrderCount())
+	}
+}
+
+func TestRecoverFromFileStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.log")
+
+	store1, err := event.OpenFileStore(path)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	e1 := NewEngine(store1, time.Second)
+
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer-1", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller-1", 0)
+	e1.RunAuctionTickCtx(context.Background())
+
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Simulate process restart
+	store2, err := event.OpenFileStore(path)
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	t.Cleanup(func() { store2.Close() })
+
+	e2 := NewEngine(store2, time.Second)
+	if err := e2.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	history, err := e2.GetAuctionHistory("ETH/USDC", 10)
+	if err != nil {
+		t.Fatalf("GetAuctionHistory: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history len = %d, want 1", len(history))
+	}
+	if !history[0].MatchedVolume.Equal(decimal.NewFromInt(3)) {
+		t.Errorf("matched volume = %s, want 3", history[0].MatchedVolume)
 	}
 }

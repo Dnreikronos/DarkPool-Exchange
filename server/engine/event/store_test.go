@@ -10,7 +10,7 @@ import (
 func TestMemStore_AppendAndRead(t *testing.T) {
 	s := NewMemStore()
 
-	events := []Event{
+	events := []*Event{
 		{Type: utils.OrderPlacedType, Data: OrderPlaced{}},
 		{Type: utils.OrderCancelledType, Data: OrderCancelled{OrderID: uuid.New()}},
 		{Type: utils.OrderPlacedType, Data: OrderPlaced{}},

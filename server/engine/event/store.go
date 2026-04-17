@@ -17,21 +17,18 @@ func NewMemStore() *MemStore {
 	return &MemStore{}
 }
 
-func (s *MemStore) Append(events ...Event) error {
+func (s *MemStore) Append(events ...*Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	buf := make([]Event, len(events))
-	copy(buf, events)
-
-	for i := range buf {
+	for _, e := range events {
 		s.seq++
-		buf[i].Seq = s.seq
-		if buf[i].Timestamp.IsZero() {
-			buf[i].Timestamp = time.Now()
+		e.Seq = s.seq
+		if e.Timestamp.IsZero() {
+			e.Timestamp = time.Now()
 		}
+		s.events = append(s.events, *e)
 	}
-	s.events = append(s.events, buf...)
 	return nil
 }
 

@@ -19,8 +19,22 @@ import (
 func main() {
 	cfg := config.Parse()
 
-	store := event.NewMemStore()
+	var store event.Store
+	if cfg.EventLogPath != "" {
+		fs, err := event.OpenFileStore(cfg.EventLogPath)
+		if err != nil {
+			log.Fatalf("failed to open event log %s: %v", cfg.EventLogPath, err)
+		}
+		defer fs.Close()
+		store = fs
+		log.Printf("event log: %s (durable)", cfg.EventLogPath)
+	} else {
+		store = event.NewMemStore()
+		log.Printf("event log: in-memory (not durable)")
+	}
+
 	eng := core.NewEngine(store, cfg.AuctionInterval)
+	log.Printf("batch submitter: noop (no on-chain settlement; wire a real Submitter via eng.SetSubmitter before production)")
 
 	if err := eng.Recover(); err != nil {
 		log.Fatalf("engine recovery failed: %v", err)
@@ -31,7 +45,11 @@ func main() {
 
 	grpcServer := config.NewGRPCServer(ctx, eng, cfg)
 
-	go eng.Start(ctx)
+	engDone := make(chan struct{})
+	go func() {
+		eng.Start(ctx)
+		close(engDone)
+	}()
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -73,6 +91,9 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	httpServer.Shutdown(shutdownCtx)
+
+	// Drain engine loop before returning so deferred fs.Close can't race an in-flight tick.
+	<-engDone
 
 	log.Println("shutdown complete")
 }
