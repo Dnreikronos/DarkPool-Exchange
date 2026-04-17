@@ -20,15 +20,14 @@ type Event struct {
 	Data      EventData
 }
 
-// OrderPlaced carries only the encrypt-only tuple plus identifiers. Plaintext
-// order fields never hit disk — the engine decrypts in memory on Recover.
+// OrderPlaced holds the commitment, proof, and ciphertext. No plaintext fields;
+// Recover decrypts in memory. SubmittedAt comes from Event.Timestamp and
+// ExpiresAt is SubmittedAt + the TTL inside the ciphertext.
 type OrderPlaced struct {
-	OrderID     uuid.UUID
-	Commitment  []byte
-	Proof       []byte
-	Ciphertext  []byte
-	SubmittedAt time.Time
-	ExpiresAt   time.Time
+	OrderID    uuid.UUID
+	Commitment []byte
+	Proof      []byte
+	Ciphertext []byte
 }
 
 func (OrderPlaced) eventData() {}

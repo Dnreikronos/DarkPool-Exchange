@@ -205,6 +205,10 @@ func (e *Engine) Recover() error {
 				if !bytes.Equal(ComputeCommitment(decrypted), d.Commitment) {
 					return fmt.Errorf("recover: %w for order %s", utils.ErrCommitmentMismatch, d.OrderID)
 				}
+				ttl := decrypted.TTL
+				if ttl <= 0 {
+					ttl = e.defaultTTL
+				}
 				order := model.Order{
 					ID:               d.OrderID,
 					Pair:             decrypted.Pair,
@@ -214,8 +218,8 @@ func (e *Engine) Recover() error {
 					RemainingSize:    decrypted.Size,
 					CommitmentKey:    decrypted.CommitmentKey,
 					EncryptedPayload: d.Ciphertext,
-					SubmittedAt:      d.SubmittedAt,
-					ExpiresAt:        d.ExpiresAt,
+					SubmittedAt:      ev.Timestamp,
+					ExpiresAt:        ev.Timestamp.Add(ttl),
 				}
 				e.ob.InsertOrder(&order)
 				e.pairs[order.Pair] = true
@@ -246,12 +250,10 @@ func (e *Engine) Recover() error {
 	return nil
 }
 
-// PlaceOrder is kept as an internal helper for engine and batch tests that
-// prefer to construct orders from plaintext fields. It funnels through the
-// same encrypt-only persistence path by synthesizing a JSON ciphertext that
-// the NoopDecrypter can reverse on Recover.
-// TODO(zk-pipeline): remove once tests adopt the encrypted entrypoint.
-func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration, _ []byte) (*model.Order, error) {
+// placeOrderPlaintext is a test-only shortcut: it packs the plaintext fields
+// into a JSON ciphertext the NoopDecrypter can reverse, then runs the normal
+// encrypt-only persistence path. Production uses PlaceEncryptedOrder.
+func (e *Engine) placeOrderPlaintext(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration) (*model.Order, error) {
 	if pair == "" {
 		return nil, utils.ErrPairRequired
 	}
@@ -341,12 +343,10 @@ func (e *Engine) persistOrderPlaced(order model.Order, commitment, proof, cipher
 		Type:      utils.OrderPlacedType,
 		Timestamp: order.SubmittedAt,
 		Data: event.OrderPlaced{
-			OrderID:     order.ID,
-			Commitment:  append([]byte(nil), commitment...),
-			Proof:       append([]byte(nil), proof...),
-			Ciphertext:  append([]byte(nil), ciphertext...),
-			SubmittedAt: order.SubmittedAt,
-			ExpiresAt:   order.ExpiresAt,
+			OrderID:    order.ID,
+			Commitment: append([]byte(nil), commitment...),
+			Proof:      append([]byte(nil), proof...),
+			Ciphertext: append([]byte(nil), ciphertext...),
 		},
 	}
 
@@ -356,8 +356,11 @@ func (e *Engine) persistOrderPlaced(order model.Order, commitment, proof, cipher
 	if err := e.store.Append(&evt); err != nil {
 		return nil, fmt.Errorf("failed to persist order: %w", err)
 	}
-	// Plaintext never enters the event log; engine inserts directly into the
-	// in-memory book. Recover rebuilds by decrypting ciphertext events.
+	// Apply advances ob.seq so Replay after a snapshot doesn't re-read
+	// already-processed OrderPlaced events. The apply branch for OrderPlaced is
+	// a no-op otherwise — the book insert happens below, from the decrypted
+	// order.
+	e.ob.Apply(evt)
 	e.ob.InsertOrder(&order)
 	e.pairs[order.Pair] = true
 
