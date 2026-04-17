@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -43,6 +45,7 @@ type pendingBatch struct {
 	BatchID     uuid.UUID
 	AuctionID   uuid.UUID
 	Matches     []event.OrderMatched
+	Proof       []byte
 	Attempts    int
 	NextAttempt time.Time
 	submitting  bool
@@ -59,7 +62,9 @@ type Engine struct {
 
 	auctionLog []event.AuctionExecuted
 
+	aggregator     ProofAggregator
 	submitter      Submitter
+	decrypter      Decrypter
 	pendingBatches map[uuid.UUID]*pendingBatch
 	submitTimeout  time.Duration
 	minBackoff     time.Duration
@@ -80,7 +85,9 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 		pairs:           make(map[string]bool),
 		auctionInterval: auctionInterval,
 		defaultTTL:      DefaultOrderTTL,
+		aggregator:      NoopAggregator{},
 		submitter:       NoopSubmitter{},
+		decrypter:       NoopDecrypter{},
 		pendingBatches:  make(map[uuid.UUID]*pendingBatch),
 		submitTimeout:   defaultSubmitTimeout,
 		minBackoff:      defaultMinBackoff,
@@ -137,6 +144,24 @@ func (e *Engine) SetSubmitter(s Submitter) {
 	e.mu.Unlock()
 }
 
+func (e *Engine) SetDecrypter(d Decrypter) {
+	if d == nil {
+		d = NoopDecrypter{}
+	}
+	e.mu.Lock()
+	e.decrypter = d
+	e.mu.Unlock()
+}
+
+func (e *Engine) SetAggregator(a ProofAggregator) {
+	if a == nil {
+		a = NoopAggregator{}
+	}
+	e.mu.Lock()
+	e.aggregator = a
+	e.mu.Unlock()
+}
+
 func (e *Engine) Recover() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -152,6 +177,7 @@ func (e *Engine) Recover() error {
 	e.ob = NewOrderBook()
 	e.auctionLog = nil
 	e.pendingBatches = make(map[uuid.UUID]*pendingBatch)
+	e.pairs = make(map[string]bool)
 
 	const batchSize = 1024
 	var after uint64
@@ -168,6 +194,31 @@ func (e *Engine) Recover() error {
 		for _, ev := range events {
 			e.ob.Apply(ev)
 			switch d := ev.Data.(type) {
+			case event.OrderPlaced:
+				// Recovery cost now scales with one decrypt per replayed
+				// order. Acceptable for scaffolding — batched decrypt or a
+				// plaintext-in-RAM snapshot is a later optimization.
+				decrypted, err := e.decrypter.Decrypt(context.Background(), d.Ciphertext)
+				if err != nil {
+					return fmt.Errorf("recover: decrypt order %s: %w", d.OrderID, err)
+				}
+				if !bytes.Equal(ComputeCommitment(decrypted), d.Commitment) {
+					return fmt.Errorf("recover: %w for order %s", utils.ErrCommitmentMismatch, d.OrderID)
+				}
+				order := model.Order{
+					ID:               d.OrderID,
+					Pair:             decrypted.Pair,
+					Side:             decrypted.Side,
+					Price:            decrypted.Price,
+					Size:             decrypted.Size,
+					RemainingSize:    decrypted.Size,
+					CommitmentKey:    decrypted.CommitmentKey,
+					EncryptedPayload: d.Ciphertext,
+					SubmittedAt:      d.SubmittedAt,
+					ExpiresAt:        d.ExpiresAt,
+				}
+				e.ob.InsertOrder(&order)
+				e.pairs[order.Pair] = true
 			case event.AuctionExecuted:
 				e.auctionLog = append(e.auctionLog, d)
 			case event.OrderMatched:
@@ -175,10 +226,14 @@ func (e *Engine) Recover() error {
 			case event.BatchSubmitted:
 				raw := matchesByAuction[d.AuctionID]
 				matches := append([]event.OrderMatched(nil), raw...)
+				// Proof is copied from the persisted event so resubmit reuses
+				// the original aggregated proof rather than re-running the
+				// aggregator (non-deterministic across toolchain versions).
 				e.pendingBatches[d.BatchID] = &pendingBatch{
 					BatchID:   d.BatchID,
 					AuctionID: d.AuctionID,
 					Matches:   matches,
+					Proof:     append([]byte(nil), d.Proof...),
 				}
 				delete(matchesByAuction, d.AuctionID)
 			case event.BatchConfirmed:
@@ -191,7 +246,12 @@ func (e *Engine) Recover() error {
 	return nil
 }
 
-func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration) (*model.Order, error) {
+// PlaceOrder is kept as an internal helper for engine and batch tests that
+// prefer to construct orders from plaintext fields. It funnels through the
+// same encrypt-only persistence path by synthesizing a JSON ciphertext that
+// the NoopDecrypter can reverse on Recover.
+// TODO(zk-pipeline): remove once tests adopt the encrypted entrypoint.
+func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration, _ []byte) (*model.Order, error) {
 	if pair == "" {
 		return nil, utils.ErrPairRequired
 	}
@@ -209,23 +269,85 @@ func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.De
 		ttl = e.defaultTTL
 	}
 
-	now := time.Now()
-	order := model.Order{
-		ID:            uuid.New(),
-		Pair:          pair,
-		Side:          side,
-		Price:         price,
-		Size:          size,
-		RemainingSize: size,
-		CommitmentKey: commitmentKey,
-		SubmittedAt:   now,
-		ExpiresAt:     now.Add(ttl),
+	d := DecryptedOrder{
+		Pair: pair, Side: side, Price: price, Size: size,
+		CommitmentKey: commitmentKey, TTL: ttl,
+	}
+	ct, err := json.Marshal(d)
+	if err != nil {
+		return nil, fmt.Errorf("encode synthetic ciphertext: %w", err)
+	}
+	return e.PlaceEncryptedOrder(context.Background(), ComputeCommitment(d), nil, ct)
+}
+
+// PlaceEncryptedOrder accepts the wire-level {commitment, proof, ciphertext}
+// tuple. The decrypter recovers the plaintext order; the commitment must bind
+// the decrypted fields or the call is rejected. This prevents a client from
+// sending a proof for order A together with ciphertext/commitment of order B.
+func (e *Engine) PlaceEncryptedOrder(ctx context.Context, commitment, proof, ciphertext []byte) (*model.Order, error) {
+	e.mu.RLock()
+	d := e.decrypter
+	e.mu.RUnlock()
+
+	decrypted, err := d.Decrypt(ctx, ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt order: %w", err)
 	}
 
+	if !bytes.Equal(ComputeCommitment(decrypted), commitment) {
+		return nil, utils.ErrCommitmentMismatch
+	}
+
+	if decrypted.Pair == "" {
+		return nil, utils.ErrPairRequired
+	}
+	if !decrypted.Price.IsPositive() {
+		return nil, utils.ErrPriceMustBePositive
+	}
+	if !decrypted.Size.IsPositive() {
+		return nil, utils.ErrSizeMustBePositive
+	}
+	if decrypted.CommitmentKey == "" {
+		return nil, utils.ErrCommitmentKeyRequired
+	}
+
+	ttl := decrypted.TTL
+	if ttl <= 0 {
+		ttl = e.defaultTTL
+	}
+
+	order := buildOrder(decrypted.Pair, decrypted.Side, decrypted.Price, decrypted.Size, decrypted.CommitmentKey, ttl, ciphertext)
+	return e.persistOrderPlaced(order, commitment, proof, ciphertext)
+}
+
+func buildOrder(pair string, side utils.Side, price, size decimal.Decimal, commitmentKey string, ttl time.Duration, encryptedPayload []byte) model.Order {
+	now := time.Now()
+	return model.Order{
+		ID:               uuid.New(),
+		Pair:             pair,
+		Side:             side,
+		Price:            price,
+		Size:             size,
+		RemainingSize:    size,
+		CommitmentKey:    commitmentKey,
+		EncryptedPayload: encryptedPayload,
+		SubmittedAt:      now,
+		ExpiresAt:        now.Add(ttl),
+	}
+}
+
+func (e *Engine) persistOrderPlaced(order model.Order, commitment, proof, ciphertext []byte) (*model.Order, error) {
 	evt := event.Event{
 		Type:      utils.OrderPlacedType,
-		Timestamp: now,
-		Data:      event.OrderPlaced{Order: order},
+		Timestamp: order.SubmittedAt,
+		Data: event.OrderPlaced{
+			OrderID:     order.ID,
+			Commitment:  append([]byte(nil), commitment...),
+			Proof:       append([]byte(nil), proof...),
+			Ciphertext:  append([]byte(nil), ciphertext...),
+			SubmittedAt: order.SubmittedAt,
+			ExpiresAt:   order.ExpiresAt,
+		},
 	}
 
 	e.mu.Lock()
@@ -234,8 +356,10 @@ func (e *Engine) PlaceOrder(pair string, side utils.Side, price, size decimal.De
 	if err := e.store.Append(&evt); err != nil {
 		return nil, fmt.Errorf("failed to persist order: %w", err)
 	}
-	e.ob.Apply(evt)
-	e.pairs[pair] = true
+	// Plaintext never enters the event log; engine inserts directly into the
+	// in-memory book. Recover rebuilds by decrypting ciphertext events.
+	e.ob.InsertOrder(&order)
+	e.pairs[order.Pair] = true
 
 	return &order, nil
 }
@@ -333,6 +457,20 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 		}
 
 		batchID := uuid.New()
+
+		// Aggregate before persisting BatchSubmitted so the proof is durable
+		// with the batch record. Recovery reuses this exact proof on resubmit.
+		// NoopAggregator returns nil instantly; a real aggregator may block,
+		// which stalls fresh orders because e.mu is held. Acceptable during
+		// the scaffolding phase; move to async once the Rust CLI lands.
+		// TODO(zk-pipeline): move Aggregate off the engine mutex before wiring
+		// the Rust aggregator CLI — see https://github.com/Dnreikronos/DarkPool-Exchange/issues/new
+		proof, err := e.aggregator.Aggregate(ctx, batchID, result.Matches)
+		if err != nil {
+			log.Printf("aggregator failed for batch %s on pair %s: %v", batchID, pair, err)
+			continue
+		}
+
 		batchEvt := &event.Event{
 			Type:      utils.BatchSubmittedType,
 			Timestamp: now,
@@ -341,6 +479,7 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 				AuctionID:  result.AuctionID,
 				TxHash:     "",
 				MatchCount: len(result.Matches),
+				Proof:      proof,
 			},
 		}
 		events = append(events, batchEvt)
@@ -359,6 +498,7 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 			BatchID:   batchID,
 			AuctionID: result.AuctionID,
 			Matches:   matchesCopy,
+			Proof:     proof,
 		}
 		batchesToSubmit = append(batchesToSubmit, batchID)
 
@@ -463,7 +603,7 @@ func (e *Engine) submitBatch(ctx context.Context, batchID uuid.UUID) error {
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	txHash, err := sub.Submit(sctx, pb.BatchID, pb.AuctionID, pb.Matches)
+	txHash, err := sub.Submit(sctx, pb.BatchID, pb.AuctionID, pb.Matches, pb.Proof)
 	if err != nil {
 		e.noteSubmitFailure(batchID)
 		return err

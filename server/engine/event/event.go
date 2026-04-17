@@ -3,8 +3,8 @@ package event
 import (
 	"time"
 
-	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/darkpool-exchange/server/engine/model"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -20,8 +20,15 @@ type Event struct {
 	Data      EventData
 }
 
+// OrderPlaced carries only the encrypt-only tuple plus identifiers. Plaintext
+// order fields never hit disk — the engine decrypts in memory on Recover.
 type OrderPlaced struct {
-	Order model.Order
+	OrderID     uuid.UUID
+	Commitment  []byte
+	Proof       []byte
+	Ciphertext  []byte
+	SubmittedAt time.Time
+	ExpiresAt   time.Time
 }
 
 func (OrderPlaced) eventData() {}
@@ -65,6 +72,10 @@ type BatchSubmitted struct {
 	AuctionID  uuid.UUID
 	TxHash     string
 	MatchCount int
+	// Proof is the aggregated ZK proof produced before the on-chain submit. It
+	// is persisted so crash-recovery can re-invoke Submit with the same proof
+	// bytes instead of re-running the aggregator. nil when NoopAggregator is wired.
+	Proof []byte
 }
 
 func (BatchSubmitted) eventData() {}

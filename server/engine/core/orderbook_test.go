@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -29,7 +29,7 @@ func TestOrderBook_PlaceAndCancel(t *testing.T) {
 	ob := NewOrderBook()
 	o := newOrder(utils.Buy, 1800, 10)
 
-	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	ob.InsertOrder(&o)
 
 	if got := ob.ActiveOrderCount(); got != 1 {
 		t.Fatalf("ActiveOrderCount = %d, want 1", got)
@@ -47,8 +47,8 @@ func TestOrderBook_PartialFill(t *testing.T) {
 	bid := newOrder(utils.Buy, 1800, 10)
 	ask := newOrder(utils.Sell, 1790, 4)
 
-	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: bid}})
-	ob.Apply(event.Event{Seq: 2, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: ask}})
+	ob.InsertOrder(&bid)
+	ob.InsertOrder(&ask)
 
 	ob.Apply(event.Event{Seq: 3, Type: utils.OrderMatchedType, Data: event.OrderMatched{
 		Bid:   model.Fill{OrderID: bid.ID, Size: decimal.NewFromInt(4)},
@@ -85,7 +85,7 @@ func TestOrderBook_Expiration(t *testing.T) {
 		ExpiresAt:     time.Now().Add(-1 * time.Second),
 	}
 
-	ob.Apply(event.Event{Seq: 1, Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	ob.InsertOrder(&o)
 
 	expired := ob.CollectExpired(time.Now())
 	if len(expired) != 1 {
@@ -102,18 +102,19 @@ func TestOrderBook_Expiration(t *testing.T) {
 	}
 }
 
-func TestOrderBook_ReplayFromStore(t *testing.T) {
+func TestOrderBook_ReplayAdvancesSeq(t *testing.T) {
+	// OrderPlaced is ciphertext-only on disk; ob.Replay alone can't rebuild
+	// order state without a decrypter. Engine.Recover handles plaintext
+	// reconstruction. Replay must still advance seq and apply non-placed
+	// events so subsequent Apply calls land correctly.
 	store := event.NewMemStore()
-	o := newOrder(utils.Sell, 2000, 7)
-
-	store.Append(&event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{Order: o}})
+	store.Append(&event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{OrderID: uuid.New()}})
 
 	ob := NewOrderBook()
 	if err := ob.Replay(store); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
-
-	if got := ob.ActiveOrderCount(); got != 1 {
-		t.Fatalf("ActiveOrderCount after replay = %d, want 1", got)
+	if got := ob.ActiveOrderCount(); got != 0 {
+		t.Errorf("ActiveOrderCount after replay = %d, want 0 (plaintext not in event)", got)
 	}
 }

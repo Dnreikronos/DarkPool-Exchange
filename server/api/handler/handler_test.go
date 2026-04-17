@@ -2,15 +2,19 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
+	apiutils "github.com/darkpool-exchange/server/api/utils"
 	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/event"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -28,17 +32,41 @@ func newTestServer() *Server {
 
 var testKeyCounter uint64
 
+// buildReq encodes a DecryptedOrder with the noop decrypter's JSON format and
+// computes the matching stub (sha256) commitment. Tests that want to exercise
+// the commitment-mismatch path construct the request manually instead.
+func buildReq(t *testing.T, d core.DecryptedOrder) *darkpoolv1.PlaceOrderRequest {
+	t.Helper()
+	ct, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal DecryptedOrder: %v", err)
+	}
+	return &darkpoolv1.PlaceOrderRequest{
+		Commitment:       core.ComputeCommitment(d),
+		Proof:            testProof(),
+		EncryptedPayload: ct,
+	}
+}
+
+func sideFromProto(s darkpoolv1.Side) utils.Side {
+	if s == darkpoolv1.Side_SIDE_SELL {
+		return utils.Sell
+	}
+	return utils.Buy
+}
+
 func placeTestOrder(t *testing.T, srv *Server, pair string, side darkpoolv1.Side, price, size string) string {
 	t.Helper()
 	testKeyCounter++
-	resp, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
+	d := core.DecryptedOrder{
 		Pair:          pair,
-		Side:          side,
-		Price:         price,
-		Size:          size,
+		Side:          sideFromProto(side),
+		Price:         decimal.RequireFromString(price),
+		Size:          decimal.RequireFromString(size),
 		CommitmentKey: fmt.Sprintf("test-key-%d", testKeyCounter),
-		TtlSeconds:    600,
-	})
+		TTL:           600 * time.Second,
+	}
+	resp, err := srv.PlaceOrder(context.Background(), buildReq(t, d))
 	if err != nil {
 		t.Fatalf("placeTestOrder: %v", err)
 	}
@@ -83,16 +111,20 @@ func (m *mockAuctionStream) Context() context.Context { return m.ctx }
 // PlaceOrder
 // ---------------------------------------------------------------------------
 
+func validDecrypted() core.DecryptedOrder {
+	return core.DecryptedOrder{
+		Pair:          "ETH/USDC",
+		Side:          utils.Buy,
+		Price:         decimal.RequireFromString("1800.50"),
+		Size:          decimal.NewFromInt(10),
+		CommitmentKey: "ck-1",
+		TTL:           60 * time.Second,
+	}
+}
+
 func TestPlaceOrder_Success(t *testing.T) {
 	srv := newTestServer()
-	resp, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
-		Pair:          "ETH/USDC",
-		Side:          darkpoolv1.Side_SIDE_BUY,
-		Price:         "1800.50",
-		Size:          "10",
-		CommitmentKey: "ck-1",
-		TtlSeconds:    60,
-	})
+	resp, err := srv.PlaceOrder(context.Background(), buildReq(t, validDecrypted()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,68 +146,109 @@ func TestPlaceOrder_Success(t *testing.T) {
 	}
 }
 
-func TestPlaceOrder_InvalidPrice(t *testing.T) {
-	srv := newTestServer()
-	_, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
-		Pair:          "ETH/USDC",
-		Side:          darkpoolv1.Side_SIDE_BUY,
-		Price:         "not-a-number",
-		Size:          "10",
-		CommitmentKey: "ck",
-	})
-	assertCode(t, err, codes.InvalidArgument)
-}
-
-func TestPlaceOrder_InvalidSize(t *testing.T) {
-	srv := newTestServer()
-	_, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
-		Pair:          "ETH/USDC",
-		Side:          darkpoolv1.Side_SIDE_BUY,
-		Price:         "100",
-		Size:          "abc",
-		CommitmentKey: "ck",
-	})
-	assertCode(t, err, codes.InvalidArgument)
-}
-
-func TestPlaceOrder_InvalidSide(t *testing.T) {
-	srv := newTestServer()
-	_, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
-		Pair:          "ETH/USDC",
-		Side:          darkpoolv1.Side_SIDE_UNSPECIFIED,
-		Price:         "100",
-		Size:          "10",
-		CommitmentKey: "ck",
-	})
-	assertCode(t, err, codes.InvalidArgument)
-}
-
 func TestPlaceOrder_ValidationErrors(t *testing.T) {
 	tests := []struct {
-		name          string
-		pair          string
-		price         string
-		size          string
-		commitmentKey string
+		name string
+		mut  func(*core.DecryptedOrder)
 	}{
-		{"empty pair", "", "100", "1", "key"},
-		{"zero price", "ETH/USDC", "0", "1", "key"},
-		{"negative size", "ETH/USDC", "100", "-1", "key"},
-		{"empty commitment key", "ETH/USDC", "100", "1", ""},
+		{"empty pair", func(d *core.DecryptedOrder) { d.Pair = "" }},
+		{"zero price", func(d *core.DecryptedOrder) { d.Price = decimal.Zero }},
+		{"negative size", func(d *core.DecryptedOrder) { d.Size = decimal.NewFromInt(-1) }},
+		{"empty commitment key", func(d *core.DecryptedOrder) { d.CommitmentKey = "" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestServer()
-			_, err := srv.PlaceOrder(context.Background(), &darkpoolv1.PlaceOrderRequest{
-				Pair:          tt.pair,
-				Side:          darkpoolv1.Side_SIDE_BUY,
-				Price:         tt.price,
-				Size:          tt.size,
-				CommitmentKey: tt.commitmentKey,
-			})
+			d := validDecrypted()
+			tt.mut(&d)
+			_, err := srv.PlaceOrder(context.Background(), buildReq(t, d))
 			assertCode(t, err, codes.InvalidArgument)
 		})
 	}
+}
+
+func TestPlaceOrder_MissingCommitment(t *testing.T) {
+	srv := newTestServer()
+	req := buildReq(t, validDecrypted())
+	req.Commitment = nil
+	_, err := srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+	if st, _ := status.FromError(err); st.Message() != apiutils.MsgCommitmentRequired {
+		t.Errorf("msg = %q, want %q", st.Message(), apiutils.MsgCommitmentRequired)
+	}
+}
+
+func TestPlaceOrder_MissingCiphertext(t *testing.T) {
+	srv := newTestServer()
+	req := buildReq(t, validDecrypted())
+	req.EncryptedPayload = nil
+	_, err := srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+	if st, _ := status.FromError(err); st.Message() != apiutils.MsgCiphertextRequired {
+		t.Errorf("msg = %q, want %q", st.Message(), apiutils.MsgCiphertextRequired)
+	}
+}
+
+func TestPlaceOrder_CiphertextTooLarge(t *testing.T) {
+	srv := newTestServer()
+	req := buildReq(t, validDecrypted())
+	req.EncryptedPayload = make([]byte, apiutils.MaxCiphertextBytes+1)
+	_, err := srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+	if st, _ := status.FromError(err); st.Message() != apiutils.MsgCiphertextTooLarge {
+		t.Errorf("msg = %q, want %q", st.Message(), apiutils.MsgCiphertextTooLarge)
+	}
+}
+
+// TestPlaceOrder_CommitmentMismatch is the canary test for the entire
+// encrypt-only spec. A ciphertext that decrypts to one order paired with a
+// commitment that hashes a different order must be rejected. If this fails,
+// a client could submit a proof of order A with plaintext of order B.
+func TestPlaceOrder_CommitmentMismatch(t *testing.T) {
+	srv := newTestServer()
+	honest := validDecrypted()
+	attacker := honest
+	attacker.Price = decimal.NewFromInt(9999)
+
+	ct, err := json.Marshal(honest)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := &darkpoolv1.PlaceOrderRequest{
+		Commitment:       core.ComputeCommitment(attacker),
+		Proof:            testProof(),
+		EncryptedPayload: ct,
+	}
+
+	_, err = srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+	if st, _ := status.FromError(err); st.Message() != apiutils.MsgCommitmentMismatch {
+		t.Errorf("msg = %q, want %q", st.Message(), apiutils.MsgCommitmentMismatch)
+	}
+}
+
+func TestPlaceOrder_MissingProof(t *testing.T) {
+	srv := newTestServer()
+	req := buildReq(t, validDecrypted())
+	req.Proof = nil
+	_, err := srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+}
+
+func TestPlaceOrder_ProofTooLarge(t *testing.T) {
+	srv := newTestServer()
+	req := buildReq(t, validDecrypted())
+	req.Proof = make([]byte, apiutils.MaxProofBytes+1)
+	_, err := srv.PlaceOrder(context.Background(), req)
+	assertCode(t, err, codes.InvalidArgument)
+	if st, _ := status.FromError(err); st.Message() != apiutils.MsgProofTooLarge {
+		t.Errorf("msg = %q, want %q", st.Message(), apiutils.MsgProofTooLarge)
+	}
+}
+
+func testProof() []byte {
+	// placeholder bytes — passes format check until real circuits land
+	return []byte("stub-proof")
 }
 
 // ---------------------------------------------------------------------------

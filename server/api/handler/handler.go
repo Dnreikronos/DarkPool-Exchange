@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"errors"
-	"time"
 
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
 	apiutils "github.com/darkpool-exchange/server/api/utils"
@@ -26,29 +25,24 @@ func NewServer(eng *core.Engine) *Server {
 }
 
 func (s *Server) PlaceOrder(ctx context.Context, req *darkpoolv1.PlaceOrderRequest) (*darkpoolv1.PlaceOrderResponse, error) {
-	price, err := decimal.NewFromString(req.Price)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid price: %v", err)
+	if len(req.Commitment) == 0 {
+		return nil, status.Error(codes.InvalidArgument, apiutils.MsgCommitmentRequired)
 	}
-	size, err := decimal.NewFromString(req.Size)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid size: %v", err)
+	if err := validateProofFormat(req.Proof); err != nil {
+		return nil, err
 	}
-
-	var side utils.Side
-	switch req.Side {
-	case darkpoolv1.Side_SIDE_BUY:
-		side = utils.Buy
-	case darkpoolv1.Side_SIDE_SELL:
-		side = utils.Sell
-	default:
-		return nil, status.Error(codes.InvalidArgument, apiutils.MsgInvalidSide)
+	if len(req.EncryptedPayload) == 0 {
+		return nil, status.Error(codes.InvalidArgument, apiutils.MsgCiphertextRequired)
+	}
+	if len(req.EncryptedPayload) > apiutils.MaxCiphertextBytes {
+		return nil, status.Error(codes.InvalidArgument, apiutils.MsgCiphertextTooLarge)
 	}
 
-	ttl := time.Duration(req.TtlSeconds) * time.Second
-
-	order, err := s.engine.PlaceOrder(req.Pair, side, price, size, req.CommitmentKey, ttl)
+	order, err := s.engine.PlaceEncryptedOrder(ctx, req.Commitment, req.Proof, req.EncryptedPayload)
 	if err != nil {
+		if errors.Is(err, utils.ErrCommitmentMismatch) {
+			return nil, status.Error(codes.InvalidArgument, apiutils.MsgCommitmentMismatch)
+		}
 		if errors.Is(err, utils.ErrPairRequired) ||
 			errors.Is(err, utils.ErrPriceMustBePositive) ||
 			errors.Is(err, utils.ErrSizeMustBePositive) ||
@@ -181,6 +175,19 @@ func modelOrderToProto(o *model.Order) *darkpoolv1.OrderInfo {
 		SubmittedAtUnix: o.SubmittedAt.Unix(),
 		ExpiresAtUnix:   o.ExpiresAt.Unix(),
 	}
+}
+
+// validateProofFormat rejects malformed proofs at the API boundary. Real
+// cryptographic verification lives in the Solidity verifier once circuits land;
+// here we only guard against empty or oversized blobs.
+func validateProofFormat(proof []byte) error {
+	if len(proof) == 0 {
+		return status.Error(codes.InvalidArgument, apiutils.MsgProofRequired)
+	}
+	if len(proof) > apiutils.MaxProofBytes {
+		return status.Error(codes.InvalidArgument, apiutils.MsgProofTooLarge)
+	}
+	return nil
 }
 
 func aggregateLevels(orders []model.Order) []*darkpoolv1.PriceLevel {

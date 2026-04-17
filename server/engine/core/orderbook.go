@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
+	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 )
 
@@ -57,6 +57,20 @@ func (ob *OrderBook) Apply(e event.Event) {
 	ob.apply(e)
 }
 
+// InsertOrder adds a plaintext order to the book. The engine calls this
+// immediately after persisting the ciphertext OrderPlaced event (fresh
+// submission) or after decrypting during Recover.
+func (ob *OrderBook) InsertOrder(o *model.Order) {
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+	switch o.Side {
+	case utils.Buy:
+		ob.bids[o.ID] = o
+	case utils.Sell:
+		ob.asks[o.ID] = o
+	}
+}
+
 func (ob *OrderBook) apply(e event.Event) {
 	// Monotonic advance. submitBatch drops e.mu between store.Append and
 	// ob.Apply; a concurrent PlaceOrder can slip Seq N+1 in first, so an
@@ -67,13 +81,10 @@ func (ob *OrderBook) apply(e event.Event) {
 
 	switch d := e.Data.(type) {
 	case event.OrderPlaced:
-		o := d.Order
-		switch o.Side {
-		case utils.Buy:
-			ob.bids[o.ID] = &o
-		case utils.Sell:
-			ob.asks[o.ID] = &o
-		}
+		// OrderPlaced carries only ciphertext + commitment + proof. Plaintext
+		// lands in the orderbook via InsertOrder, called by the engine after
+		// decrypt. This case exists only to advance ob.seq.
+		_ = d
 
 	case event.OrderCancelled:
 		delete(ob.bids, d.OrderID)

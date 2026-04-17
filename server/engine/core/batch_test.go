@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -17,16 +18,28 @@ import (
 // makes Submit return an error (simulating chain unavailability or timeout);
 // fail=false returns a synthetic tx hash. calls counts total invocations.
 type stubSubmitter struct {
-	fail  bool
-	calls int
+	fail      bool
+	calls     int
+	lastProof []byte
 }
 
-func (s *stubSubmitter) Submit(_ context.Context, batchID uuid.UUID, _ uuid.UUID, _ []event.OrderMatched) (string, error) {
+func (s *stubSubmitter) Submit(_ context.Context, batchID uuid.UUID, _ uuid.UUID, _ []event.OrderMatched, proof []byte) (string, error) {
 	s.calls++
+	s.lastProof = append([]byte(nil), proof...)
 	if s.fail {
 		return "", errors.New("submit boom")
 	}
 	return "chain:" + batchID.String(), nil
+}
+
+type stubAggregator struct {
+	proof []byte
+	calls int
+}
+
+func (a *stubAggregator) Aggregate(_ context.Context, _ uuid.UUID, _ []event.OrderMatched) ([]byte, error) {
+	a.calls++
+	return append([]byte(nil), a.proof...), nil
 }
 
 func countEvents(t *testing.T, store event.Store, target utils.EventType) int {
@@ -54,8 +67,8 @@ func TestBatchLifecycle_NoopSubmitter(t *testing.T) {
 	store := event.NewMemStore()
 	e := NewEngine(store, time.Second)
 
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
+	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
 
 	notifications := e.RunAuctionTickCtx(context.Background())
 	if len(notifications) != 1 {
@@ -81,8 +94,8 @@ func TestBatchLifecycle_CrashBetweenSubmitAndConfirm(t *testing.T) {
 	fail := &stubSubmitter{fail: true}
 	e1.SetSubmitter(fail)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
 
 	e1.RunAuctionTickCtx(context.Background())
 
@@ -135,8 +148,8 @@ func TestBatchLifecycle_RecoverFromFileStore(t *testing.T) {
 	fail := &stubSubmitter{fail: true}
 	e1.SetSubmitter(fail)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
 	e1.RunAuctionTickCtx(context.Background())
 
 	if got := e1.PendingBatchCount(); got != 1 {
@@ -184,8 +197,8 @@ func TestBatchLifecycle_RetriesOnNextTick(t *testing.T) {
 	e.SetRetryBackoff(0, 0)
 
 	// Tick 1: auction matches, submit fails, batch stays pending.
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
+	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
 	e.RunAuctionTickCtx(context.Background())
 
 	if got := e.PendingBatchCount(); got != 1 {
@@ -209,14 +222,78 @@ func TestBatchLifecycle_RetriesOnNextTick(t *testing.T) {
 	}
 }
 
+func TestBatchLifecycle_ProofPersistedAndReusedOnResubmit(t *testing.T) {
+	store := event.NewMemStore()
+
+	distinctProof := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04}
+
+	e1 := NewEngine(store, time.Second)
+	agg := &stubAggregator{proof: distinctProof}
+	e1.SetAggregator(agg)
+	e1.SetSubmitter(&stubSubmitter{fail: true})
+
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e1.RunAuctionTickCtx(context.Background())
+
+	if agg.calls != 1 {
+		t.Fatalf("aggregator calls = %d, want 1", agg.calls)
+	}
+
+	// verify proof landed in the event log
+	var persistedProof []byte
+	var after uint64
+	for {
+		evts, err := store.ReadFrom(after, 256)
+		if err != nil {
+			t.Fatalf("ReadFrom: %v", err)
+		}
+		if len(evts) == 0 {
+			break
+		}
+		for _, ev := range evts {
+			if bs, ok := ev.Data.(event.BatchSubmitted); ok {
+				persistedProof = bs.Proof
+			}
+		}
+		after = evts[len(evts)-1].Seq
+	}
+	if !bytes.Equal(persistedProof, distinctProof) {
+		t.Fatalf("persisted proof = %x, want %x", persistedProof, distinctProof)
+	}
+
+	// new engine on same store — aggregator deliberately returns different
+	// bytes to prove the recovery path does NOT re-aggregate.
+	e2 := NewEngine(store, time.Second)
+	wrongAgg := &stubAggregator{proof: []byte{0xFF, 0xFF}}
+	e2.SetAggregator(wrongAgg)
+	capture := &stubSubmitter{}
+	e2.SetSubmitter(capture)
+	if err := e2.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	e2.ResubmitPending(context.Background())
+
+	if wrongAgg.calls != 0 {
+		t.Errorf("aggregator invoked on resubmit (%d calls); must reuse persisted proof", wrongAgg.calls)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("submitter calls = %d, want 1", capture.calls)
+	}
+	if !bytes.Equal(capture.lastProof, distinctProof) {
+		t.Errorf("submit proof = %x, want %x (original aggregator bytes)", capture.lastProof, distinctProof)
+	}
+}
+
 func TestBatchLifecycle_StartReplaysPending(t *testing.T) {
 	store := event.NewMemStore()
 
 	e1 := NewEngine(store, time.Second)
 	e1.SetSubmitter(&stubSubmitter{fail: true})
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
+	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
+	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
 	e1.RunAuctionTickCtx(context.Background())
 
 	e2 := NewEngine(store, 10*time.Millisecond)
