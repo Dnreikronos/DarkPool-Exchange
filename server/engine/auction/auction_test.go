@@ -1,18 +1,34 @@
-package core
+package auction
 
 import (
 	"testing"
+	"time"
 
 	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/darkpool-exchange/server/engine/utils"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
-func TestRunAuction_BasicMatch(t *testing.T) {
+func newOrder(side utils.Side, price, size int64) model.Order {
+	return model.Order{
+		ID:            uuid.New(),
+		Pair:          "ETH/USDC",
+		Side:          side,
+		Price:         decimal.NewFromInt(price),
+		Size:          decimal.NewFromInt(size),
+		RemainingSize: decimal.NewFromInt(size),
+		CommitmentKey: uuid.NewString(),
+		SubmittedAt:   time.Now(),
+		ExpiresAt:     time.Now().Add(10 * time.Minute),
+	}
+}
+
+func TestRun_BasicMatch(t *testing.T) {
 	bids := []model.Order{newOrder(utils.Buy, 1800, 10)}
 	asks := []model.Order{newOrder(utils.Sell, 1790, 10)}
 
-	result := RunAuction("ETH/USDC", bids, asks)
+	result := Run("ETH/USDC", bids, asks)
 	if result == nil {
 		t.Fatal("expected auction result, got nil")
 	}
@@ -24,21 +40,21 @@ func TestRunAuction_BasicMatch(t *testing.T) {
 	}
 }
 
-func TestRunAuction_NoCrossing(t *testing.T) {
+func TestRun_NoCrossing(t *testing.T) {
 	bids := []model.Order{newOrder(utils.Buy, 1700, 10)}
 	asks := []model.Order{newOrder(utils.Sell, 1800, 10)}
 
-	result := RunAuction("ETH/USDC", bids, asks)
+	result := Run("ETH/USDC", bids, asks)
 	if result != nil {
 		t.Fatal("expected nil result when no crossing")
 	}
 }
 
-func TestRunAuction_PartialFill(t *testing.T) {
+func TestRun_PartialFill(t *testing.T) {
 	bids := []model.Order{newOrder(utils.Buy, 1800, 10)}
 	asks := []model.Order{newOrder(utils.Sell, 1790, 4)}
 
-	result := RunAuction("ETH/USDC", bids, asks)
+	result := Run("ETH/USDC", bids, asks)
 	if result == nil {
 		t.Fatal("expected result")
 	}
@@ -47,7 +63,7 @@ func TestRunAuction_PartialFill(t *testing.T) {
 	}
 }
 
-func TestRunAuction_MultipleBidsAndAsks(t *testing.T) {
+func TestRun_MultipleBidsAndAsks(t *testing.T) {
 	bids := []model.Order{
 		newOrder(utils.Buy, 1810, 5),
 		newOrder(utils.Buy, 1800, 10),
@@ -59,7 +75,7 @@ func TestRunAuction_MultipleBidsAndAsks(t *testing.T) {
 		newOrder(utils.Sell, 1800, 10),
 	}
 
-	result := RunAuction("ETH/USDC", bids, asks)
+	result := Run("ETH/USDC", bids, asks)
 	if result == nil {
 		t.Fatal("expected result")
 	}
@@ -71,32 +87,32 @@ func TestRunAuction_MultipleBidsAndAsks(t *testing.T) {
 	}
 }
 
-func TestRunAuction_SelfMatchPrevention(t *testing.T) {
+func TestRun_SelfMatchPrevention(t *testing.T) {
 	bid := newOrder(utils.Buy, 1800, 10)
 	ask := newOrder(utils.Sell, 1790, 10)
 	ask.CommitmentKey = bid.CommitmentKey
 
-	result := RunAuction("ETH/USDC", []model.Order{bid}, []model.Order{ask})
+	result := Run("ETH/USDC", []model.Order{bid}, []model.Order{ask})
 	if result != nil {
 		t.Fatal("expected nil result for self-match")
 	}
 }
 
-func TestRunAuction_EmptySide(t *testing.T) {
+func TestRun_EmptySide(t *testing.T) {
 	bids := []model.Order{newOrder(utils.Buy, 1800, 10)}
 
-	result := RunAuction("ETH/USDC", bids, nil)
+	result := Run("ETH/USDC", bids, nil)
 	if result != nil {
 		t.Fatal("expected nil for empty asks")
 	}
 
-	result = RunAuction("ETH/USDC", nil, []model.Order{newOrder(utils.Sell, 1790, 10)})
+	result = Run("ETH/USDC", nil, []model.Order{newOrder(utils.Sell, 1790, 10)})
 	if result != nil {
 		t.Fatal("expected nil for empty bids")
 	}
 }
 
-func TestRunAuction_ClearingPriceMaximizesVolume(t *testing.T) {
+func TestRun_ClearingPriceMaximizesVolume(t *testing.T) {
 	bids := []model.Order{
 		newOrder(utils.Buy, 110, 10),
 		newOrder(utils.Buy, 100, 20),
@@ -107,7 +123,7 @@ func TestRunAuction_ClearingPriceMaximizesVolume(t *testing.T) {
 		newOrder(utils.Sell, 110, 10),
 	}
 
-	result := RunAuction("TEST/USD", bids, asks)
+	result := Run("TEST/USD", bids, asks)
 	if result == nil {
 		t.Fatal("expected result")
 	}

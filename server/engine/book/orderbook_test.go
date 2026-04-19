@@ -1,4 +1,4 @@
-package core
+package book
 
 import (
 	"testing"
@@ -26,7 +26,7 @@ func newOrder(side utils.Side, price, size int64) model.Order {
 }
 
 func TestOrderBook_PlaceAndCancel(t *testing.T) {
-	ob := NewOrderBook()
+	ob := New()
 	o := newOrder(utils.Buy, 1800, 10)
 
 	ob.InsertOrder(&o)
@@ -43,7 +43,7 @@ func TestOrderBook_PlaceAndCancel(t *testing.T) {
 }
 
 func TestOrderBook_PartialFill(t *testing.T) {
-	ob := NewOrderBook()
+	ob := New()
 	bid := newOrder(utils.Buy, 1800, 10)
 	ask := newOrder(utils.Sell, 1790, 4)
 
@@ -72,7 +72,7 @@ func TestOrderBook_PartialFill(t *testing.T) {
 }
 
 func TestOrderBook_Expiration(t *testing.T) {
-	ob := NewOrderBook()
+	ob := New()
 	o := model.Order{
 		ID:            uuid.New(),
 		Pair:          "ETH/USDC",
@@ -110,7 +110,7 @@ func TestOrderBook_ReplayAdvancesSeq(t *testing.T) {
 	store := event.NewMemStore()
 	store.Append(&event.Event{Type: utils.OrderPlacedType, Data: event.OrderPlaced{OrderID: uuid.New()}})
 
-	ob := NewOrderBook()
+	ob := New()
 	if err := ob.Replay(store); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}

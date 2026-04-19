@@ -1,4 +1,4 @@
-package core
+package book
 
 import (
 	"sort"
@@ -19,7 +19,7 @@ type OrderBook struct {
 	seq  uint64
 }
 
-func NewOrderBook() *OrderBook {
+func New() *OrderBook {
 	return &OrderBook{
 		bids: make(map[uuid.UUID]*model.Order),
 		asks: make(map[uuid.UUID]*model.Order),

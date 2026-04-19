@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darkpool-exchange/server/engine/auction"
+	"github.com/darkpool-exchange/server/engine/book"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/darkpool-exchange/server/engine/utils"
@@ -54,7 +56,7 @@ type pendingBatch struct {
 
 type Engine struct {
 	mu    sync.RWMutex
-	ob    *OrderBook
+	ob    *book.OrderBook
 	store event.Store
 	pairs map[string]bool
 
@@ -81,7 +83,7 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 		auctionInterval = DefaultAuctionInterval
 	}
 	return &Engine{
-		ob:              NewOrderBook(),
+		ob:              book.New(),
 		store:           store,
 		pairs:           make(map[string]bool),
 		auctionInterval: auctionInterval,
@@ -175,7 +177,7 @@ func (e *Engine) Recover(ctx context.Context) error {
 	// pendingBatches / auctionLog may hold stale entries. Re-applying on top
 	// would double-count OrderMatched fills and corrupt RemainingSize, so
 	// rebuild from scratch each attempt.
-	e.ob = NewOrderBook()
+	e.ob = book.New()
 	e.auctionLog = nil
 	e.pendingBatches = make(map[uuid.UUID]*pendingBatch)
 	e.pairs = make(map[string]bool)
@@ -501,7 +503,7 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 
 	for pair := range e.pairs {
 		bids, asks := e.pairOrders(pair)
-		result := RunAuction(pair, bids, asks)
+		result := auction.Run(pair, bids, asks)
 		if result == nil {
 			continue
 		}
