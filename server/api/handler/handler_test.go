@@ -11,6 +11,7 @@ import (
 	darkpoolv1 "github.com/darkpool-exchange/server/api/gen/darkpool/v1"
 	apiutils "github.com/darkpool-exchange/server/api/utils"
 	"github.com/darkpool-exchange/server/engine/core"
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
@@ -35,14 +36,14 @@ var testKeyCounter uint64
 // buildReq encodes a DecryptedOrder with the noop decrypter's JSON format and
 // computes the matching stub (sha256) commitment. Tests that want to exercise
 // the commitment-mismatch path construct the request manually instead.
-func buildReq(t *testing.T, d core.DecryptedOrder) *darkpoolv1.PlaceOrderRequest {
+func buildReq(t *testing.T, d decrypt.DecryptedOrder) *darkpoolv1.PlaceOrderRequest {
 	t.Helper()
 	ct, err := json.Marshal(d)
 	if err != nil {
 		t.Fatalf("marshal DecryptedOrder: %v", err)
 	}
 	return &darkpoolv1.PlaceOrderRequest{
-		Commitment:       core.ComputeCommitment(d),
+		Commitment:       decrypt.ComputeCommitment(d),
 		Proof:            testProof(),
 		EncryptedPayload: ct,
 	}
@@ -58,7 +59,7 @@ func sideFromProto(s darkpoolv1.Side) utils.Side {
 func placeTestOrder(t *testing.T, srv *Server, pair string, side darkpoolv1.Side, price, size string) string {
 	t.Helper()
 	testKeyCounter++
-	d := core.DecryptedOrder{
+	d := decrypt.DecryptedOrder{
 		Pair:          pair,
 		Side:          sideFromProto(side),
 		Price:         decimal.RequireFromString(price),
@@ -111,8 +112,8 @@ func (m *mockAuctionStream) Context() context.Context { return m.ctx }
 // PlaceOrder
 // ---------------------------------------------------------------------------
 
-func validDecrypted() core.DecryptedOrder {
-	return core.DecryptedOrder{
+func validDecrypted() decrypt.DecryptedOrder {
+	return decrypt.DecryptedOrder{
 		Pair:          "ETH/USDC",
 		Side:          utils.Buy,
 		Price:         decimal.RequireFromString("1800.50"),
@@ -149,12 +150,12 @@ func TestPlaceOrder_Success(t *testing.T) {
 func TestPlaceOrder_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string
-		mut  func(*core.DecryptedOrder)
+		mut  func(*decrypt.DecryptedOrder)
 	}{
-		{"empty pair", func(d *core.DecryptedOrder) { d.Pair = "" }},
-		{"zero price", func(d *core.DecryptedOrder) { d.Price = decimal.Zero }},
-		{"negative size", func(d *core.DecryptedOrder) { d.Size = decimal.NewFromInt(-1) }},
-		{"empty commitment key", func(d *core.DecryptedOrder) { d.CommitmentKey = "" }},
+		{"empty pair", func(d *decrypt.DecryptedOrder) { d.Pair = "" }},
+		{"zero price", func(d *decrypt.DecryptedOrder) { d.Price = decimal.Zero }},
+		{"negative size", func(d *decrypt.DecryptedOrder) { d.Size = decimal.NewFromInt(-1) }},
+		{"empty commitment key", func(d *decrypt.DecryptedOrder) { d.CommitmentKey = "" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -215,7 +216,7 @@ func TestPlaceOrder_CommitmentMismatch(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	req := &darkpoolv1.PlaceOrderRequest{
-		Commitment:       core.ComputeCommitment(attacker),
+		Commitment:       decrypt.ComputeCommitment(attacker),
 		Proof:            testProof(),
 		EncryptedPayload: ct,
 	}

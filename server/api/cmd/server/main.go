@@ -13,6 +13,7 @@ import (
 	"github.com/darkpool-exchange/server/api/config"
 	"github.com/darkpool-exchange/server/api/gateway"
 	"github.com/darkpool-exchange/server/engine/core"
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -41,7 +42,7 @@ func main() {
 	defer cancel()
 
 	if cfg.OperatorKeyPath != "" {
-		dec, err := core.NewECIESDecrypterFromFile(cfg.OperatorKeyPath)
+		dec, err := decrypt.NewECIESDecrypterFromFile(cfg.OperatorKeyPath)
 		if err != nil {
 			log.Fatalf("load operator key: %v", err)
 		}

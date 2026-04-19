@@ -11,6 +11,7 @@ import (
 	"time"
 
 	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/utils"
 
@@ -63,7 +64,7 @@ func TestFullPipeline_EncryptedOrderToSettlement(t *testing.T) {
 	store := event.NewMemStore()
 	eng := NewEngine(store, time.Second)
 
-	dec, err := NewECIESDecrypterFromFile(keyPath)
+	dec, err := decrypt.NewECIESDecrypterFromFile(keyPath)
 	if err != nil {
 		t.Fatalf("load decrypter: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestFullPipeline_EncryptedOrderToSettlement(t *testing.T) {
 
 	submit := func(side utils.Side, price, size int64, key string) {
 		t.Helper()
-		plain := DecryptedOrder{
+		plain := decrypt.DecryptedOrder{
 			Pair: "ETH/USDC", Side: side,
 			Price: decimal.NewFromInt(price), Size: decimal.NewFromInt(size),
 			CommitmentKey: key, TTL: time.Minute,
@@ -116,7 +117,7 @@ func TestFullPipeline_EncryptedOrderToSettlement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := eng.PlaceEncryptedOrder(ctx, ComputeCommitment(plain), nil, ct); err != nil {
+		if _, err := eng.PlaceEncryptedOrder(ctx, decrypt.ComputeCommitment(plain), nil, ct); err != nil {
 			t.Fatalf("place encrypted order: %v", err)
 		}
 	}

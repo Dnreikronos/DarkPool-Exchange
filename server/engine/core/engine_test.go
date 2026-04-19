@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
@@ -159,7 +160,7 @@ func TestGetAuctionHistory(t *testing.T) {
 	}
 }
 
-func encodeDecrypted(t *testing.T, d DecryptedOrder) []byte {
+func encodeDecrypted(t *testing.T, d decrypt.DecryptedOrder) []byte {
 	t.Helper()
 	b, err := json.Marshal(d)
 	if err != nil {
@@ -171,7 +172,7 @@ func encodeDecrypted(t *testing.T, d DecryptedOrder) []byte {
 func TestPlaceEncryptedOrder_NoopRoundTrip(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	d := DecryptedOrder{
+	d := decrypt.DecryptedOrder{
 		Pair:          "ETH/USDC",
 		Side:          utils.Buy,
 		Price:         decimal.NewFromInt(1800),
@@ -180,7 +181,7 @@ func TestPlaceEncryptedOrder_NoopRoundTrip(t *testing.T) {
 		TTL:           60 * time.Second,
 	}
 	ct := encodeDecrypted(t, d)
-	commitment := ComputeCommitment(d)
+	commitment := decrypt.ComputeCommitment(d)
 
 	order, err := e.PlaceEncryptedOrder(context.Background(), commitment, []byte("stub-proof"), ct)
 	if err != nil {
@@ -200,7 +201,7 @@ func TestPlaceEncryptedOrder_NoopRoundTrip(t *testing.T) {
 func TestPlaceEncryptedOrder_CommitmentMismatch(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 
-	d := DecryptedOrder{
+	d := decrypt.DecryptedOrder{
 		Pair:          "ETH/USDC",
 		Side:          utils.Buy,
 		Price:         decimal.NewFromInt(1800),
@@ -212,7 +213,7 @@ func TestPlaceEncryptedOrder_CommitmentMismatch(t *testing.T) {
 
 	other := d
 	other.Price = decimal.NewFromInt(9999)
-	wrongCommitment := ComputeCommitment(other)
+	wrongCommitment := decrypt.ComputeCommitment(other)
 
 	_, err := e.PlaceEncryptedOrder(context.Background(), wrongCommitment, []byte("stub-proof"), ct)
 	if !errors.Is(err, utils.ErrCommitmentMismatch) {
@@ -236,8 +237,8 @@ func (x xorDecrypter) Encrypt(plaintext []byte) []byte {
 	return out
 }
 
-func (x xorDecrypter) Decrypt(_ context.Context, ct []byte) (DecryptedOrder, error) {
-	return NoopDecrypter{}.Decrypt(context.Background(), x.Encrypt(ct))
+func (x xorDecrypter) Decrypt(_ context.Context, ct []byte) (decrypt.DecryptedOrder, error) {
+	return decrypt.NoopDecrypter{}.Decrypt(context.Background(), x.Encrypt(ct))
 }
 
 // TestEventStoreContainsNoPlaintext is the dark-pool privacy invariant: a
@@ -249,7 +250,7 @@ func TestEventStoreContainsNoPlaintext(t *testing.T) {
 	dec := xorDecrypter{key: 0x5A}
 	e.SetDecrypter(dec)
 
-	d := DecryptedOrder{
+	d := decrypt.DecryptedOrder{
 		Pair:          "ETH/USDC",
 		Side:          utils.Buy,
 		Price:         decimal.RequireFromString("1234.5678"),
@@ -258,7 +259,7 @@ func TestEventStoreContainsNoPlaintext(t *testing.T) {
 		TTL:           60 * time.Second,
 	}
 	ct := dec.Encrypt(encodeDecrypted(t, d))
-	commitment := ComputeCommitment(d)
+	commitment := decrypt.ComputeCommitment(d)
 
 	if _, err := e.PlaceEncryptedOrder(context.Background(), commitment, []byte("stub"), ct); err != nil {
 		t.Fatalf("place: %v", err)

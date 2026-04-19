@@ -1,4 +1,4 @@
-package core
+package decrypt
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type ECIESDecrypter struct {
 // NewECIESDecrypterFromFile loads a hex-encoded secp256k1 private key (with or
 // without 0x prefix, whitespace tolerated) from path.
 func NewECIESDecrypterFromFile(path string) (*ECIESDecrypter, error) {
-	ecdsaPriv, err := loadOperatorKeyFile(path)
+	ecdsaPriv, err := LoadOperatorKeyFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("parse operator privkey: %w", err)
 	}

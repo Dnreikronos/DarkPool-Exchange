@@ -12,6 +12,7 @@ import (
 
 	"github.com/darkpool-exchange/server/engine/auction"
 	"github.com/darkpool-exchange/server/engine/book"
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
 	"github.com/darkpool-exchange/server/engine/utils"
@@ -67,7 +68,7 @@ type Engine struct {
 
 	aggregator     ProofAggregator
 	submitter      Submitter
-	decrypter      Decrypter
+	decrypter      decrypt.Decrypter
 	pendingBatches map[uuid.UUID]*pendingBatch
 	submitTimeout  time.Duration
 	minBackoff     time.Duration
@@ -90,7 +91,7 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 		defaultTTL:      DefaultOrderTTL,
 		aggregator:      NoopAggregator{},
 		submitter:       NoopSubmitter{},
-		decrypter:       NoopDecrypter{},
+		decrypter:       decrypt.NoopDecrypter{},
 		pendingBatches:  make(map[uuid.UUID]*pendingBatch),
 		submitTimeout:   defaultSubmitTimeout,
 		minBackoff:      defaultMinBackoff,
@@ -147,9 +148,9 @@ func (e *Engine) SetSubmitter(s Submitter) {
 	e.mu.Unlock()
 }
 
-func (e *Engine) SetDecrypter(d Decrypter) {
+func (e *Engine) SetDecrypter(d decrypt.Decrypter) {
 	if d == nil {
-		d = NoopDecrypter{}
+		d = decrypt.NoopDecrypter{}
 	}
 	e.mu.Lock()
 	e.decrypter = d
@@ -205,7 +206,7 @@ func (e *Engine) Recover(ctx context.Context) error {
 				if err != nil {
 					return fmt.Errorf("recover: decrypt order %s: %w", d.OrderID, err)
 				}
-				if !bytes.Equal(ComputeCommitment(decrypted), d.Commitment) {
+				if !bytes.Equal(decrypt.ComputeCommitment(decrypted), d.Commitment) {
 					return fmt.Errorf("recover: %w for order %s", utils.ErrCommitmentMismatch, d.OrderID)
 				}
 				ttl := decrypted.TTL
@@ -333,7 +334,7 @@ func (e *Engine) placeOrderPlaintext(pair string, side utils.Side, price, size d
 		ttl = e.defaultTTL
 	}
 
-	d := DecryptedOrder{
+	d := decrypt.DecryptedOrder{
 		Pair: pair, Side: side, Price: price, Size: size,
 		CommitmentKey: commitmentKey, TTL: ttl,
 	}
@@ -341,7 +342,7 @@ func (e *Engine) placeOrderPlaintext(pair string, side utils.Side, price, size d
 	if err != nil {
 		return nil, fmt.Errorf("encode synthetic ciphertext: %w", err)
 	}
-	return e.PlaceEncryptedOrder(context.Background(), ComputeCommitment(d), nil, ct)
+	return e.PlaceEncryptedOrder(context.Background(), decrypt.ComputeCommitment(d), nil, ct)
 }
 
 // PlaceEncryptedOrder accepts the wire-level {commitment, proof, ciphertext}
@@ -358,7 +359,7 @@ func (e *Engine) PlaceEncryptedOrder(ctx context.Context, commitment, proof, cip
 		return nil, fmt.Errorf("decrypt order: %w", err)
 	}
 
-	if !bytes.Equal(ComputeCommitment(decrypted), commitment) {
+	if !bytes.Equal(decrypt.ComputeCommitment(decrypted), commitment) {
 		return nil, utils.ErrCommitmentMismatch
 	}
 

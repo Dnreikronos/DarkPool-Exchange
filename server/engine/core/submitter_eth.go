@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 
 	ethabi "github.com/ethereum/go-ethereum/accounts/abi"
@@ -59,7 +60,7 @@ func NewEthSubmitter(ctx context.Context, cfg EthSubmitterConfig) (*EthSubmitter
 	if !common.IsHexAddress(cfg.ContractAddress) {
 		return nil, fmt.Errorf("invalid DarkPool address %q", cfg.ContractAddress)
 	}
-	priv, err := loadOperatorKeyFile(cfg.OperatorKeyPath)
+	priv, err := decrypt.LoadOperatorKeyFile(cfg.OperatorKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("load operator key: %w", err)
 	}
