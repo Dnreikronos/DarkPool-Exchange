@@ -98,7 +98,7 @@ func (ob *OrderBook) apply(e event.Event) {
 		ob.applyFill(d.Bid)
 		ob.applyFill(d.Ask)
 
-	case event.AuctionExecuted, event.BatchSubmitted, event.BatchConfirmed:
+	case event.AuctionExecuted, event.BatchSubmitted, event.BatchConfirmed, event.BatchSettled:
 		// Projection cares only about order state. These events exist for
 		// downstream consumers (auction log, batch lifecycle); applying them
 		// only advances ob.seq so Replay resumes correctly.

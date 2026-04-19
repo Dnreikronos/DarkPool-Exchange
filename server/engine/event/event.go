@@ -86,6 +86,17 @@ type BatchConfirmed struct {
 
 func (BatchConfirmed) eventData() {}
 
+// BatchSettled records on-chain finality for a submitted batch: the tx that
+// carried the submitBatch call has landed in a block. BatchConfirmed signals
+// "RPC accepted the tx"; BatchSettled signals "chain accepted the tx".
+type BatchSettled struct {
+	BatchID     uuid.UUID
+	BlockNumber uint64
+	TxHash      string
+}
+
+func (BatchSettled) eventData() {}
+
 // Store is the append-only event log.
 //
 // Append assigns Seq in place on each *Event. Callers that Apply afterward

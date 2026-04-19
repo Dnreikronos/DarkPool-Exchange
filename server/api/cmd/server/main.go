@@ -14,6 +14,8 @@ import (
 	"github.com/darkpool-exchange/server/api/gateway"
 	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/event"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func main() {
@@ -34,14 +36,58 @@ func main() {
 	}
 
 	eng := core.NewEngine(store, cfg.AuctionInterval)
-	log.Printf("batch submitter: noop (no on-chain settlement; wire a real Submitter via eng.SetSubmitter before production)")
-
-	if err := eng.Recover(); err != nil {
-		log.Fatalf("engine recovery failed: %v", err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if cfg.OperatorKeyPath != "" {
+		dec, err := core.NewECIESDecrypterFromFile(cfg.OperatorKeyPath)
+		if err != nil {
+			log.Fatalf("load operator key: %v", err)
+		}
+		eng.SetDecrypter(dec)
+		log.Printf("decrypter: ECIES (operator key %s)", cfg.OperatorKeyPath)
+	} else {
+		log.Printf("decrypter: noop (set -operator-key to enable ECIES)")
+	}
+
+	if cfg.AggregatorBinPath != "" {
+		agg, err := core.NewSubprocessAggregator(cfg.AggregatorBinPath, cfg.AggregatorTimeout)
+		if err != nil {
+			log.Fatalf("init aggregator: %v", err)
+		}
+		eng.SetAggregator(agg)
+		log.Printf("aggregator: subprocess %s (timeout %s)", cfg.AggregatorBinPath, cfg.AggregatorTimeout)
+	} else {
+		log.Printf("aggregator: noop (set -aggregator-bin to enable)")
+	}
+
+	var watcher *core.SettlementWatcher
+	if cfg.EthRPCURL != "" {
+		sub, err := core.NewEthSubmitter(ctx, core.EthSubmitterConfig{
+			RPCURL:          cfg.EthRPCURL,
+			OperatorKeyPath: cfg.OperatorKeyPath,
+			ContractAddress: cfg.DarkPoolAddress,
+			ChainID:         cfg.ChainID,
+			GasLimit:        cfg.SubmitGasLimit,
+		})
+		if err != nil {
+			log.Fatalf("init eth submitter: %v", err)
+		}
+		eng.SetSubmitter(sub)
+		log.Printf("batch submitter: eth rpc=%s contract=%s", cfg.EthRPCURL, cfg.DarkPoolAddress)
+
+		watcher, err = core.NewSettlementWatcher(sub.Client(), common.HexToAddress(cfg.DarkPoolAddress), store, eng)
+		if err != nil {
+			log.Fatalf("init settlement watcher: %v", err)
+		}
+	} else {
+		log.Printf("batch submitter: noop (set -eth-rpc to enable on-chain settlement)")
+	}
+
+	if err := eng.Recover(ctx); err != nil {
+		log.Fatalf("engine recovery failed: %v", err)
+	}
 
 	grpcServer := config.NewGRPCServer(ctx, eng, cfg)
 
@@ -50,6 +96,10 @@ func main() {
 		eng.Start(ctx)
 		close(engDone)
 	}()
+
+	if watcher != nil {
+		go watcher.Run(ctx)
+	}
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

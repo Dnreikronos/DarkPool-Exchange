@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -162,7 +163,7 @@ func (e *Engine) SetAggregator(a ProofAggregator) {
 	e.mu.Unlock()
 }
 
-func (e *Engine) Recover() error {
+func (e *Engine) Recover(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -198,7 +199,7 @@ func (e *Engine) Recover() error {
 				// Recovery cost now scales with one decrypt per replayed
 				// order. Acceptable for scaffolding — batched decrypt or a
 				// plaintext-in-RAM snapshot is a later optimization.
-				decrypted, err := e.decrypter.Decrypt(context.Background(), d.Ciphertext)
+				decrypted, err := e.decrypter.Decrypt(ctx, d.Ciphertext)
 				if err != nil {
 					return fmt.Errorf("recover: decrypt order %s: %w", d.OrderID, err)
 				}
@@ -242,10 +243,69 @@ func (e *Engine) Recover() error {
 				delete(matchesByAuction, d.AuctionID)
 			case event.BatchConfirmed:
 				delete(e.pendingBatches, d.BatchID)
+			case event.BatchSettled:
+				delete(e.pendingBatches, d.BatchID)
 			}
 		}
 		after = events[len(events)-1].Seq
 	}
+
+	// Any AuctionID still sitting in matchesByAuction has OrderMatched events
+	// persisted without a trailing BatchSubmitted — a crash between the two
+	// Append calls in RunAuctionTickCtx. Re-run Aggregate for each orphan so
+	// the durable log and pendingBatches converge with pre-crash intent.
+	//
+	// Iterate in sorted AuctionID order so two replays of the same store emit
+	// identical BatchSubmitted sequences (batchIDs differ — they're freshly
+	// generated — but match assignments per auction stay deterministic).
+	auctionTimestamps := make(map[uuid.UUID]time.Time, len(e.auctionLog))
+	for _, ae := range e.auctionLog {
+		auctionTimestamps[ae.AuctionID] = ae.Timestamp
+	}
+	orphanIDs := make([]uuid.UUID, 0, len(matchesByAuction))
+	for id := range matchesByAuction {
+		orphanIDs = append(orphanIDs, id)
+	}
+	sort.Slice(orphanIDs, func(i, j int) bool {
+		return orphanIDs[i].String() < orphanIDs[j].String()
+	})
+	for _, auctionID := range orphanIDs {
+		matches := matchesByAuction[auctionID]
+		batchID := uuid.New()
+		proof, err := e.aggregator.Aggregate(ctx, batchID, matches)
+		if err != nil {
+			return fmt.Errorf("recover: re-aggregate orphan auction %s: %w", auctionID, err)
+		}
+		ts, ok := auctionTimestamps[auctionID]
+		if !ok {
+			// Shouldn't happen: AuctionExecuted is persisted in the same
+			// Append call as OrderMatched. Fall back so recovery still makes
+			// forward progress rather than failing the whole boot.
+			ts = time.Now()
+		}
+		batchEvt := event.Event{
+			Type:      utils.BatchSubmittedType,
+			Timestamp: ts,
+			Data: event.BatchSubmitted{
+				BatchID:    batchID,
+				AuctionID:  auctionID,
+				TxHash:     "",
+				MatchCount: len(matches),
+				Proof:      append([]byte(nil), proof...),
+			},
+		}
+		if err := e.store.Append(&batchEvt); err != nil {
+			return fmt.Errorf("recover: persist re-aggregated batch for auction %s: %w", auctionID, err)
+		}
+		e.ob.Apply(batchEvt)
+		e.pendingBatches[batchID] = &pendingBatch{
+			BatchID:   batchID,
+			AuctionID: auctionID,
+			Matches:   append([]event.OrderMatched(nil), matches...),
+			Proof:     append([]byte(nil), proof...),
+		}
+	}
+
 	e.recovered = true
 	return nil
 }
@@ -410,6 +470,17 @@ func (e *Engine) ActiveOrderCount() int {
 	return e.ob.ActiveOrderCount()
 }
 
+// pendingAggregation holds per-pair auction results persisted before
+// aggregation. Aggregate runs off e.mu using this struct's inputs; the proof
+// is persisted back into a BatchSubmitted event afterwards.
+type pendingAggregation struct {
+	BatchID   uuid.UUID
+	AuctionID uuid.UUID
+	Pair      string
+	Matches   []event.OrderMatched
+	AuctionAt time.Time
+}
+
 func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 	e.mu.Lock()
 
@@ -426,7 +497,7 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 	}
 
 	var notifications []AuctionNotification
-	var batchesToSubmit []uuid.UUID
+	var pending []pendingAggregation
 
 	for pair := range e.pairs {
 		bids, asks := e.pairOrders(pair)
@@ -435,7 +506,7 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 			continue
 		}
 
-		var events []*event.Event
+		events := make([]*event.Event, 0, 1+len(result.Matches))
 
 		auctionEvt := &event.Event{
 			Type:      utils.AuctionExecutedType,
@@ -459,34 +530,10 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 			})
 		}
 
-		batchID := uuid.New()
-
-		// Aggregate before persisting BatchSubmitted so the proof is durable
-		// with the batch record. Recovery reuses this exact proof on resubmit.
-		// NoopAggregator returns nil instantly; a real aggregator may block,
-		// which stalls fresh orders because e.mu is held. Acceptable during
-		// the scaffolding phase; move to async once the Rust CLI lands.
-		// TODO(zk-pipeline): move Aggregate off the engine mutex before wiring
-		// the Rust aggregator CLI — see https://github.com/Dnreikronos/DarkPool-Exchange/issues/new
-		proof, err := e.aggregator.Aggregate(ctx, batchID, result.Matches)
-		if err != nil {
-			log.Printf("aggregator failed for batch %s on pair %s: %v", batchID, pair, err)
-			continue
-		}
-
-		batchEvt := &event.Event{
-			Type:      utils.BatchSubmittedType,
-			Timestamp: now,
-			Data: event.BatchSubmitted{
-				BatchID:    batchID,
-				AuctionID:  result.AuctionID,
-				TxHash:     "",
-				MatchCount: len(result.Matches),
-				Proof:      proof,
-			},
-		}
-		events = append(events, batchEvt)
-
+		// Persist AuctionExecuted + OrderMatched now, under the lock, so the
+		// orderbook projection and the durable log stay in sync. BatchSubmitted
+		// is deferred until after Aggregate runs off-lock; recovery handles
+		// the gap via reAggregateOrphans.
 		if err := e.store.Append(events...); err != nil {
 			log.Printf("failed to persist auction events for pair %s: %v", pair, err)
 			continue
@@ -496,26 +543,44 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 			e.ob.Apply(*evt)
 		}
 
-		matchesCopy := append([]event.OrderMatched(nil), result.Matches...)
-		e.pendingBatches[batchID] = &pendingBatch{
-			BatchID:   batchID,
-			AuctionID: result.AuctionID,
-			Matches:   matchesCopy,
-			Proof:     proof,
-		}
-		batchesToSubmit = append(batchesToSubmit, batchID)
-
-		notifications = append(notifications, AuctionNotification{
+		notif := AuctionNotification{
 			AuctionID:     result.AuctionID,
 			Pair:          result.Pair,
 			ClearingPrice: result.ClearingPrice,
 			MatchedVolume: result.MatchedVolume,
 			MatchCount:    len(result.Matches),
 			Timestamp:     now,
+		}
+		notifications = append(notifications, notif)
+
+		pending = append(pending, pendingAggregation{
+			BatchID:   uuid.New(),
+			AuctionID: result.AuctionID,
+			Pair:      result.Pair,
+			Matches:   append([]event.OrderMatched(nil), result.Matches...),
+			AuctionAt: now,
 		})
 	}
 
+	agg := e.aggregator
 	e.mu.Unlock()
+
+	// Aggregate + persist BatchSubmitted OFF the engine lock so a slow
+	// aggregator does not stall PlaceOrder / CancelOrder. Ordering within a
+	// tick is preserved by processing pending entries sequentially.
+	batchesToSubmit := make([]uuid.UUID, 0, len(pending))
+	for _, p := range pending {
+		proof, err := agg.Aggregate(ctx, p.BatchID, p.Matches)
+		if err != nil {
+			log.Printf("aggregator failed for batch %s on pair %s: %v", p.BatchID, p.Pair, err)
+			continue
+		}
+		if err := e.finalizePendingBatch(p, proof); err != nil {
+			log.Printf("finalize batch %s: %v", p.BatchID, err)
+			continue
+		}
+		batchesToSubmit = append(batchesToSubmit, p.BatchID)
+	}
 
 	// Notify before submit: don't stall subscribers behind submitTimeout ×
 	// pending batches.
@@ -534,6 +599,50 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 	e.resubmitPendingExcept(ctx, submitSet)
 
 	return notifications
+}
+
+// onBatchSettled is the SettlementWatcher hook: apply the BatchSettled event
+// to the orderbook projection (advance seq) and drop any still-pending batch
+// entry. Called after the event is already persisted, so failure here is a
+// soft error — pendingBatches may hold a stale entry but the durable log is
+// authoritative.
+func (e *Engine) onBatchSettled(evt event.Event, batchID uuid.UUID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ob.Apply(evt)
+	delete(e.pendingBatches, batchID)
+}
+
+// finalizePendingBatch persists BatchSubmitted with the produced proof, applies
+// it to the orderbook projection, and registers the batch for submission.
+// Called OFF the engine lock, which it re-acquires only for the mutations.
+func (e *Engine) finalizePendingBatch(p pendingAggregation, proof []byte) error {
+	batchEvt := event.Event{
+		Type:      utils.BatchSubmittedType,
+		Timestamp: p.AuctionAt,
+		Data: event.BatchSubmitted{
+			BatchID:    p.BatchID,
+			AuctionID:  p.AuctionID,
+			TxHash:     "",
+			MatchCount: len(p.Matches),
+			Proof:      append([]byte(nil), proof...),
+		},
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if err := e.store.Append(&batchEvt); err != nil {
+		return fmt.Errorf("persist BatchSubmitted: %w", err)
+	}
+	e.ob.Apply(batchEvt)
+	e.pendingBatches[p.BatchID] = &pendingBatch{
+		BatchID:   p.BatchID,
+		AuctionID: p.AuctionID,
+		Matches:   append([]event.OrderMatched(nil), p.Matches...),
+		Proof:     append([]byte(nil), proof...),
+	}
+	return nil
 }
 
 func (e *Engine) resubmitPendingExcept(ctx context.Context, skip map[uuid.UUID]struct{}) {

@@ -312,7 +312,7 @@ func TestRecoverFromEventStore(t *testing.T) {
 
 	// Simulate crash: new engine, same store
 	e2 := NewEngine(store, time.Second)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("recover error: %v", err)
 	}
 	if e2.ActiveOrderCount() != 2 {
@@ -345,7 +345,7 @@ func TestRecoverFromFileStore(t *testing.T) {
 	t.Cleanup(func() { store2.Close() })
 
 	e2 := NewEngine(store2, time.Second)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 
@@ -381,10 +381,10 @@ func (b *blockingAggregator) Aggregate(ctx context.Context, _ uuid.UUID, _ []eve
 	}
 }
 
-// Pins current behavior: Aggregate runs under e.mu, so PlaceOrder blocks until
-// it returns. Rewrite to assert non-blocking once the Rust aggregator CLI
-// lands and the mutex is dropped around Aggregate.
-func TestRunAuctionTick_SlowAggregatorBlocksPlaceOrder(t *testing.T) {
+// Aggregate runs OFF e.mu, so a slow aggregator must not block PlaceOrder.
+// This is the inverse of the pre-refactor behavior: we now assert PlaceOrder
+// completes while the aggregator is still blocked on its release channel.
+func TestRunAuctionTick_SlowAggregatorDoesNotBlockPlaceOrder(t *testing.T) {
 	e := NewEngine(event.NewMemStore(), time.Second)
 	agg := &blockingAggregator{
 		entered: make(chan struct{}, 1),
@@ -417,23 +417,17 @@ func TestRunAuctionTick_SlowAggregatorBlocksPlaceOrder(t *testing.T) {
 		placeDone <- err
 	}()
 
-	// While Aggregate blocks, PlaceOrder must not complete.
-	select {
-	case err := <-placeDone:
-		t.Fatalf("PlaceOrder completed while aggregator blocked (err=%v)", err)
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	close(agg.release)
-
+	// Aggregate still blocked; PlaceOrder must complete because e.mu is free.
 	select {
 	case err := <-placeDone:
 		if err != nil {
-			t.Fatalf("PlaceOrder after release: %v", err)
+			t.Fatalf("PlaceOrder during aggregator block: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("PlaceOrder never completed after aggregator released")
+		t.Fatal("PlaceOrder stalled while aggregator blocked — mutex is still held across Aggregate")
 	}
+
+	close(agg.release)
 
 	select {
 	case <-tickDone:
