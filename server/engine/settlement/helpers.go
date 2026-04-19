@@ -1,4 +1,4 @@
-package core
+package settlement
 
 import (
 	"math/big"
@@ -7,9 +7,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// uuidToBytes32 left-pads a UUID (16 bytes) into a 32-byte word. The high
+// UUIDToBytes32 left-pads a UUID (16 bytes) into a 32-byte word. The high
 // 16 bytes are zero, which the settlement contract treats as unused.
-func uuidToBytes32(id uuid.UUID) [32]byte {
+func UUIDToBytes32(id uuid.UUID) [32]byte {
 	var out [32]byte
 	copy(out[16:], id[:])
 	return out

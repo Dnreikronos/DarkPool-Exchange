@@ -16,6 +16,7 @@ import (
 	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
+	"github.com/darkpool-exchange/server/engine/settlement"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -64,9 +65,9 @@ func main() {
 		log.Printf("aggregator: noop (set -aggregator-bin to enable)")
 	}
 
-	var watcher *core.SettlementWatcher
+	var watcher *settlement.Watcher
 	if cfg.EthRPCURL != "" {
-		sub, err := core.NewEthSubmitter(ctx, core.EthSubmitterConfig{
+		sub, err := settlement.NewEthSubmitter(ctx, settlement.EthSubmitterConfig{
 			RPCURL:          cfg.EthRPCURL,
 			OperatorKeyPath: cfg.OperatorKeyPath,
 			ContractAddress: cfg.DarkPoolAddress,
@@ -79,7 +80,7 @@ func main() {
 		eng.SetSubmitter(sub)
 		log.Printf("batch submitter: eth rpc=%s contract=%s", cfg.EthRPCURL, cfg.DarkPoolAddress)
 
-		watcher, err = core.NewSettlementWatcher(sub.Client(), common.HexToAddress(cfg.DarkPoolAddress), store, eng)
+		watcher, err = settlement.NewWatcher(sub.Client(), common.HexToAddress(cfg.DarkPoolAddress), store, eng)
 		if err != nil {
 			log.Fatalf("init settlement watcher: %v", err)
 		}

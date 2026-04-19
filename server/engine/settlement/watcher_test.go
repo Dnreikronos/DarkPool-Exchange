@@ -1,11 +1,12 @@
-package core
+package settlement
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
-	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	coreabi "github.com/darkpool-exchange/server/engine/settlement/abi"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/utils"
 
@@ -34,14 +35,26 @@ func (c *fakeLogClient) SubscribeFilterLogs(_ context.Context, _ ethereum.Filter
 	return c.sub, nil
 }
 
-func TestSettlementWatcher_EmitsBatchSettled(t *testing.T) {
-	store := event.NewMemStore()
-	eng := NewEngine(store, time.Second)
+type recordingSink struct {
+	mu    sync.Mutex
+	calls []uuid.UUID
+}
 
-	// Seed a pending batch so we can verify it gets drained.
-	batchID := uuid.New()
-	auctionID := uuid.New()
-	eng.pendingBatches[batchID] = &pendingBatch{BatchID: batchID, AuctionID: auctionID}
+func (r *recordingSink) OnBatchSettled(_ event.Event, batchID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, batchID)
+}
+
+func (r *recordingSink) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func TestWatcher_EmitsBatchSettled(t *testing.T) {
+	store := event.NewMemStore()
+	sink := &recordingSink{}
 
 	parsed, err := coreabi.Parsed()
 	if err != nil {
@@ -55,7 +68,7 @@ func TestSettlementWatcher_EmitsBatchSettled(t *testing.T) {
 	}
 	contractAddr := common.HexToAddress("0x0000000000000000000000000000000000001234")
 
-	w, err := NewSettlementWatcher(client, contractAddr, store, eng)
+	w, err := NewWatcher(client, contractAddr, store, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +81,8 @@ func TestSettlementWatcher_EmitsBatchSettled(t *testing.T) {
 		close(done)
 	}()
 
-	batchTopic := common.Hash(uuidToBytes32(batchID))
+	batchID := uuid.New()
+	batchTopic := common.Hash(UUIDToBytes32(batchID))
 	client.logs <- types.Log{
 		Address:     contractAddr,
 		Topics:      []common.Hash{topic0, batchTopic},
@@ -78,7 +92,14 @@ func TestSettlementWatcher_EmitsBatchSettled(t *testing.T) {
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if count := countEvents(t, store, utils.BatchSettledType); count == 1 {
+		count := 0
+		events, _ := store.ReadFrom(0, 64)
+		for _, ev := range events {
+			if ev.Type == utils.BatchSettledType {
+				count++
+			}
+		}
+		if count == 1 {
 			break
 		}
 		select {
@@ -88,8 +109,8 @@ func TestSettlementWatcher_EmitsBatchSettled(t *testing.T) {
 		}
 	}
 
-	if eng.PendingBatchCount() != 0 {
-		t.Errorf("pendingBatches after settle = %d, want 0", eng.PendingBatchCount())
+	if sink.count() != 1 {
+		t.Errorf("sink calls = %d, want 1", sink.count())
 	}
 
 	cancel()

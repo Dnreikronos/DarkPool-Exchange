@@ -1,11 +1,11 @@
-package core
+package settlement
 
 import (
 	"context"
 	"math/big"
 	"testing"
 
-	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	coreabi "github.com/darkpool-exchange/server/engine/settlement/abi"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
 

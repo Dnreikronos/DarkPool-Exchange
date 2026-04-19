@@ -16,6 +16,7 @@ import (
 	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/model"
+	"github.com/darkpool-exchange/server/engine/settlement"
 	"github.com/darkpool-exchange/server/engine/utils"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -68,7 +69,7 @@ type Engine struct {
 	auctionLog []event.AuctionExecuted
 
 	aggregator     aggregator.ProofAggregator
-	submitter      Submitter
+	submitter      settlement.Submitter
 	decrypter      decrypt.Decrypter
 	pendingBatches map[uuid.UUID]*pendingBatch
 	submitTimeout  time.Duration
@@ -91,7 +92,7 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 		auctionInterval: auctionInterval,
 		defaultTTL:      DefaultOrderTTL,
 		aggregator:      aggregator.NoopAggregator{},
-		submitter:       NoopSubmitter{},
+		submitter:       settlement.NoopSubmitter{},
 		decrypter:       decrypt.NoopDecrypter{},
 		pendingBatches:  make(map[uuid.UUID]*pendingBatch),
 		submitTimeout:   defaultSubmitTimeout,
@@ -140,9 +141,9 @@ func computeBackoff(min, max time.Duration, attempts int) time.Duration {
 	return d
 }
 
-func (e *Engine) SetSubmitter(s Submitter) {
+func (e *Engine) SetSubmitter(s settlement.Submitter) {
 	if s == nil {
-		s = NoopSubmitter{}
+		s = settlement.NoopSubmitter{}
 	}
 	e.mu.Lock()
 	e.submitter = s
@@ -605,12 +606,12 @@ func (e *Engine) RunAuctionTickCtx(ctx context.Context) []AuctionNotification {
 	return notifications
 }
 
-// onBatchSettled is the SettlementWatcher hook: apply the BatchSettled event
-// to the orderbook projection (advance seq) and drop any still-pending batch
-// entry. Called after the event is already persisted, so failure here is a
-// soft error — pendingBatches may hold a stale entry but the durable log is
-// authoritative.
-func (e *Engine) onBatchSettled(evt event.Event, batchID uuid.UUID) {
+// OnBatchSettled is the settlement.Watcher hook: apply the BatchSettled
+// event to the orderbook projection (advance seq) and drop any still-pending
+// batch entry. Called after the event is already persisted, so failure here
+// is a soft error — pendingBatches may hold a stale entry but the durable
+// log is authoritative.
+func (e *Engine) OnBatchSettled(evt event.Event, batchID uuid.UUID) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.ob.Apply(evt)

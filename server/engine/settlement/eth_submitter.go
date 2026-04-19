@@ -1,4 +1,4 @@
-package core
+package settlement
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	coreabi "github.com/darkpool-exchange/server/engine/settlement/abi"
 	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
 
@@ -122,15 +122,15 @@ func (s *EthSubmitter) PackSubmit(batchID, auctionID uuid.UUID, matches []event.
 			return nil, fmt.Errorf("size %s cannot be represented on-chain", m.Size)
 		}
 		packed = append(packed, coreabi.Match{
-			BidOrderID: uuidToBytes32(m.Bid.OrderID),
-			AskOrderID: uuidToBytes32(m.Ask.OrderID),
+			BidOrderID: UUIDToBytes32(m.Bid.OrderID),
+			AskOrderID: UUIDToBytes32(m.Ask.OrderID),
 			Price:      price,
 			Size:       size,
 		})
 	}
 	return s.abi.Pack("submitBatch",
-		uuidToBytes32(batchID),
-		uuidToBytes32(auctionID),
+		UUIDToBytes32(batchID),
+		UUIDToBytes32(auctionID),
 		proof,
 		packed,
 	)

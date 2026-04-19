@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
-	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
 	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
+	"github.com/darkpool-exchange/server/engine/settlement"
+	coreabi "github.com/darkpool-exchange/server/engine/settlement/abi"
 	"github.com/darkpool-exchange/server/engine/utils"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -22,6 +24,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
+
+type fakeSub struct{ err chan error }
+
+func (f *fakeSub) Unsubscribe()      {}
+func (f *fakeSub) Err() <-chan error { return f.err }
+
+type fakeLogClient struct {
+	logs chan types.Log
+	sub  *fakeSub
+}
+
+func (c *fakeLogClient) SubscribeFilterLogs(_ context.Context, _ ethereum.FilterQuery, ch chan<- types.Log) (ethereum.Subscription, error) {
+	go func() {
+		for lg := range c.logs {
+			ch <- lg
+		}
+	}()
+	return c.sub, nil
+}
 
 // onChainStubSubmitter wraps stubSubmitter and emits a synthetic BatchSettled
 // log whenever Submit succeeds. Models the production round-trip without a
@@ -86,7 +107,7 @@ func TestFullPipeline_EncryptedOrderToSettlement(t *testing.T) {
 	settled := make(chan uuid.UUID, 4)
 	eng.SetSubmitter(&onChainStubSubmitter{stub: &stubSubmitter{}, settled: settled})
 
-	watcher, err := NewSettlementWatcher(logClient, contract, store, eng)
+	watcher, err := settlement.NewWatcher(logClient, contract, store, eng)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +119,7 @@ func TestFullPipeline_EncryptedOrderToSettlement(t *testing.T) {
 		for batchID := range settled {
 			logClient.logs <- types.Log{
 				Address:     contract,
-				Topics:      []common.Hash{topic0, common.Hash(uuidToBytes32(batchID))},
+				Topics:      []common.Hash{topic0, common.Hash(settlement.UUIDToBytes32(batchID))},
 				BlockNumber: 123,
 				TxHash:      common.HexToHash("0xabcdef"),
 			}

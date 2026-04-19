@@ -1,4 +1,4 @@
-package core
+package settlement
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	coreabi "github.com/darkpool-exchange/server/engine/core/abi"
+	coreabi "github.com/darkpool-exchange/server/engine/settlement/abi"
 	"github.com/darkpool-exchange/server/engine/event"
 	"github.com/darkpool-exchange/server/engine/utils"
 
@@ -16,25 +16,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// LogSubscriber is the subset of ethclient the SettlementWatcher needs.
+// LogSubscriber is the subset of ethclient the Watcher needs.
 // Extracted so tests can drive a fake log channel without an RPC endpoint.
 type LogSubscriber interface {
 	SubscribeFilterLogs(ctx context.Context, q ethereum.FilterQuery, ch chan<- types.Log) (ethereum.Subscription, error)
 }
 
-// SettlementWatcher subscribes to BatchSettled logs on the DarkPool contract,
+// BatchSink is the engine-side hook the Watcher invokes after persisting a
+// BatchSettled event. Declared as an interface so the settlement package
+// doesn't import engine/core.
+type BatchSink interface {
+	OnBatchSettled(evt event.Event, batchID uuid.UUID)
+}
+
+// Watcher subscribes to BatchSettled logs on the DarkPool contract,
 // persists a BatchSettled event per receipt, and nudges the engine to drop
 // the matching pendingBatch. Reconnects with a bounded backoff on subscription
 // drops so a brief RPC outage doesn't wedge settlement finality forever.
-type SettlementWatcher struct {
+type Watcher struct {
 	client   LogSubscriber
 	store    event.Store
-	engine   *Engine
+	sink     BatchSink
 	contract common.Address
 	topic0   common.Hash
 }
 
-func NewSettlementWatcher(client LogSubscriber, contractAddr common.Address, store event.Store, engine *Engine) (*SettlementWatcher, error) {
+func NewWatcher(client LogSubscriber, contractAddr common.Address, store event.Store, sink BatchSink) (*Watcher, error) {
 	parsed, err := coreabi.Parsed()
 	if err != nil {
 		return nil, err
@@ -43,10 +50,10 @@ func NewSettlementWatcher(client LogSubscriber, contractAddr common.Address, sto
 	if !ok {
 		return nil, fmt.Errorf("BatchSettled missing from DarkPool ABI")
 	}
-	return &SettlementWatcher{
+	return &Watcher{
 		client:   client,
 		store:    store,
-		engine:   engine,
+		sink:     sink,
 		contract: contractAddr,
 		topic0:   ev.ID,
 	}, nil
@@ -54,7 +61,7 @@ func NewSettlementWatcher(client LogSubscriber, contractAddr common.Address, sto
 
 // Run blocks until ctx is done. Intended to be launched in a goroutine by
 // cmd/server/main.go.
-func (w *SettlementWatcher) Run(ctx context.Context) {
+func (w *Watcher) Run(ctx context.Context) {
 	const minBackoff = time.Second
 	const maxBackoff = 30 * time.Second
 	backoff := minBackoff
@@ -87,7 +94,7 @@ func (w *SettlementWatcher) Run(ctx context.Context) {
 	}
 }
 
-func (w *SettlementWatcher) runOnce(ctx context.Context) (receivedAny bool, err error) {
+func (w *Watcher) runOnce(ctx context.Context) (receivedAny bool, err error) {
 	ch := make(chan types.Log, 16)
 	sub, subErr := w.client.SubscribeFilterLogs(ctx, ethereum.FilterQuery{
 		Addresses: []common.Address{w.contract},
@@ -116,7 +123,7 @@ func (w *SettlementWatcher) runOnce(ctx context.Context) (receivedAny bool, err 
 	}
 }
 
-func (w *SettlementWatcher) handleLog(vLog types.Log) error {
+func (w *Watcher) handleLog(vLog types.Log) error {
 	if len(vLog.Topics) < 2 {
 		return fmt.Errorf("BatchSettled log missing indexed batchId")
 	}
@@ -144,11 +151,11 @@ func (w *SettlementWatcher) handleLog(vLog types.Log) error {
 	if err := w.store.Append(&evt); err != nil {
 		return fmt.Errorf("persist BatchSettled: %w", err)
 	}
-	w.engine.onBatchSettled(evt, batchID)
+	w.sink.OnBatchSettled(evt, batchID)
 	return nil
 }
 
-// bytes32ToUUID reverses uuidToBytes32 — the UUID sits in the low 16 bytes.
+// bytes32ToUUID reverses UUIDToBytes32 — the UUID sits in the low 16 bytes.
 // Returns error if the high 16 bytes are non-zero, which would indicate the
 // batchId came from a different producer than this engine.
 func bytes32ToUUID(b [32]byte) (uuid.UUID, error) {
