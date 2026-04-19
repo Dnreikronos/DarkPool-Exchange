@@ -23,6 +23,7 @@ func init() {
 	gob.Register(OrderMatched{})
 	gob.Register(BatchSubmitted{})
 	gob.Register(BatchConfirmed{})
+	gob.Register(BatchSettled{})
 }
 
 const maxRecordBytes = 16 * 1024 * 1024

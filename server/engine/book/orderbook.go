@@ -1,4 +1,4 @@
-package core
+package book
 
 import (
 	"sort"
@@ -19,7 +19,7 @@ type OrderBook struct {
 	seq  uint64
 }
 
-func NewOrderBook() *OrderBook {
+func New() *OrderBook {
 	return &OrderBook{
 		bids: make(map[uuid.UUID]*model.Order),
 		asks: make(map[uuid.UUID]*model.Order),
@@ -98,7 +98,7 @@ func (ob *OrderBook) apply(e event.Event) {
 		ob.applyFill(d.Bid)
 		ob.applyFill(d.Ask)
 
-	case event.AuctionExecuted, event.BatchSubmitted, event.BatchConfirmed:
+	case event.AuctionExecuted, event.BatchSubmitted, event.BatchConfirmed, event.BatchSettled:
 		// Projection cares only about order state. These events exist for
 		// downstream consumers (auction log, batch lifecycle); applying them
 		// only advances ob.seq so Replay resumes correctly.

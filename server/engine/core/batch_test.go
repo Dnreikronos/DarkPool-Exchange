@@ -67,8 +67,8 @@ func TestBatchLifecycle_NoopSubmitter(t *testing.T) {
 	store := event.NewMemStore()
 	e := NewEngine(store, time.Second)
 
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 
 	notifications := e.RunAuctionTickCtx(context.Background())
 	if len(notifications) != 1 {
@@ -94,8 +94,8 @@ func TestBatchLifecycle_CrashBetweenSubmitAndConfirm(t *testing.T) {
 	fail := &stubSubmitter{fail: true}
 	e1.SetSubmitter(fail)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 
 	e1.RunAuctionTickCtx(context.Background())
 
@@ -116,7 +116,7 @@ func TestBatchLifecycle_CrashBetweenSubmitAndConfirm(t *testing.T) {
 	e2 := NewEngine(store, time.Second)
 	ok := &stubSubmitter{}
 	e2.SetSubmitter(ok)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	if got := e2.PendingBatchCount(); got != 1 {
@@ -136,6 +136,58 @@ func TestBatchLifecycle_CrashBetweenSubmitAndConfirm(t *testing.T) {
 	}
 }
 
+// failingAggregator returns an error so OrderMatched events persist without
+// a trailing BatchSubmitted — the exact crash-window Recover must repair.
+type failingAggregator struct{ calls int }
+
+func (f *failingAggregator) Aggregate(_ context.Context, _ uuid.UUID, _ []event.OrderMatched) ([]byte, error) {
+	f.calls++
+	return nil, errors.New("aggregator boom")
+}
+
+func TestRecover_ReAggregatesOrphanMatches(t *testing.T) {
+	store := event.NewMemStore()
+
+	e1 := NewEngine(store, time.Second)
+	e1.SetAggregator(&failingAggregator{})
+	// Submitter is noop; aggregator fails first anyway.
+
+	if _, err := e1.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e1.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	e1.RunAuctionTickCtx(context.Background())
+
+	if got := countEvents(t, store, utils.OrderMatchedType); got == 0 {
+		t.Fatal("expected OrderMatched events persisted despite aggregator failure")
+	}
+	if got := countEvents(t, store, utils.BatchSubmittedType); got != 0 {
+		t.Fatalf("BatchSubmitted = %d, want 0 (aggregator failed before persist)", got)
+	}
+
+	recoveredProof := []byte("recovered-proof")
+	e2 := NewEngine(store, time.Second)
+	recoveryAgg := &stubAggregator{proof: recoveredProof}
+	e2.SetAggregator(recoveryAgg)
+
+	if err := e2.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	if recoveryAgg.calls != 1 {
+		t.Errorf("aggregator calls during recover = %d, want 1", recoveryAgg.calls)
+	}
+	if got := countEvents(t, store, utils.BatchSubmittedType); got != 1 {
+		t.Errorf("BatchSubmitted after recover = %d, want 1", got)
+	}
+	if got := e2.PendingBatchCount(); got != 1 {
+		t.Errorf("pendingBatches after recover = %d, want 1", got)
+	}
+}
+
 func TestBatchLifecycle_RecoverFromFileStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.log")
 
@@ -148,8 +200,8 @@ func TestBatchLifecycle_RecoverFromFileStore(t *testing.T) {
 	fail := &stubSubmitter{fail: true}
 	e1.SetSubmitter(fail)
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 	e1.RunAuctionTickCtx(context.Background())
 
 	if got := e1.PendingBatchCount(); got != 1 {
@@ -169,7 +221,7 @@ func TestBatchLifecycle_RecoverFromFileStore(t *testing.T) {
 	e2 := NewEngine(store2, time.Second)
 	ok := &stubSubmitter{}
 	e2.SetSubmitter(ok)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	if got := e2.PendingBatchCount(); got != 1 {
@@ -197,8 +249,8 @@ func TestBatchLifecycle_RetriesOnNextTick(t *testing.T) {
 	e.SetRetryBackoff(0, 0)
 
 	// Tick 1: auction matches, submit fails, batch stays pending.
-	e.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 	e.RunAuctionTickCtx(context.Background())
 
 	if got := e.PendingBatchCount(); got != 1 {
@@ -232,8 +284,8 @@ func TestBatchLifecycle_ProofPersistedAndReusedOnResubmit(t *testing.T) {
 	e1.SetAggregator(agg)
 	e1.SetSubmitter(&stubSubmitter{fail: true})
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 	e1.RunAuctionTickCtx(context.Background())
 
 	if agg.calls != 1 {
@@ -269,7 +321,7 @@ func TestBatchLifecycle_ProofPersistedAndReusedOnResubmit(t *testing.T) {
 	e2.SetAggregator(wrongAgg)
 	capture := &stubSubmitter{}
 	e2.SetSubmitter(capture)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 
@@ -292,14 +344,14 @@ func TestBatchLifecycle_StartReplaysPending(t *testing.T) {
 	e1 := NewEngine(store, time.Second)
 	e1.SetSubmitter(&stubSubmitter{fail: true})
 
-	e1.PlaceOrder("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0, nil)
-	e1.PlaceOrder("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0, nil)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Buy, decimal.NewFromInt(1850), decimal.NewFromInt(5), "buyer", 0)
+	e1.placeOrderPlaintext("ETH/USDC", utils.Sell, decimal.NewFromInt(1800), decimal.NewFromInt(3), "seller", 0)
 	e1.RunAuctionTickCtx(context.Background())
 
 	e2 := NewEngine(store, 10*time.Millisecond)
 	ok := &stubSubmitter{}
 	e2.SetSubmitter(ok)
-	if err := e2.Recover(); err != nil {
+	if err := e2.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 

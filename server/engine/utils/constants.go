@@ -24,4 +24,5 @@ const (
 	OrderMatchedType
 	BatchSubmittedType
 	BatchConfirmedType
+	BatchSettledType
 )

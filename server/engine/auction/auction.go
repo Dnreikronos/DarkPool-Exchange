@@ -1,4 +1,4 @@
-package core
+package auction
 
 import (
 	"sort"
@@ -9,7 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type AuctionResult struct {
+type Result struct {
 	AuctionID     uuid.UUID
 	Pair          string
 	ClearingPrice decimal.Decimal
@@ -17,7 +17,7 @@ type AuctionResult struct {
 	Matches       []event.OrderMatched
 }
 
-// RunAuction executes a batch auction for a single trading pair.
+// Run executes a batch auction for a single trading pair.
 //
 // Algorithm:
 //  1. Collect all candidate prices from bids and asks.
@@ -26,7 +26,7 @@ type AuctionResult struct {
 //  3. Pick the candidate that maximizes matched volume.
 //  4. Match individual orders at the clearing price with partial fills
 //     and self-match prevention.
-func RunAuction(pair string, bids, asks []model.Order) *AuctionResult {
+func Run(pair string, bids, asks []model.Order) *Result {
 	if len(bids) == 0 || len(asks) == 0 {
 		return nil
 	}
@@ -58,7 +58,7 @@ func RunAuction(pair string, bids, asks []model.Order) *AuctionResult {
 		matches[i].AuctionID = auctionID
 	}
 
-	return &AuctionResult{
+	return &Result{
 		AuctionID:     auctionID,
 		Pair:          pair,
 		ClearingPrice: clearingPrice,

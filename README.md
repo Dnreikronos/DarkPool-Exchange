@@ -46,14 +46,15 @@ flowchart TB
     end
 
     subgraph Engine["Matching Engine (Go)"]
-        C["Decrypter seam\n(operator private key)"]
+        C["Decrypter seam\n(pluggable; noop impl today)"]
         D["Collect orders into\ntime-bounded batch"]
-        D2["Compute clearing price\n+ match crossing orders"]
-        ES["Event Store\n(ciphertext + commitment + proof;\nno plaintext)"]
+        D2["Compute clearing price\n+ match crossing orders\n+ self-match prevention"]
+        ES["Event Store\n(append-only, gob + fsync;\nciphertext + commitment + proof;\nno plaintext)"]
+        EX["Expiry sweep\n(TTL-based)"]
     end
 
-    subgraph Aggregator["Proof Aggregator (Rust CLI)"]
-        F["Receive matched pairs\nvia stdin/file"]
+    subgraph Aggregator["Proof Aggregator"]
+        F["ProofAggregator interface\n(pluggable: subprocess / FFI / RPC;\nnoop impl today)"]
         G["Aggregate ZK proofs\ninto single batch proof"]
     end
 
@@ -80,7 +81,7 @@ flowchart TB
     H --> I
     I -- "Verify → Release escrow\n→ Transfer tokens" --> K["Settlement Event\n+ Clearing Price"]
 
-    B2 -. "WebSocket\n(auction results)" .-> J
+    B -. "gRPC server-stream\n(StreamAuctions)" .-> J
     K -. "On-chain events" .-> J
 ```
 
@@ -91,8 +92,10 @@ flowchart TB
 1. Trader submits a Pedersen commitment to the order parameters and locks collateral in escrow.
 2. Trader runs a Rust circuit locally, gets back a ZK proof that the order is valid.
 3. Trader encrypts the full order to the operator's public key and submits commitment + proof + encrypted payload.
-4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log contains ciphertext + commitment + proof only — never plaintext.**
-5. Matched pairs are batched (up to 256) and sent on-chain with an aggregated ZK proof. The Solidity verifier checks the proof and transfers tokens atomically.
+4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (gob-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
+5. Matched pairs are handed to a pluggable `ProofAggregator` (subprocess / FFI / RPC), then submitted on-chain via a pluggable `Submitter`. The Solidity verifier checks the aggregated proof and transfers tokens atomically.
+
+> **Status note.** The decrypter, proof aggregator, and on-chain submitter are implemented as pluggable seams with noop defaults today. The engine, API, event store, auction, and expiry logic are production-shape; crypto seams need real implementations before mainnet.
 
 ---
 
@@ -109,10 +112,10 @@ flowchart TB
 
 ### Settlement
 
-- Batches hold up to 256 matched pairs.
+- Batches hold up to 256 matched pairs. Cap is enforced by the settlement contract; the Go engine hands the aggregator whatever matched in the current auction round.
 - If the aggregated proof fails verification, the entire batch is rejected. No partial settlement.
-- Collateral is locked in escrow at commitment time and released atomically at settlement.
-- 0.05% protocol fee is taken from the taker side.
+- Collateral is locked in escrow at commitment time and released atomically at settlement (enforced in `DarkPool.sol`).
+- 0.05% protocol fee is taken from the taker side (enforced in `DarkPool.sol`).
 
 ### Trust model & privacy
 
@@ -159,15 +162,33 @@ server/
 │   └── proto/                   # Protobuf definitions
 ├── engine/
 │   ├── core/
-│   │   ├── engine.go            # Engine orchestration
+│   │   ├── engine.go                 # Engine orchestration, auction tick loop, recovery
 │   │   ├── engine_test.go
-│   │   ├── orderbook.go         # Order book projection from event stream
+│   │   ├── orderbook.go              # Order book projection + TTL expiry sweep
 │   │   ├── orderbook_test.go
-│   │   ├── auction.go           # Batch auction logic, clearing price
-│   │   └── auction_test.go
+│   │   ├── auction.go                # Batch auction, clearing price, self-match prevention
+│   │   ├── auction_test.go
+│   │   ├── batch_test.go
+│   │   ├── integration_test.go      # End-to-end encrypted-order → settlement flow
+│   │   ├── decrypter.go              # Decrypter interface + NoopDecrypter (seam)
+│   │   ├── decrypter_ecies.go        # ECIES decrypter (secp256k1 operator key)
+│   │   ├── decrypter_ecies_test.go
+│   │   ├── submitter.go              # ProofAggregator + Submitter interfaces + noop impls
+│   │   ├── submitter_eth.go          # On-chain EthSubmitter (EIP-1559 DynamicFeeTx)
+│   │   ├── submitter_eth_test.go
+│   │   ├── aggregator_subproc.go     # Subprocess proof aggregator
+│   │   ├── aggregator_subproc_test.go
+│   │   ├── settlement_watcher.go     # BatchSettled log subscriber w/ reconnect backoff
+│   │   ├── settlement_watcher_test.go
+│   │   ├── eth_helpers.go            # Shared UUID/decimal/key-loader helpers
+│   │   └── abi/
+│   │       └── darkpool.go           # DarkPool submitBatch + BatchSettled ABI
 │   ├── event/
 │   │   ├── event.go             # Event struct, payloads, Store interface
-│   │   └── store.go             # Append-only event log (in-memory impl)
+│   │   ├── store.go             # In-memory append-only event log
+│   │   ├── store_test.go
+│   │   ├── file_store.go        # File-backed event log (gob + fsync per append)
+│   │   └── file_store_test.go
 │   ├── model/
 │   │   └── model.go             # Domain types: Order, Fill
 │   └── utils/
