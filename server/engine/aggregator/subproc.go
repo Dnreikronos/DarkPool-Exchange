@@ -1,4 +1,4 @@
-package core
+package aggregator
 
 import (
 	"bytes"

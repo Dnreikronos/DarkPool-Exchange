@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darkpool-exchange/server/engine/aggregator"
 	"github.com/darkpool-exchange/server/engine/auction"
 	"github.com/darkpool-exchange/server/engine/book"
 	"github.com/darkpool-exchange/server/engine/decrypt"
@@ -66,7 +67,7 @@ type Engine struct {
 
 	auctionLog []event.AuctionExecuted
 
-	aggregator     ProofAggregator
+	aggregator     aggregator.ProofAggregator
 	submitter      Submitter
 	decrypter      decrypt.Decrypter
 	pendingBatches map[uuid.UUID]*pendingBatch
@@ -89,7 +90,7 @@ func NewEngine(store event.Store, auctionInterval time.Duration) *Engine {
 		pairs:           make(map[string]bool),
 		auctionInterval: auctionInterval,
 		defaultTTL:      DefaultOrderTTL,
-		aggregator:      NoopAggregator{},
+		aggregator:      aggregator.NoopAggregator{},
 		submitter:       NoopSubmitter{},
 		decrypter:       decrypt.NoopDecrypter{},
 		pendingBatches:  make(map[uuid.UUID]*pendingBatch),
@@ -157,9 +158,9 @@ func (e *Engine) SetDecrypter(d decrypt.Decrypter) {
 	e.mu.Unlock()
 }
 
-func (e *Engine) SetAggregator(a ProofAggregator) {
+func (e *Engine) SetAggregator(a aggregator.ProofAggregator) {
 	if a == nil {
-		a = NoopAggregator{}
+		a = aggregator.NoopAggregator{}
 	}
 	e.mu.Lock()
 	e.aggregator = a

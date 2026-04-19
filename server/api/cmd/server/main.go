@@ -12,6 +12,7 @@ import (
 
 	"github.com/darkpool-exchange/server/api/config"
 	"github.com/darkpool-exchange/server/api/gateway"
+	"github.com/darkpool-exchange/server/engine/aggregator"
 	"github.com/darkpool-exchange/server/engine/core"
 	"github.com/darkpool-exchange/server/engine/decrypt"
 	"github.com/darkpool-exchange/server/engine/event"
@@ -53,7 +54,7 @@ func main() {
 	}
 
 	if cfg.AggregatorBinPath != "" {
-		agg, err := core.NewSubprocessAggregator(cfg.AggregatorBinPath, cfg.AggregatorTimeout)
+		agg, err := aggregator.NewSubprocessAggregator(cfg.AggregatorBinPath, cfg.AggregatorTimeout)
 		if err != nil {
 			log.Fatalf("init aggregator: %v", err)
 		}
