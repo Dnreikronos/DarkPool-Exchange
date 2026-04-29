@@ -17,7 +17,7 @@ pub struct DecryptedOrder {
 pub fn canonical_bytes(o: &DecryptedOrder) -> Vec<u8> {
     format!(
         "pair={}|side={}|price={}|size={}|key={}|ttl={}",
-        o.pair, o.side, o.price, o.size, o.commitment_key, o.ttl,
+        o.pair, o.side.canonical_str(), o.price, o.size, o.commitment_key, o.ttl,
     )
     .into_bytes()
 }
@@ -47,7 +47,7 @@ mod tests {
     fn canonical_bytes_format() {
         let o = sample_order();
         let s = String::from_utf8(canonical_bytes(&o)).unwrap();
-        assert_eq!(s, "pair=ETH-USD|side=BUY|price=2500.00|size=1.0|key=abc123|ttl=5000000000");
+        assert_eq!(s, "pair=ETH-USD|side=0|price=2500.00|size=1.0|key=abc123|ttl=5000000000");
     }
 
     #[test]
@@ -55,7 +55,7 @@ mod tests {
         let mut o = sample_order();
         o.side = Side::Sell;
         let s = String::from_utf8(canonical_bytes(&o)).unwrap();
-        assert!(s.contains("side=SELL"));
+        assert!(s.contains("side=1"));
     }
 
     #[test]
