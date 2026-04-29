@@ -9,6 +9,15 @@ pub enum Side {
     Sell = 1,
 }
 
+impl Side {
+    pub fn canonical_str(&self) -> &'static str {
+        match self {
+            Side::Buy => "0",
+            Side::Sell => "1",
+        }
+    }
+}
+
 impl fmt::Display for Side {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
