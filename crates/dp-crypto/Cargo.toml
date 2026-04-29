@@ -2,3 +2,20 @@
 name = "dp-crypto"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+dp-types     = { path = "../dp-types" }
+rust_decimal = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+sha2         = { workspace = true }
+hex          = { workspace = true }
+ecies        = { workspace = true }
+zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tokio    = { workspace = true }
+k256     = "0.13"
+rand     = "0.8"
+tempfile = "3"
