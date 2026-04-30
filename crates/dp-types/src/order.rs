@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::Side;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Order {
     #[serde(rename = "ID")]
@@ -21,7 +21,7 @@ pub struct Order {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Fill {
     #[serde(rename = "OrderID")]

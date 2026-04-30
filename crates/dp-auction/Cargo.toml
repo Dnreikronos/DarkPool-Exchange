@@ -2,3 +2,11 @@
 name = "dp-auction"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+dp-types = { path = "../dp-types" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
