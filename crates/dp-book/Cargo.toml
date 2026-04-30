@@ -2,3 +2,14 @@
 name = "dp-book"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+dp-types = { path = "../dp-types" }
+dp-event = { path = "../dp-event" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
