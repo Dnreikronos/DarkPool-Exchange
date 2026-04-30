@@ -25,3 +25,4 @@ parking_lot = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 ecies = { version = "0.2", default-features = false, features = ["pure"] }
+bincode = "1"
