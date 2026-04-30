@@ -2,3 +2,17 @@
 name = "dp-event"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+dp-types = { path = "../dp-types" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+bincode = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3"
