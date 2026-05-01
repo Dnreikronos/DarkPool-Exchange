@@ -2,3 +2,39 @@
 name = "dp-engine"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+dp-types = { path = "../dp-types" }
+dp-crypto = { path = "../dp-crypto" }
+dp-event = { path = "../dp-event" }
+dp-book = { path = "../dp-book" }
+dp-auction = { path = "../dp-auction" }
+dp-aggregator = { path = "../dp-aggregator" }
+dp-settlement = { path = "../dp-settlement" }
+
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+parking_lot = { workspace = true }
+arc-swap = "1"
+tracing = "0.1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+hex = { workspace = true }
+ecies = { workspace = true }
+sha2 = { workspace = true }
+k256 = "0.13"
+rand = "0.8"
+bincode = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-provider = { workspace = true }
+alloy-rpc-types = { workspace = true }
+alloy-sol-types = { workspace = true }
+alloy-transport = { workspace = true }

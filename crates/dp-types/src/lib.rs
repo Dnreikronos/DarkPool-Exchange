@@ -1,3 +1,4 @@
+pub mod decimal_bincode;
 mod error;
 mod event_type;
 mod order;
