@@ -12,8 +12,11 @@ pub struct Order {
     pub id: Uuid,
     pub pair: String,
     pub side: Side,
+    #[serde(with = "crate::decimal_bincode")]
     pub price: Decimal,
+    #[serde(with = "crate::decimal_bincode")]
     pub size: Decimal,
+    #[serde(with = "crate::decimal_bincode")]
     pub remaining_size: Decimal,
     pub commitment_key: String,
     pub encrypted_payload: Vec<u8>,
@@ -26,6 +29,7 @@ pub struct Order {
 pub struct Fill {
     #[serde(rename = "OrderID")]
     pub order_id: Uuid,
+    #[serde(with = "crate::decimal_bincode")]
     pub size: Decimal,
 }
 

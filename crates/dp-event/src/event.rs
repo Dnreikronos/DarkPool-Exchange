@@ -30,7 +30,9 @@ pub enum EventData {
     AuctionExecuted {
         auction_id: Uuid,
         pair: String,
+        #[serde(with = "dp_types::decimal_bincode")]
         clearing_price: Decimal,
+        #[serde(with = "dp_types::decimal_bincode")]
         matched_volume: Decimal,
         match_count: u32,
         timestamp: DateTime<Utc>,
@@ -39,7 +41,9 @@ pub enum EventData {
         auction_id: Uuid,
         bid: Fill,
         ask: Fill,
+        #[serde(with = "dp_types::decimal_bincode")]
         price: Decimal,
+        #[serde(with = "dp_types::decimal_bincode")]
         size: Decimal,
     },
     BatchSubmitted {
