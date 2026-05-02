@@ -17,7 +17,6 @@ pub const MSG_PROOF_REQUIRED: &str = "proof is required";
 pub const MSG_PROOF_TOO_LARGE: &str = "proof exceeds max size";
 pub const MSG_CIPHERTEXT_REQUIRED: &str = "encrypted_payload is required";
 pub const MSG_CIPHERTEXT_TOO_LARGE: &str = "encrypted_payload exceeds max size";
-pub const MSG_COMMITMENT_MISMATCH: &str = "commitment does not bind encrypted_payload";
 pub const MSG_PAIR_REQUIRED: &str = "pair is required";
 pub const MSG_MISSING_API_KEY: &str = "missing api key";
 pub const MSG_INVALID_API_KEY: &str = "invalid api key";

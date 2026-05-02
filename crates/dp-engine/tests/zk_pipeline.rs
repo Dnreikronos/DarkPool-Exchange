@@ -42,9 +42,8 @@ async fn place(engine: &Engine, side: Side, price: i64, key: &str) {
         ttl: Duration::from_secs(60).as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
-    let commit = dp_crypto::compute_commitment(&d);
     engine
-        .place_encrypted_order(commit, vec![], ct)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct)
         .await
         .unwrap();
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use dp_aggregator::{NoopAggregator, ProofAggregator};
-use dp_crypto::{compute_commitment, Decrypter, NoopDecrypter};
+use dp_crypto::{Decrypter, NoopDecrypter};
 use dp_event::{Event, EventData, Store};
 use dp_settlement::{NoopSubmitter, Submitter};
 #[cfg(test)]
@@ -12,6 +12,7 @@ use dp_types::Side;
 use dp_types::{DarkPoolError, EventType, Order};
 use parking_lot::{Mutex, RwLock};
 use rust_decimal::Decimal;
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 #[cfg_attr(test, allow(unused_imports))]
@@ -34,6 +35,7 @@ use crate::{DEFAULT_AUCTION_INTERVAL, DEFAULT_SUBSCRIBER_CAPACITY};
 pub(crate) struct OrderSecrets {
     pub salt: [u8; 32],
     pub trader_id: [u8; 32],
+    pub commitment: [u8; 32],
     pub balance: Decimal,
     pub position: i128,
 }
@@ -43,6 +45,7 @@ impl Drop for OrderSecrets {
         use zeroize::Zeroize;
         self.salt.zeroize();
         self.trader_id.zeroize();
+        self.commitment.zeroize();
     }
 }
 
@@ -83,6 +86,7 @@ pub(crate) struct Inner {
     pub(crate) secrets: Mutex<HashMap<Uuid, OrderSecrets>>,
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
+    pub(crate) salt_nonce: [u8; 32],
 }
 
 #[derive(Clone)]
@@ -98,6 +102,8 @@ impl Engine {
             auction_interval
         };
         let (tx, _rx) = broadcast::channel(DEFAULT_SUBSCRIBER_CAPACITY);
+        let mut salt_nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut salt_nonce);
         let engine = Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(EngineState::new()),
@@ -109,6 +115,7 @@ impl Engine {
                 secrets: Mutex::new(HashMap::new()),
                 subscribers: tx,
                 auction_interval: interval,
+                salt_nonce,
             }),
         };
         // Suppress the boot warning under `cfg(test)` — every engine test
@@ -164,7 +171,7 @@ impl Engine {
 
     pub async fn place_encrypted_order(
         &self,
-        commitment: Vec<u8>,
+        _client_commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
     ) -> Result<Order, EngineError> {
@@ -174,9 +181,10 @@ impl Engine {
             .await
             .map_err(EngineError::Decrypt)?;
 
-        if compute_commitment(&decrypted) != commitment {
-            return Err(EngineError::Validation(DarkPoolError::CommitmentMismatch));
-        }
+        // Client-supplied commitment is accepted (proto requires it) but no
+        // longer verified content-wise: the engine recomputes the canonical
+        // Poseidon commitment over decrypted fields and that value is what
+        // gets persisted + carried into the ZK circuit.
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
@@ -218,14 +226,20 @@ impl Engine {
         // deterministically from commitment_key + order_id; trader_id is
         // derived from commitment_key. This avoids persisting plaintext
         // and survives the privacy canary test.
+        let nonce = &self.inner.salt_nonce;
         let secrets = derive_order_secrets(
             order.id,
             &order.commitment_key,
+            order.side as u8,
+            order.price,
+            order.size,
             self.inner.oracle.read().as_ref(),
+            nonce,
         );
+        let commitment = secrets.commitment.to_vec();
         self.inner.secrets.lock().insert(order.id, secrets);
 
-        self.persist_order_placed(order.clone(), commitment, proof, ciphertext)?;
+        self.persist_order_placed(order.clone(), commitment, proof, ciphertext, nonce.to_vec())?;
         Ok(order)
     }
 
@@ -286,6 +300,7 @@ impl Engine {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
+        salt_nonce: Vec<u8>,
     ) -> Result<(), EngineError> {
         let mut events = [Event {
             seq: 0,
@@ -296,6 +311,7 @@ impl Engine {
                 commitment,
                 proof,
                 ciphertext,
+                salt_nonce,
             },
         }];
 
@@ -404,41 +420,85 @@ fn leg_witness_from(
 
 /// Derive per-order ZK secrets.
 ///
-/// **Salt threat model.** `salt = SHA256("salt" || commitment_key ||
-/// order_id)` is deterministic by design — the engine cannot persist
-/// per-order plaintext (privacy canary) and must reconstruct the leg
-/// commitment when building a witness. A party who knows both the
-/// `commitment_key` and the `order_id` can reproduce the salt and
-/// therefore recompute `commit_native(trader_id, side, price, size, salt)`,
-/// breaking the hiding property of the leg commitment **against that
-/// party only**. Within the current trust model, `commitment_key` is the
-/// trader's secret and `order_id` is operator-internal until settlement,
-/// so neither external observers nor the operator's storage layer
-/// (event log) can recover the salt. If `commitment_key` ever becomes
-/// non-secret, replace this with a random 32-byte salt persisted under
-/// the operator's data-encryption key.
+/// **Salt threat model.** `salt = SHA256("salt" || nonce || commitment_key
+/// || order_id)` is deterministic given the inputs, but the per-boot
+/// `nonce` (32 bytes from OsRng, stored only in `Inner`) prevents any
+/// party — including the client who knows both `commitment_key` and
+/// `order_id` — from reconstructing the salt. The nonce is persisted
+/// alongside each `OrderPlaced` event so recovery can recompute the
+/// commitment.
 fn derive_order_secrets(
     order_id: Uuid,
     commitment_key: &str,
+    side: u8,
+    price: Decimal,
+    size: Decimal,
     oracle: &dyn BalanceOracle,
+    nonce: &[u8; 32],
 ) -> OrderSecrets {
-    // Trader-id is bound into the ZK circuit, so it must match the
-    // in-circuit Poseidon-of-commitment-key derivation byte-for-byte.
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
-
-    let mut h = Sha256::new();
-    h.update(b"salt");
-    h.update(commitment_key.as_bytes());
-    h.update(order_id.as_bytes());
-    let salt: [u8; 32] = h.finalize().into();
+    let salt = derive_salt(commitment_key, order_id, nonce);
+    let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt);
 
     let (balance, position) = oracle.lookup(&trader_id);
     OrderSecrets {
         salt,
         trader_id,
+        commitment,
         balance,
         position,
     }
+}
+
+/// Recompute the persisted Poseidon commitment for a (commitment_key,
+/// order_id, side, price, size) tuple. Used by recovery to re-verify
+/// `OrderPlaced` events without keeping any state in memory.
+pub(crate) fn recompute_persisted_commitment(
+    order_id: Uuid,
+    commitment_key: &str,
+    side: u8,
+    price: Decimal,
+    size: Decimal,
+    nonce: &[u8; 32],
+) -> [u8; 32] {
+    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
+    let salt = derive_salt(commitment_key, order_id, nonce);
+    compute_poseidon_commitment(&trader_id, side, price, size, &salt)
+}
+
+fn derive_salt(commitment_key: &str, order_id: Uuid, nonce: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"salt");
+    h.update(nonce);
+    h.update(commitment_key.as_bytes());
+    h.update(order_id.as_bytes());
+    h.finalize().into()
+}
+
+/// Compute the Poseidon order commitment (matches the in-circuit gadget
+/// byte-for-byte). Inputs use the canonical ZK encodings:
+/// - `trader_id` and `salt` are 32 BE bytes mapped into Fr via modular
+///   reduction (same as `bytes_to_scalar`).
+/// - `price` / `size` go through `decimal_to_scalar` (1e8 fixed-point).
+/// - `side` 0 → Fr::zero, otherwise Fr::one.
+pub(crate) fn compute_poseidon_commitment(
+    trader_id: &[u8; 32],
+    side: u8,
+    price: Decimal,
+    size: Decimal,
+    salt: &[u8; 32],
+) -> [u8; 32] {
+    use ark_ff::{BigInteger, PrimeField};
+    let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
+    let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
+    let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
+        .expect("decimal_to_scalar in valid range for active orders");
+    let fr = dp_zk::commit_native(&input);
+    let bytes = fr.into_bigint().to_bytes_be();
+    let mut out = [0u8; 32];
+    let take = bytes.len().min(32);
+    out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
+    out
 }
 
 pub(crate) fn record_to_notification(rec: &AuctionExecutedRecord) -> AuctionNotification {
@@ -484,7 +544,9 @@ pub(crate) fn build_decrypted_ciphertext(
         ttl: ttl.as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
-    let commit = compute_commitment(&d);
-    (commit, ct)
+    // Engine no longer verifies the client-supplied commitment, so a
+    // placeholder is sufficient. The real commitment is recomputed inside
+    // the engine via `compute_poseidon_commitment`.
+    (vec![0u8; 32], ct)
 }
 

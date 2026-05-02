@@ -27,7 +27,9 @@ tracing = "0.1"
 futures-util = "0.3"
 sha2 = { workspace = true }
 hex = { workspace = true }
+rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
+ark-ff = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 dp-zk-cli = { path = "../dp-zk-cli" }

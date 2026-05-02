@@ -2,7 +2,7 @@ mod decrypted_order;
 mod decrypter;
 mod ecies_decrypter;
 
-pub use decrypted_order::{canonical_bytes, compute_commitment, DecryptedOrder};
+pub use decrypted_order::DecryptedOrder;
 pub use decrypter::{Decrypter, NoopDecrypter};
 pub use ecies_decrypter::{load_operator_key_file, EciesDecrypter};
 

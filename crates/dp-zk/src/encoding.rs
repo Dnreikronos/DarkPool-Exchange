@@ -5,7 +5,6 @@
 //! bits so an in-circuit range proof is cheap.
 
 use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
@@ -44,7 +43,9 @@ pub fn decimal_to_scalar(d: Decimal) -> Result<Fr, EncodingError> {
 
 /// Best-effort decode (only used in tests / debugging). Lossy for values
 /// outside the encoder's accepted range.
+#[cfg(test)]
 pub fn scalar_to_decimal(f: Fr) -> Decimal {
+    use ark_ff::{BigInteger, PrimeField};
     let bigint = f.into_bigint();
     let bytes = bigint.to_bytes_le();
     let mut buf = [0u8; 16];

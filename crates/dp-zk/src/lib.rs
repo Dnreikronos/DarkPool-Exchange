@@ -9,11 +9,11 @@
 //! - [`pedersen`]: native + in-circuit Poseidon commitment helpers (the
 //!   `pedersen` name is kept for spec parity; implementation is Poseidon).
 //!
-//! Two SHA256 commitments are used in DarkPool and they have different roles:
-//! - `dp_crypto::compute_commitment` — binds plaintext orders to event-log
-//!   placement (off-chain integrity).
-//! - This crate's Poseidon commitment — binds order witness inside the ZK
-//!   circuit.
+//! Order commitments in DarkPool are unified on Poseidon: the engine
+//! derives the canonical Poseidon commitment after decryption (see
+//! `dp_engine::engine::compute_poseidon_commitment`) and that same value
+//! is what binds the order inside the ZK circuit. There is no separate
+//! SHA256 commitment.
 
 pub mod circuit;
 pub mod encoding;
@@ -22,7 +22,7 @@ pub mod pedersen;
 pub mod witness;
 
 pub use circuit::{prove, verify, BatchProofCircuit, ProofBytes};
-pub use encoding::{decimal_to_scalar, scalar_to_decimal, EncodingError};
+pub use encoding::{decimal_to_scalar, EncodingError};
 pub use keys::{KeyMetadata, ProvingKeyBytes, VerifyingKeyBytes};
 pub use pedersen::{commit_native, OrderCommitmentInput};
 pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dp_aggregator::ProofAggregator;
-use dp_crypto::{compute_commitment, DecryptedOrder};
+use dp_crypto::DecryptedOrder;
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::Submitter;
 use dp_types::{EventType, Side};
@@ -258,14 +258,16 @@ async fn place_encrypted_order_noop_round_trip() {
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
-    let commit = compute_commitment(&d);
-    let order = engine.place_encrypted_order(commit, vec![], ct).await.unwrap();
+    let order = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .await
+        .unwrap();
     assert_eq!(order.pair, "BTC-USD");
 }
 
 #[tokio::test]
-async fn place_encrypted_order_commitment_mismatch() {
-    let (engine, _) = make_engine();
+async fn place_encrypted_order_uses_engine_derived_commitment() {
+    let (engine, store) = make_engine();
     let d = DecryptedOrder {
         pair: "BTC-USD".into(),
         side: Side::Buy,
@@ -275,9 +277,34 @@ async fn place_encrypted_order_commitment_mismatch() {
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
-    let bad_commit = vec![0u8; 32];
-    let r = engine.place_encrypted_order(bad_commit, vec![], ct).await;
-    assert!(r.is_err());
+    let order = engine
+        .place_encrypted_order(vec![0xAB; 32], vec![], ct)
+        .await
+        .expect("engine no longer rejects on client commitment");
+
+    let events = store.read_from(0, 16).unwrap();
+    let (persisted, nonce) = events
+        .iter()
+        .find_map(|e| match &e.data {
+            EventData::OrderPlaced { commitment, salt_nonce, .. } => {
+                let n: [u8; 32] = salt_nonce.as_slice().try_into().unwrap();
+                Some((commitment.clone(), n))
+            }
+            _ => None,
+        })
+        .expect("OrderPlaced");
+
+    let expected = crate::engine::recompute_persisted_commitment(
+        order.id,
+        &d.commitment_key,
+        d.side as u8,
+        d.price,
+        d.size,
+        &nonce,
+    );
+
+    assert_eq!(persisted, expected.to_vec());
+    assert_ne!(persisted, vec![0xAB; 32], "engine must not echo client value");
 }
 
 #[tokio::test]
@@ -309,8 +336,10 @@ async fn event_store_contains_no_plaintext() {
     };
     let plain = serde_json::to_vec(&d).unwrap();
     let ct = xor.encrypt(&plain);
-    let commit = compute_commitment(&d);
-    engine.place_encrypted_order(commit, vec![], ct).await.unwrap();
+    engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .await
+        .unwrap();
 
     // Walk every persisted event, serialize, assert plaintext does not leak.
     let events = store.read_from(0, 1024).unwrap();
@@ -857,8 +886,7 @@ async fn full_pipeline_encrypted_order_to_settlement() {
         };
         let plaintext = serde_json::to_vec(&order).unwrap();
         let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
-        let commit = compute_commitment(&order);
-        (commit, ciphertext)
+        (vec![0u8; 32], ciphertext)
     };
 
     let (bid_commit, bid_ct) = encrypt_order(Side::Buy, dec(2000), "bid-key");
