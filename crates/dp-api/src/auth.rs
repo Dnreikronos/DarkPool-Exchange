@@ -32,6 +32,8 @@ impl AuthCore {
         if self.keys.is_empty() {
             return Ok(());
         }
+        // All auth failures map to Unauthenticated so clients can branch on
+        // Code alone. The message disambiguates missing-vs-invalid for logs.
         let key = match headers.get(AUTH_HEADER) {
             Some(v) => match v.to_str() {
                 Ok(s) => s,
@@ -43,7 +45,7 @@ impl AuthCore {
             return Err(Status::unauthenticated(MSG_MISSING_API_KEY));
         }
         if !self.keys.contains(key) {
-            return Err(Status::permission_denied(MSG_INVALID_API_KEY));
+            return Err(Status::unauthenticated(MSG_INVALID_API_KEY));
         }
         Ok(())
     }
