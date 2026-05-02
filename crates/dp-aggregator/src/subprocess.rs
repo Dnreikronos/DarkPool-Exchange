@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use dp_auction::Match;
+use dp_zk::witness::BatchWitness;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -14,12 +15,17 @@ use crate::AggregatorError;
 pub struct SubprocessAggregator {
     bin_path: PathBuf,
     timeout: Duration,
+    env: Vec<(String, String)>,
 }
 
 #[derive(Serialize)]
-struct AggregatorInput {
+struct AggregatorInput<'a> {
     batch_id: String,
     matches: Vec<AggregatorMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private_witness: Option<&'a [dp_zk::witness::MatchWitness]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<&'a dp_zk::witness::Policy>,
 }
 
 #[derive(Serialize)]
@@ -39,7 +45,16 @@ impl SubprocessAggregator {
         Ok(Self {
             bin_path: bin_path.to_path_buf(),
             timeout: timeout.unwrap_or(Duration::from_secs(30)),
+            env: Vec::new(),
         })
+    }
+
+    /// Per-spawn env var passed to the child via `Command::env`. Use this
+    /// instead of `std::env::set_var` — the latter is undefined behaviour
+    /// in a multi-threaded process (Rust ≥ 1.74).
+    pub fn with_env<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
     }
 }
 
@@ -49,8 +64,14 @@ impl ProofAggregator for SubprocessAggregator {
         batch_id: Uuid,
         auction_id: Uuid,
         matches: &'a [Match],
+        witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
         Box::pin(async move {
+            let private_witness = if witness.matches.is_empty() {
+                None
+            } else {
+                Some(witness.matches.as_slice())
+            };
             let input = AggregatorInput {
                 batch_id: batch_id.to_string(),
                 matches: matches
@@ -63,10 +84,16 @@ impl ProofAggregator for SubprocessAggregator {
                         size: m.size.to_string(),
                     })
                     .collect(),
+                private_witness,
+                policy: Some(&witness.policy),
             };
             let payload = serde_json::to_vec(&input)?;
 
-            let mut child = tokio::process::Command::new(&self.bin_path)
+            let mut cmd = tokio::process::Command::new(&self.bin_path);
+            for (k, v) in &self.env {
+                cmd.env(k, v);
+            }
+            let mut child = cmd
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -77,6 +104,9 @@ impl ProofAggregator for SubprocessAggregator {
             let mut stdin = child.stdin.take().unwrap();
             stdin.write_all(&payload).await?;
             stdin.shutdown().await?;
+            // shutdown() does not close the fd — drop the handle so the
+            // child observes EOF and proceeds.
+            drop(stdin);
 
             let mut stdout_handle = child.stdout.take().unwrap();
             let mut stderr_handle = child.stderr.take().unwrap();
@@ -155,12 +185,16 @@ mod tests {
         }]
     }
 
+    fn empty_witness() -> BatchWitness {
+        BatchWitness::empty(Uuid::nil(), Uuid::nil())
+    }
+
     #[tokio::test]
     async fn happy_path() {
         let (_dir, path) = make_executable("#!/bin/sh\nprintf 'deadbeef'");
         let agg = SubprocessAggregator::new(&path, None).unwrap();
         let proof = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches())
+            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
             .await
             .unwrap();
         assert_eq!(proof, b"deadbeef");
@@ -171,7 +205,7 @@ mod tests {
         let (_dir, path) = make_executable("#!/bin/sh\necho 'boom' >&2\nexit 3");
         let agg = SubprocessAggregator::new(&path, None).unwrap();
         let err = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches())
+            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
             .await
             .unwrap_err();
         match err {
@@ -189,7 +223,7 @@ mod tests {
         let agg =
             SubprocessAggregator::new(&path, Some(Duration::from_millis(100))).unwrap();
         let err = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches())
+            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
             .await
             .unwrap_err();
         assert!(matches!(err, AggregatorError::Timeout));

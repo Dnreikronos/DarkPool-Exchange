@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 dp-auction = { path = "../dp-auction" }
+dp-zk = { path = "../dp-zk" }
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -14,4 +15,6 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 dp-types = { path = "../dp-types" }
+dp-zk-cli = { path = "../dp-zk-cli" }
+hex = { workspace = true }
 tempfile = "3"
