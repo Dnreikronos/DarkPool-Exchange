@@ -35,3 +35,20 @@ alloy-network = "1"
 alloy-contract = "1"
 alloy-rpc-types = "1"
 alloy-transport = "1"
+tonic = "0.12"
+tonic-build = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+axum = "0.7"
+tower = { version = "0.5", features = ["util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+humantime = "2"
+futures-util = "0.3"
+serial_test = "3"

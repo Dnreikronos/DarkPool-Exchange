@@ -1,0 +1,121 @@
+use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use axum::extract::{Request as AxumRequest, State as AxumState};
+use axum::middleware::Next;
+use axum::response::Response as AxumResponse;
+use http::{HeaderMap, Request, Response};
+use tonic::body::BoxBody;
+use tonic::Status;
+use tower::{Layer, Service};
+
+use crate::validation::{MSG_INVALID_API_KEY, MSG_MISSING_API_KEY};
+
+pub const AUTH_HEADER: &str = "x-api-key";
+
+#[derive(Clone, Debug)]
+pub struct AuthCore {
+    keys: Arc<HashSet<String>>,
+}
+
+impl AuthCore {
+    pub fn new(keys: Vec<String>) -> Self {
+        Self {
+            keys: Arc::new(keys.into_iter().filter(|k| !k.is_empty()).collect()),
+        }
+    }
+
+    pub fn check(&self, headers: &HeaderMap) -> Result<(), Status> {
+        if self.keys.is_empty() {
+            return Ok(());
+        }
+        let key = match headers.get(AUTH_HEADER) {
+            Some(v) => match v.to_str() {
+                Ok(s) => s,
+                Err(_) => return Err(Status::unauthenticated(MSG_INVALID_API_KEY)),
+            },
+            None => return Err(Status::unauthenticated(MSG_MISSING_API_KEY)),
+        };
+        if key.is_empty() {
+            return Err(Status::unauthenticated(MSG_MISSING_API_KEY));
+        }
+        if !self.keys.contains(key) {
+            return Err(Status::permission_denied(MSG_INVALID_API_KEY));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthLayer {
+    core: AuthCore,
+}
+
+impl AuthLayer {
+    pub fn new(keys: Vec<String>) -> Self {
+        Self {
+            core: AuthCore::new(keys),
+        }
+    }
+
+    pub fn from_core(core: AuthCore) -> Self {
+        Self { core }
+    }
+}
+
+impl<S> Layer<S> for AuthLayer {
+    type Service = AuthService<S>;
+    fn layer(&self, inner: S) -> Self::Service {
+        AuthService {
+            inner,
+            core: self.core.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthService<S> {
+    inner: S,
+    core: AuthCore,
+}
+
+impl<S, B> Service<Request<B>> for AuthService<S>
+where
+    S: Service<Request<B>, Response = Response<BoxBody>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    B: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<B>) -> Self::Future {
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        let core = self.core.clone();
+        Box::pin(async move {
+            if let Err(status) = core.check(req.headers()) {
+                return Ok(status.into_http());
+            }
+            inner.call(req).await
+        })
+    }
+}
+
+pub async fn auth_axum_mw(
+    AxumState(core): AxumState<AuthCore>,
+    req: AxumRequest,
+    next: Next,
+) -> AxumResponse {
+    if let Err(status) = core.check(req.headers()) {
+        return crate::rest::status_to_response(status);
+    }
+    next.run(req).await
+}

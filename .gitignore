@@ -47,6 +47,9 @@ coverage/
 target/
 Cargo.lock
 
+# notes
+gotchas.md
+
 # go
 /darkpool
 *.exe
