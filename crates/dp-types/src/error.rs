@@ -15,8 +15,6 @@ pub enum DarkPoolError {
     LimitMustBePositive,
     #[error("order not found")]
     OrderNotFound,
-    #[error("commitment does not bind ciphertext")]
-    CommitmentMismatch,
 }
 
 #[cfg(test)]
@@ -32,7 +30,6 @@ mod tests {
             (DarkPoolError::CommitmentKeyRequired, "commitment key is required"),
             (DarkPoolError::LimitMustBePositive, "limit must be > 0"),
             (DarkPoolError::OrderNotFound, "order not found"),
-            (DarkPoolError::CommitmentMismatch, "commitment does not bind ciphertext"),
         ];
         for (err, expected) in cases {
             assert_eq!(err.to_string(), expected);

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use dp_crypto::{compute_commitment, Decrypter};
+use dp_crypto::Decrypter;
 use dp_event::{Event, EventData};
 use dp_types::{EventType, Order};
 use rust_decimal::Decimal;
@@ -154,6 +154,7 @@ impl Engine {
                 order_id,
                 commitment,
                 ciphertext,
+                salt_nonce,
                 ..
             } => {
                 let decrypted =
@@ -164,7 +165,19 @@ impl Engine {
                             order_id: *order_id,
                             source,
                         })?;
-                if compute_commitment(&decrypted) != *commitment {
+                let nonce: [u8; 32] = salt_nonce
+                    .as_slice()
+                    .try_into()
+                    .unwrap_or([0u8; 32]);
+                let recomputed = crate::engine::recompute_persisted_commitment(
+                    *order_id,
+                    &decrypted.commitment_key,
+                    decrypted.side as u8,
+                    decrypted.price,
+                    decrypted.size,
+                    &nonce,
+                );
+                if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
                         order_id: *order_id,
                     });

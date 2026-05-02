@@ -10,9 +10,9 @@ use dp_api::pb::{
 };
 use dp_api::validation::{
     MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES, MSG_CIPHERTEXT_REQUIRED, MSG_CIPHERTEXT_TOO_LARGE,
-    MSG_COMMITMENT_MISMATCH, MSG_COMMITMENT_REQUIRED, MSG_PROOF_TOO_LARGE,
+    MSG_COMMITMENT_REQUIRED, MSG_PROOF_TOO_LARGE,
 };
-use dp_crypto::{compute_commitment, DecryptedOrder};
+use dp_crypto::DecryptedOrder;
 use dp_engine::Engine;
 use dp_event::MemStore;
 use dp_types::Side;
@@ -36,7 +36,10 @@ fn stub_proof() -> Vec<u8> {
 fn build_req(d: &DecryptedOrder) -> PlaceOrderRequest {
     let ct = serde_json::to_vec(d).unwrap();
     PlaceOrderRequest {
-        commitment: compute_commitment(d),
+        // Engine recomputes the canonical Poseidon commitment over decrypted
+        // fields; the API only checks commitment is non-empty. Any 32-byte
+        // placeholder satisfies the wire-level validation.
+        commitment: vec![0u8; 32],
         proof: stub_proof(),
         encrypted_payload: ct,
     }
@@ -148,20 +151,21 @@ async fn place_order_ciphertext_too_large() {
 }
 
 #[tokio::test]
-async fn place_order_commitment_mismatch() {
+async fn place_order_accepts_any_nonempty_commitment() {
+    // The engine derives the canonical Poseidon commitment itself, so the
+    // client-supplied commitment field is no longer content-checked. Any
+    // non-empty value is accepted by the API and silently overwritten by
+    // the engine before persistence.
     let h = new_handler();
-    let honest = valid_decrypted();
-    let mut attacker = honest.clone();
-    attacker.price = Decimal::from(9999);
-    let ct = serde_json::to_vec(&honest).unwrap();
+    let d = valid_decrypted();
+    let ct = serde_json::to_vec(&d).unwrap();
     let req = PlaceOrderRequest {
-        commitment: compute_commitment(&attacker),
+        commitment: vec![0xAB; 32],
         proof: stub_proof(),
         encrypted_payload: ct,
     };
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
-    assert_eq!(err.code(), Code::InvalidArgument);
-    assert_eq!(err.message(), MSG_COMMITMENT_MISMATCH);
+    let resp = h.place_order(Request::new(req)).await.unwrap().into_inner();
+    assert!(resp.order.is_some());
 }
 
 #[tokio::test]

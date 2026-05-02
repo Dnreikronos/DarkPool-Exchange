@@ -27,6 +27,8 @@ pub enum EventData {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
+        #[serde(default)]
+        salt_nonce: Vec<u8>,
     },
     OrderCancelled {
         order_id: Uuid,
