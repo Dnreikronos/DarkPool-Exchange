@@ -12,14 +12,6 @@ use std::process::ExitCode;
 
 use ark_std::rand::rngs::StdRng;
 use ark_std::rand::SeedableRng;
-
-fn seed_from_time() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0xDEADBEEF)
-}
 use clap::Parser;
 use dp_zk_cli::{build_witness, resolve_keys_dir, AggregatorInput, ParsedInput};
 
@@ -99,7 +91,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut rng = StdRng::seed_from_u64(seed_from_time());
+    let mut rng = StdRng::from_entropy();
     let proof = match dp_zk::prove(&pk, circuit, &mut rng) {
         Ok(p) => p,
         Err(e) => {

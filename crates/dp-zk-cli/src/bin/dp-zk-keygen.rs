@@ -23,19 +23,11 @@ struct Args {
     seed: Option<u64>,
 }
 
-fn seed_from_time() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0xDEADBEEF)
-}
-
 fn main() -> ExitCode {
     let args = Args::parse();
     let mut rng = match args.seed {
         Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::seed_from_u64(seed_from_time()),
+        None => StdRng::from_entropy(),
     };
 
     eprintln!(
