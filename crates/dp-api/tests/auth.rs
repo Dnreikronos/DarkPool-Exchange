@@ -23,7 +23,7 @@ fn invalid_key_denied() {
     let mut h = HeaderMap::new();
     h.insert("x-api-key", HeaderValue::from_static("bad"));
     let err = core.check(&h).err().unwrap();
-    assert_eq!(err.code(), Code::PermissionDenied);
+    assert_eq!(err.code(), Code::Unauthenticated);
 }
 
 #[test]

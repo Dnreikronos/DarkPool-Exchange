@@ -1,5 +1,7 @@
 # Architecture Decisions — ZK Dark Pool DEX
 
+> **Status (2026-05-01):** Pre-Rust-port decision log. References to Go reflect the implementation at the time these decisions were made; the production stack is now Rust (`crates/`).
+
 > Decisions made: 2026-03-23
 
 ---

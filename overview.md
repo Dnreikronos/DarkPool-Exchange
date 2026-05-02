@@ -1,6 +1,6 @@
 # ZK Dark Pool DEX
 ## Technical Architecture & Implementation Guide
-> Stack: Go · Rust · Solidity · ZK Circuits (halo2 / arkworks)
+> Stack: Rust · Solidity · ZK Circuits (halo2 / arkworks)
 
 ---
 
@@ -27,7 +27,7 @@ The target audience is protocols and institutions that need MEV protection and o
 | Price discovery | Visible order book | Clearing price revealed after each auction round |
 | Settlement | Immediate per-order | Batched, gas-efficient |
 | Trust model | Trustless (but transparent) | Semi-trusted operator with ZK proof of correct execution |
-| Stack complexity | Solidity only | Go + Rust + Solidity + ZK |
+| Stack complexity | Solidity only | Rust + Solidity + ZK |
 
 ### 1.2 Trust Model
 
@@ -97,11 +97,11 @@ Price emerges from the protocol itself via the batch auction mechanism:
 | Layer | Language | Responsibility |
 |---|---|---|
 | ZK Circuit | Rust (halo2 / arkworks) | Generate & verify proofs of order validity |
-| Matching Engine | Go | Batch auction logic, clearing price computation, event sourcing |
-| Event Store | Go | Immutable event log (OrderPlaced, OrderMatched, BatchSubmitted, etc.) for state reconstruction and auditability |
-| Proof Aggregator | Rust (CLI binary) | Combine individual proofs into a single batch proof. Called by Go via exec |
+| Matching Engine | Rust (tokio) | Batch auction logic, clearing price computation, event sourcing (`crates/dp-engine/`) |
+| Event Store | Rust (bincode + fsync) | Immutable event log (OrderPlaced, OrderMatched, BatchSubmitted, etc.) for state reconstruction and auditability (`crates/dp-event/`) |
+| Proof Aggregator | Rust (subprocess) | Combine individual proofs into a single batch proof. Spawned as a child process (`crates/dp-aggregator/`) |
 | Settlement Contract | Solidity | On-chain proof verification, token transfer, escrow |
-| API Gateway | Go (gRPC + REST) | Client-facing order submission and status endpoints |
+| API Gateway | Rust (tonic gRPC + axum REST) | Client-facing order submission and status endpoints (`crates/dp-api/`) |
 | Demo Frontend | TypeScript / Next.js | Auction history, clearing prices, aggregated depth |
 
 ### 3.2 Data Flow
@@ -113,13 +113,13 @@ Trader (client)
   | 2. Encrypt full order to operator's public key
   | 3. POST /order  { commitment, proof, encrypted_payload }
   v
-API Gateway (Go)
+API Gateway (Rust, tonic + axum)
   |
   | 4. Verify proof format + validate commitment
   | 5. Rate limiting, auth
   | 6. Enqueue to matching engine via gRPC
   v
-Matching Engine (Go)
+Matching Engine (Rust, tokio)
   |
   | 7. Decrypt order using operator private key
   | 8. Append OrderPlaced event to event store
@@ -127,9 +127,9 @@ Matching Engine (Go)
   | 10. On auction tick: compute clearing price, match crossing orders
   | 11. Append AuctionExecuted + OrderMatched events to event store
   v
-Proof Aggregator (Rust CLI)
+Proof Aggregator (Rust subprocess)
   |
-  | 12. Receive matched pairs via stdin/file
+  | 12. Receive matched pairs via stdin
   | 13. Aggregate individual ZK proofs into single batch proof
   v
 Settlement Contract (Solidity / EVM)
@@ -161,35 +161,19 @@ The matching engine does not maintain mutable state. Instead, the order book is 
 ### 3.4 Repository Structure
 
 ```
-darkpool/
-├── engine/
-│   ├── consts/
-│   │   └── consts.go            # Shared enums: Side, EventType
-│   ├── model/
-│   │   └── model.go             # Domain types: Order, Fill
-│   ├── event/
-│   │   ├── event.go             # Event struct, payloads, Store interface
-│   │   └── store.go             # Append-only event log (in-memory impl)
-│   ├── orderbook.go             # Order book projection from event stream
-│   ├── auction.go               # Batch auction logic, clearing price computation
-│   ├── orderbook_test.go        # Order book unit tests
-│   └── auction_test.go          # Auction logic tests
-├── zkproof/
-│   ├── circuits/            # Rust: halo2 circuits for order validity
-│   ├── prover/              # Proof generation (native + WASM target)
-│   └── aggregator/          # Rust CLI binary for batch proof aggregation
-├── contracts/
-│   ├── DarkPool.sol         # Main escrow + settlement contract
-│   ├── Verifier.sol         # Auto-generated from circuit (halo2-verifier)
-│   └── test/                # Foundry tests
-├── api/
-│   ├── server.go            # gRPC server + REST gateway
-│   ├── proto/               # Protobuf definitions
-│   └── middleware/          # Rate limiting, auth
-├── frontend/
-│   └── ...                  # Next.js demo UI
-├── docs/
-│   ├── whitepaper.md        # Technical design document
-│   └── benchmarks.md        # Public performance results
-└── docker-compose.yml       # Local dev stack
+crates/
+├── dp-types/        # Shared domain types (Order, Fill, Side, EventType)
+├── dp-crypto/       # ECIES decrypter + commitment computation
+├── dp-event/        # Append-only event store (MemStore + FileStore, bincode + fsync)
+├── dp-book/         # Order book projection + depth aggregation
+├── dp-auction/      # Batch auction, clearing price, self-match prevention
+├── dp-aggregator/   # Pluggable proof aggregator (noop + subprocess)
+├── dp-settlement/   # EthSubmitter (alloy) + BatchSettled watcher
+├── dp-engine/       # Orchestrator: tick loop, recovery, batch lifecycle
+└── dp-api/          # tonic gRPC + axum REST, validation, auth, rate-limit
+                     #   includes the `darkpool-server` binary entrypoint
+front/               # Next.js demo UI (auction history, depth, clearing prices)
+contracts/           # Solidity: DarkPool.sol, Verifier.sol (planned)
+zkproof/             # halo2 / arkworks circuits + prover + aggregator (planned)
+Cargo.toml           # workspace root
 ```
