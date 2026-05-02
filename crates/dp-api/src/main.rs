@@ -12,7 +12,7 @@ use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
 use dp_api::rest;
 use dp_crypto::EciesDecrypter;
 use dp_engine::Engine;
-use dp_event::{FileStore, MemStore, Store};
+use dp_event::{FileStore, MemStore, PgStore, Store};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -28,12 +28,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let cfg = Config::parse();
 
-    let store: Arc<dyn Store> = if cfg.event_log.is_empty() {
+    let store: Arc<dyn Store> = if !cfg.event_db.is_empty() {
+        info!(url = %sanitize_db_url(&cfg.event_db), "event log: postgres");
+        Arc::new(PgStore::connect(&cfg.event_db).await?)
+    } else if !cfg.event_log.is_empty() {
+        info!(path = %cfg.event_log, "event log: file");
+        Arc::new(FileStore::open(&cfg.event_log)?)
+    } else {
         info!("event log: in-memory (not durable)");
         Arc::new(MemStore::new())
-    } else {
-        info!(path = %cfg.event_log, "event log: durable");
-        Arc::new(FileStore::open(&cfg.event_log)?)
     };
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
@@ -156,4 +159,43 @@ async fn sigterm() {
 #[cfg(not(unix))]
 async fn sigterm() {
     std::future::pending::<()>().await;
+}
+
+/// Strip the `user:password@` userinfo from a DB connection URL so it can be
+/// logged without leaking credentials. Falls back to the original string when
+/// the URL doesn't follow the `scheme://userinfo@host` shape.
+fn sanitize_db_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some((_userinfo, host)) = rest.split_once('@') else {
+        return url.to_string();
+    };
+    format!("{}://{}", scheme, host)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_db_url;
+
+    #[test]
+    fn strips_credentials() {
+        assert_eq!(
+            sanitize_db_url("postgres://user:pw@host:5432/db"),
+            "postgres://host:5432/db"
+        );
+    }
+
+    #[test]
+    fn passthrough_without_userinfo() {
+        assert_eq!(
+            sanitize_db_url("postgres://host/db"),
+            "postgres://host/db"
+        );
+    }
+
+    #[test]
+    fn passthrough_non_url() {
+        assert_eq!(sanitize_db_url("nonsense"), "nonsense");
+    }
 }

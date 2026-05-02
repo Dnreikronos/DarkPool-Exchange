@@ -30,6 +30,9 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_EVENT_LOG", default_value = "")]
     pub event_log: String,
 
+    #[arg(long, env = "DARKPOOL_EVENT_DB", default_value = "")]
+    pub event_db: String,
+
     #[arg(long, env = "DARKPOOL_OPERATOR_KEY", default_value = "")]
     pub operator_key: String,
 
