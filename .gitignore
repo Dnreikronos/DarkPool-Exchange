@@ -49,3 +49,10 @@ Cargo.lock
 
 # notes
 gotchas.md
+
+# zk dev keys — regenerate with `cargo run -p dp-zk-cli --bin dp-zk-keygen`.
+# Production keys must come from a multi-party ceremony, never committed.
+crates/dp-zk/keys/proving_key.bin
+crates/dp-zk/keys/verifying_key.bin
+crates/dp-zk/keys/keys_metadata.json
+crates/dp-zk-cli/keys/

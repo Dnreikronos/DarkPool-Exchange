@@ -10,6 +10,7 @@ members = [
     "crates/dp-settlement",
     "crates/dp-engine",
     "crates/dp-api",
+    "crates/dp-zk",
 ]
 
 [workspace.dependencies]
@@ -54,3 +55,13 @@ http-body-util = "0.1"
 humantime = "2"
 futures-util = "0.3"
 serial_test = "3"
+ark-ff = { version = "0.5", default-features = false }
+ark-ec = { version = "0.5", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+ark-serialize = { version = "0.5", default-features = false, features = ["derive"] }
+ark-relations = { version = "0.5", default-features = false }
+ark-r1cs-std = { version = "0.5", default-features = false }
+ark-snark = { version = "0.5", default-features = false }
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+ark-groth16 = { version = "0.5", default-features = false }
+ark-crypto-primitives = { version = "0.5", default-features = false, features = ["sponge", "r1cs"] }
