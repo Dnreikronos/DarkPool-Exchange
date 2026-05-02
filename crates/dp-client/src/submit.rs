@@ -47,6 +47,12 @@ pub fn prepare_order_with_entropy(
     payload: &OrderPayload,
     entropy: &[u8; 32],
 ) -> Result<OrderSubmission, ClientError> {
+    if payload.commitment_key.trim().is_empty() {
+        return Err(ClientError::InvalidPayload(
+            "commitment_key must be non-empty".to_string(),
+        ));
+    }
+
     let key_bytes = payload.commitment_key.as_bytes();
 
     let trader_id_fr = derive_trader_id(key_bytes);

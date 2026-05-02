@@ -33,7 +33,15 @@ impl OrderCommitmentInput {
     ) -> Result<Self, ClientError> {
         Ok(Self {
             trader_id,
-            side: if side == 0 { Fr::zero() } else { Fr::one() },
+            side: match side {
+                0 => Fr::zero(),
+                1 => Fr::one(),
+                other => {
+                    return Err(ClientError::InvalidPayload(format!(
+                        "side must be 0 or 1, got {other}"
+                    )))
+                }
+            },
             limit_price: decimal_to_scalar(limit_price)?,
             size: decimal_to_scalar(size)?,
             salt,

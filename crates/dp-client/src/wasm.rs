@@ -53,7 +53,17 @@ pub fn compute_commitment_wasm(
     let trader_id = inner_derive_trader_id(commitment_key.as_bytes());
     let price_d = Decimal::from_str(price).map_err(js_err)?;
     let size_d = Decimal::from_str(size).map_err(js_err)?;
-    let salt_bytes = hex::decode(salt_hex.trim_start_matches("0x")).map_err(js_err)?;
+    let stripped = salt_hex
+        .strip_prefix("0x")
+        .or_else(|| salt_hex.strip_prefix("0X"))
+        .unwrap_or(salt_hex);
+    let salt_bytes = hex::decode(stripped).map_err(js_err)?;
+    if salt_bytes.len() != 32 {
+        return Err(JsError::new(&format!(
+            "salt must be exactly 32 bytes, got {}",
+            salt_bytes.len()
+        )));
+    }
     let salt_fr = crate::commitment::bytes_to_scalar(&salt_bytes);
     let inp = OrderCommitmentInput::from_decimals(trader_id, side, price_d, size_d, salt_fr)
         .map_err(js_err)?;
