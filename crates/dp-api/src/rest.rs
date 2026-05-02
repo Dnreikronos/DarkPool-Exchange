@@ -8,6 +8,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
@@ -17,12 +18,19 @@ use crate::pb::{
     PlaceOrderRequest,
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
+use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
 
 pub type SharedHandler = Arc<ApiHandler>;
 
+// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
+// Rejects oversized requests before JSON parse + base64 decode burn CPU.
+const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
+
 pub fn router(handler: SharedHandler) -> Router {
+    let place_order = post(rest_place_order)
+        .layer(RequestBodyLimitLayer::new(PLACE_ORDER_BODY_LIMIT));
     Router::new()
-        .route("/v1/orders", post(rest_place_order))
+        .route("/v1/orders", place_order)
         .route(
             "/v1/orders/:order_id",
             delete(rest_cancel_order).get(rest_get_order),
@@ -93,7 +101,7 @@ fn side_str(s: i32) -> String {
     match pb::Side::try_from(s) {
         Ok(pb::Side::Buy) => "SIDE_BUY".to_string(),
         Ok(pb::Side::Sell) => "SIDE_SELL".to_string(),
-        _ => "SIDE_UNSPECIFIED".to_string(),
+        Ok(pb::Side::Unspecified) | Err(_) => "SIDE_UNSPECIFIED".to_string(),
     }
 }
 
@@ -290,60 +298,15 @@ async fn rest_get_auction_history(
 // ---------- base64 codec for JSON ----------
 
 mod base64_bytes {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
     use serde::{Deserialize, Deserializer};
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        decode(&s).map_err(serde::de::Error::custom)
-    }
-
-    fn decode(input: &str) -> Result<Vec<u8>, String> {
-        let bytes = input.as_bytes();
-        if bytes.is_empty() {
+        if s.is_empty() {
             return Ok(Vec::new());
         }
-        if !bytes.len().is_multiple_of(4) {
-            return Err("invalid base64 length".into());
-        }
-        let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-        let val = |c: u8| -> Result<u8, String> {
-            Ok(match c {
-                b'A'..=b'Z' => c - b'A',
-                b'a'..=b'z' => c - b'a' + 26,
-                b'0'..=b'9' => c - b'0' + 52,
-                b'+' => 62,
-                b'/' => 63,
-                _ => return Err(format!("invalid base64 char: {}", c as char)),
-            })
-        };
-        let total = bytes.len();
-        for (idx, chunk) in bytes.chunks(4).enumerate() {
-            let is_last = idx * 4 + 4 == total;
-            // '=' is only valid in the final 4-byte group at positions 2 and/or 3.
-            // Reject padding in any other position.
-            for (pos, &c) in chunk.iter().enumerate() {
-                if c == b'=' && !(is_last && pos >= 2) {
-                    return Err("invalid base64 padding".into());
-                }
-            }
-            let v0 = val(chunk[0])?;
-            let v1 = val(chunk[1])?;
-            let pad2 = chunk[2] == b'=';
-            let pad3 = chunk[3] == b'=';
-            // '=' at chunk[2] requires '=' at chunk[3].
-            if pad2 && !pad3 {
-                return Err("invalid base64 padding".into());
-            }
-            let v2 = if pad2 { 0 } else { val(chunk[2])? };
-            let v3 = if pad3 { 0 } else { val(chunk[3])? };
-            out.push((v0 << 2) | (v1 >> 4));
-            if !pad2 {
-                out.push((v1 << 4) | (v2 >> 2));
-            }
-            if !pad3 {
-                out.push((v2 << 6) | v3);
-            }
-        }
-        Ok(out)
+        STANDARD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
     }
 }
