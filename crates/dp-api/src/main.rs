@@ -28,12 +28,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let cfg = Config::parse();
 
-    let store: Arc<dyn Store> = if !cfg.event_db.is_empty() {
-        info!(url = %sanitize_db_url(&cfg.event_db), "event log: postgres");
-        Arc::new(PgStore::connect(&cfg.event_db).await?)
-    } else if !cfg.event_log.is_empty() {
-        info!(path = %cfg.event_log, "event log: file");
-        Arc::new(FileStore::open(&cfg.event_log)?)
+    let store: Arc<dyn Store> = if let Some(url) = cfg.event_db_url() {
+        info!(url = %sanitize_db_url(url), "event log: postgres");
+        Arc::new(PgStore::connect(url).await?)
+    } else if let Some(path) = cfg.event_log_path() {
+        info!(path = %path, "event log: file");
+        Arc::new(FileStore::open(path)?)
     } else {
         info!("event log: in-memory (not durable)");
         Arc::new(MemStore::new())
@@ -41,21 +41,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
 
-    if !cfg.operator_key.is_empty() {
-        let dec = EciesDecrypter::from_file(&cfg.operator_key)?;
+    if let Some(key_path) = cfg.operator_key_path() {
+        // Fail-fast: surface bad operator-key paths at boot rather than on
+        // first decrypt attempt.
+        let dec = EciesDecrypter::from_file(key_path)?;
         engine.set_decrypter(Arc::new(dec));
-        info!(key = %cfg.operator_key, "decrypter: ECIES");
+        info!(key = %key_path, "decrypter: ECIES");
     } else {
         info!("decrypter: noop (set --operator-key to enable)");
     }
 
-    if !cfg.aggregator_bin.is_empty() {
+    if let Some(agg_bin) = cfg.aggregator_bin_path() {
+        let agg_path = std::path::Path::new(agg_bin);
+        // Fail-fast: aggregator binary must exist and be a regular file at
+        // boot; otherwise every auction tick will fail under the noisy
+        // subprocess-spawn error path.
+        if !agg_path.is_file() {
+            return Err(format!(
+                "aggregator binary not found at {}: set --aggregator-bin to a valid path",
+                agg_bin
+            )
+            .into());
+        }
+        // Fail-fast: when the ZK aggregator is wired, the proving-key dir
+        // must exist and contain proving_key.bin / verifying_key.bin /
+        // keys_metadata.json. Bad/missing keys would otherwise blow up on
+        // the first batch with cryptic subprocess stderr.
+        if let Some(key_dir) = cfg.zk_proving_key_dir() {
+            validate_zk_key_dir(key_dir)?;
+        } else {
+            return Err("DARKPOOL_ZK_PROVING_KEY must be set when DARKPOOL_AGGREGATOR_BIN is set"
+                .into());
+        }
         let timeout = if cfg.aggregator_timeout.is_zero() {
             None
         } else {
             Some(cfg.aggregator_timeout)
         };
-        let agg = SubprocessAggregator::new(std::path::Path::new(&cfg.aggregator_bin), timeout)?;
+        // Forward ZK config to the spawned subprocess via per-spawn
+        // Command::env. std::env::set_var is UB in a multi-threaded
+        // process (Rust ≥ 1.74) and tokio's runtime is multi-threaded.
+        let mut agg = SubprocessAggregator::new(agg_path, timeout)?;
+        agg = agg.with_env(
+            "DARKPOOL_ZK_PROVING_KEY",
+            cfg.zk_proving_key_dir().unwrap_or_default(),
+        );
+        agg = agg.with_env("DARKPOOL_ZK_BATCH_SIZE", cfg.zk_batch_size.to_string());
         engine.set_aggregator(Arc::new(agg));
         let submit_timeout = if cfg.submit_timeout.is_zero() {
             cfg.aggregator_timeout
@@ -63,17 +94,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             cfg.submit_timeout
         };
         engine.set_submit_timeout(submit_timeout);
-        info!(bin = %cfg.aggregator_bin, "aggregator: subprocess");
+        info!(bin = %agg_bin, "aggregator: subprocess");
     } else {
         info!("aggregator: noop (set --aggregator-bin to enable)");
     }
 
-    if !cfg.eth_rpc.is_empty() {
+    if let Some(rpc) = cfg.eth_rpc_url() {
         // Eth submitter wiring requires an alloy provider builder. The current
         // dp-settlement API takes a generic Provider; bootstrap glue for that
         // path is deferred to a follow-up.
         warn!(
-            rpc = %cfg.eth_rpc,
+            rpc = %rpc,
             "DARKPOOL_ETH_RPC is set but submitter wiring is not yet implemented; \
              running with noop submitter — auctions will NOT be settled on-chain"
         );
@@ -159,6 +190,24 @@ async fn sigterm() {
 #[cfg(not(unix))]
 async fn sigterm() {
     std::future::pending::<()>().await;
+}
+
+/// Validate that the ZK proving-key directory contains the artifacts the
+/// aggregator subprocess will load on first batch. We check existence only
+/// (not byte validity) so boot stays cheap; mismatched key contents still
+/// fail later, but missing files surface immediately.
+fn validate_zk_key_dir(dir: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let p = std::path::Path::new(dir);
+    if !p.is_dir() {
+        return Err(format!("ZK proving-key dir not found: {}", dir).into());
+    }
+    for f in ["proving_key.bin", "verifying_key.bin", "keys_metadata.json"] {
+        let fp = p.join(f);
+        if !fp.is_file() {
+            return Err(format!("ZK proving-key dir missing {}: {}", f, dir).into());
+        }
+    }
+    Ok(())
 }
 
 /// Strip the `user:password@` userinfo from a DB connection URL so it can be
