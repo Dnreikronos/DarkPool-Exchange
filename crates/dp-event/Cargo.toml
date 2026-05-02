@@ -3,6 +3,10 @@ name = "dp-event"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["dep:sqlx", "dep:tokio", "dep:async-trait"]
+
 [dependencies]
 dp-types = { path = "../dp-types" }
 uuid = { workspace = true }
@@ -12,7 +16,17 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
 bincode = { workspace = true }
+sqlx = { version = "0.8", optional = true, default-features = false, features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = "3"
+tokio = { workspace = true }

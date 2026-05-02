@@ -1,11 +1,15 @@
 mod event;
 mod file_store;
 mod mem_store;
+#[cfg(feature = "postgres")]
+mod pg_store;
 mod store;
 
 pub use event::{Event, EventData};
 pub use file_store::FileStore;
 pub use mem_store::MemStore;
+#[cfg(feature = "postgres")]
+pub use pg_store::PgStore;
 pub use store::{assign_seq_and_timestamp, index_after, Store};
 
 #[derive(Debug, thiserror::Error)]
@@ -21,4 +25,10 @@ pub enum EventError {
         offset: u64,
         source: bincode::Error,
     },
+    #[cfg(feature = "postgres")]
+    #[error(transparent)]
+    Sqlx(#[from] sqlx::Error),
+    #[cfg(feature = "postgres")]
+    #[error(transparent)]
+    Migrate(#[from] sqlx::migrate::MigrateError),
 }
