@@ -49,9 +49,3 @@ Cargo.lock
 
 # notes
 gotchas.md
-
-# go
-/darkpool
-*.exe
-*.test
-*.out
