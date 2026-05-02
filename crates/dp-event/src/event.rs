@@ -12,6 +12,14 @@ pub struct Event {
     pub data: EventData,
 }
 
+/// FUTURE (orphan tombstone, deferred): `recover.rs` re-aggregates matches
+/// observed before a `BatchSubmitted` was written by minting a fresh
+/// `batch_id` and emitting a *new* `BatchSubmitted` on every restart. Each
+/// crash-during-batch leaks a phantom batch into the log, and the original
+/// orphan matches stay unreconciled across replays. The fix is a new
+/// `BatchOrphaned { auction_id, batch_id }` variant written exactly once
+/// per orphan auction so subsequent replays can short-circuit. Schema
+/// change → bumps the on-disk event format → not in scope for this PR.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EventData {
     OrderPlaced {

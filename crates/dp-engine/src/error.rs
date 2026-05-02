@@ -38,4 +38,10 @@ pub enum EngineError {
         #[source]
         source: AggregatorError,
     },
+
+    #[error("build witness: missing in-memory secret for order {order_id}")]
+    WitnessSecretMissing { order_id: uuid::Uuid },
+
+    #[error("build witness: order {order_id} no longer in book")]
+    WitnessOrderMissing { order_id: uuid::Uuid },
 }

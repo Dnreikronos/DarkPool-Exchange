@@ -84,10 +84,22 @@ impl Engine {
                 .collect();
 
             let batch_id = Uuid::new_v4();
-            let proof = aggregator
-                .aggregate(batch_id, auction_id, &matches)
+            // Orphan secrets wiped on restart → empty witness.
+            let witness = dp_zk::witness::BatchWitness::empty(batch_id, auction_id);
+            let proof = match aggregator
+                .aggregate(batch_id, auction_id, &matches, &witness)
                 .await
-                .map_err(|source| EngineError::RecoverReAggregate { auction_id, source })?;
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!(
+                        auction_id = %auction_id,
+                        match_count = matches.len(),
+                        "orphan re-aggregate failed; settlement event will NOT be replayed: {e}"
+                    );
+                    continue;
+                }
+            };
 
             let ts = auction_timestamps
                 .get(&auction_id)

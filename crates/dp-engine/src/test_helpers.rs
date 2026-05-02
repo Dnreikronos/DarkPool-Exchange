@@ -7,6 +7,7 @@ use std::time::Duration;
 use dp_aggregator::{AggregatorError, ProofAggregator};
 use dp_auction::Match;
 use dp_crypto::{CryptoError, DecryptedOrder, Decrypter};
+use dp_zk::witness::BatchWitness;
 use dp_event::{EventData, Store};
 use dp_settlement::{SettlementError, Submitter};
 use dp_types::EventType;
@@ -87,6 +88,7 @@ impl ProofAggregator for StubAggregator {
         _batch_id: Uuid,
         _auction_id: Uuid,
         _matches: &'a [Match],
+        _witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -103,6 +105,7 @@ impl ProofAggregator for FailingAggregator {
         _batch_id: Uuid,
         _auction_id: Uuid,
         _matches: &'a [Match],
+        _witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
         Box::pin(async move {
             Err(AggregatorError::ProcessFailed {
@@ -143,6 +146,7 @@ impl ProofAggregator for BlockingAggregator {
         _batch_id: Uuid,
         _auction_id: Uuid,
         _matches: &'a [Match],
+        _witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);

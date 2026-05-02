@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
 use dp_aggregator::ProofAggregator;
 use dp_event::{Event, EventData};
-use dp_types::EventType;
+use dp_types::{EventType, Order};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -17,6 +17,11 @@ pub(crate) struct PendingAggregation {
     pub batch_id: Uuid,
     pub auction_id: Uuid,
     pub matches: Vec<dp_auction::Match>,
+    /// Snapshot of every order referenced by `matches`, captured under the
+    /// state lock BEFORE fill events are applied — once `book.apply` runs
+    /// for a fully-consumed order it disappears from the book, so we
+    /// cannot rely on `book.find_order` later when building the witness.
+    pub orders: HashMap<Uuid, Order>,
     pub auction_at: chrono::DateTime<Utc>,
 }
 
@@ -26,8 +31,19 @@ impl Engine {
 
         let mut batches_to_submit = Vec::with_capacity(pending.len());
         for p in pending {
+            let witness = match self.build_batch_witness(p.batch_id, p.auction_id, &p.matches, &p.orders) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!(
+                        batch_id = %p.batch_id,
+                        auction_id = %p.auction_id,
+                        "build witness failed, skipping proof: {e}"
+                    );
+                    continue;
+                }
+            };
             let proof = match aggregator
-                .aggregate(p.batch_id, p.auction_id, &p.matches)
+                .aggregate(p.batch_id, p.auction_id, &p.matches, &witness)
                 .await
             {
                 Ok(proof) => proof,
@@ -60,6 +76,11 @@ impl Engine {
         }
 
         self.resubmit_pending_except(&submit_set).await;
+
+        // Drop ZK secrets for orders that left the book this tick (expired
+        // or fully filled). Bounds the in-memory secrets map and limits the
+        // window in which sensitive material is held.
+        self.prune_dead_secrets();
 
         notifications
     }
@@ -142,6 +163,19 @@ impl Engine {
                 });
             }
 
+            // Snapshot full Order rows for the witness BEFORE the fill
+            // events are applied — apply_fill removes orders whose
+            // remaining_size hits zero.
+            let mut order_snapshot: HashMap<Uuid, Order> = HashMap::new();
+            for m in &result.matches {
+                if let Some(o) = state.book.find_order(m.bid.order_id) {
+                    order_snapshot.insert(o.id, o);
+                }
+                if let Some(o) = state.book.find_order(m.ask.order_id) {
+                    order_snapshot.insert(o.id, o);
+                }
+            }
+
             if let Err(e) = self.inner.store.append(&mut events) {
                 tracing::warn!(pair = %pair, "persist auction events: {e}");
                 continue;
@@ -171,6 +205,7 @@ impl Engine {
                         order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size)
                     })
                     .collect(),
+                orders: order_snapshot,
                 auction_at: now,
             });
         }

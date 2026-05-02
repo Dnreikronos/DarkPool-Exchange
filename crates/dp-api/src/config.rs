@@ -42,6 +42,16 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_AGGREGATOR_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub aggregator_timeout: Duration,
 
+    /// Directory containing proving_key.bin / verifying_key.bin /
+    /// keys_metadata.json. Forwarded to the aggregator subprocess via
+    /// DARKPOOL_ZK_PROVING_KEY.
+    #[arg(long, env = "DARKPOOL_ZK_PROVING_KEY", default_value = "")]
+    pub zk_proving_key: String,
+
+    /// Circuit batch size. Must equal the keygen-time value.
+    #[arg(long, env = "DARKPOOL_ZK_BATCH_SIZE", default_value = "8")]
+    pub zk_batch_size: u32,
+
     /// On-chain submission deadline. Falls back to aggregator_timeout when 0.
     #[arg(long, env = "DARKPOOL_SUBMIT_TIMEOUT", default_value = "0s", value_parser = parse_duration)]
     pub submit_timeout: Duration,
@@ -67,6 +77,39 @@ impl Config {
             .filter(|p| !p.is_empty())
             .collect()
     }
+
+    pub fn event_db_url(&self) -> Option<&str> {
+        opt(&self.event_db)
+    }
+
+    pub fn event_log_path(&self) -> Option<&str> {
+        opt(&self.event_log)
+    }
+
+    pub fn operator_key_path(&self) -> Option<&str> {
+        opt(&self.operator_key)
+    }
+
+    pub fn aggregator_bin_path(&self) -> Option<&str> {
+        opt(&self.aggregator_bin)
+    }
+
+    pub fn zk_proving_key_dir(&self) -> Option<&str> {
+        opt(&self.zk_proving_key)
+    }
+
+    pub fn eth_rpc_url(&self) -> Option<&str> {
+        opt(&self.eth_rpc)
+    }
+
+    pub fn contract_address(&self) -> Option<&str> {
+        opt(&self.contract_addr)
+    }
+}
+
+fn opt(s: &str) -> Option<&str> {
+    let t = s.trim();
+    if t.is_empty() { None } else { Some(t) }
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
