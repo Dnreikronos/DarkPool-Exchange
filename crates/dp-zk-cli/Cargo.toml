@@ -1,0 +1,24 @@
+[package]
+name = "dp-zk-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dp-zk-cli"
+path = "src/bin/dp-zk-cli.rs"
+
+[[bin]]
+name = "dp-zk-keygen"
+path = "src/bin/dp-zk-keygen.rs"
+
+[dependencies]
+dp-zk = { path = "../dp-zk" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+hex = { workspace = true }
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
