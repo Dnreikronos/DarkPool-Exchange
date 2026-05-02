@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: darkpool-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-darkpool}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-darkpool}
+      POSTGRES_DB: ${POSTGRES_DB:-darkpool}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-darkpool} -d ${POSTGRES_DB:-darkpool}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  darkpool-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: darkpool-server:dev
+    container_name: darkpool-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DARKPOOL_GRPC_ADDR: 0.0.0.0:9090
+      DARKPOOL_HTTP_ADDR: 0.0.0.0:8080
+      DARKPOOL_EVENT_DB: postgres://${POSTGRES_USER:-darkpool}:${POSTGRES_PASSWORD:-darkpool}@postgres:5432/${POSTGRES_DB:-darkpool}
+      DARKPOOL_AUCTION_INTERVAL: ${DARKPOOL_AUCTION_INTERVAL:-5s}
+      RUST_LOG: ${RUST_LOG:-info,dp_event=debug,dp_engine=info}
+    ports:
+      - "${DARKPOOL_GRPC_PORT:-9090}:9090"
+      - "${DARKPOOL_HTTP_PORT:-8080}:8080"
+    profiles:
+      - server
+
+volumes:
+  postgres-data:
