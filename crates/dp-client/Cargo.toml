@@ -1,0 +1,54 @@
+[workspace]
+
+[package]
+name = "dp-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:tokio", "dep:reqwest", "dep:humantime"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:getrandom"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_repr = "0.1"
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+hex = "0.4"
+ecies = { version = "0.2", default-features = false, features = ["pure"] }
+sha2 = "0.10"
+thiserror = "2"
+base64 = "0.22"
+rand = "0.8"
+
+ark-ff = { version = "0.5", default-features = false, features = ["std"] }
+ark-bn254 = { version = "0.5", default-features = false, features = ["std", "curve"] }
+ark-crypto-primitives = { version = "0.5", default-features = false, features = ["std", "sponge"] }
+
+# CLI-only
+clap = { version = "4", features = ["derive", "env"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+humantime = { version = "2", optional = true }
+
+# WASM-only
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+getrandom = { version = "0.2", optional = true, features = ["js"] }
+
+[dev-dependencies]
+dp-crypto = { path = "../dp-crypto" }
+dp-types = { path = "../dp-types" }
+dp-zk = { path = "../dp-zk" }
+k256 = "0.13"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "dp-trade"
+path = "src/bin/dp-trade.rs"
+required-features = ["cli"]
