@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dp-types       = { path = "../dp-types" }
-dp-event       = { path = "../dp-event" }
+dp-event       = { path = "../dp-event", features = ["postgres"] }
 dp-engine      = { path = "../dp-engine" }
 dp-crypto      = { path = "../dp-crypto" }
 dp-aggregator  = { path = "../dp-aggregator" }
