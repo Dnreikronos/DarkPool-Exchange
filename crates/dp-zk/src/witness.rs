@@ -21,6 +21,10 @@ pub struct OrderLegWitness {
     pub position: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub limit_price: Decimal,
+    /// Original order size (used in commitment binding, distinct from match
+    /// fill size for partial fills).
+    #[serde(with = "rust_decimal::serde::str")]
+    pub order_size: Decimal,
     /// 0 = bid (buy), 1 = ask (sell).
     pub side: u8,
     /// Trader's commitment-key string. Bound into the circuit so the
@@ -103,6 +107,9 @@ impl OrderLegWitness {
     pub fn limit_price_scalar(&self) -> Result<Fr, EncodingError> {
         decimal_to_scalar(self.limit_price)
     }
+    pub fn order_size_scalar(&self) -> Result<Fr, EncodingError> {
+        decimal_to_scalar(self.order_size)
+    }
     pub fn position_scalar(&self) -> Result<Fr, EncodingError> {
         let p = self
             .position_i128()
@@ -132,6 +139,7 @@ mod tests {
                     balance: Decimal::from(1000),
                     position: "0".into(),
                     limit_price: Decimal::from(100),
+                    order_size: Decimal::from(10),
                     side: 0,
                     commitment_key: "bid_key".into(),
                 },
@@ -141,6 +149,7 @@ mod tests {
                     balance: Decimal::from(2000),
                     position: "0".into(),
                     limit_price: Decimal::from(99),
+                    order_size: Decimal::from(10),
                     side: 1,
                     commitment_key: "ask_key".into(),
                 },

@@ -176,14 +176,14 @@ impl Engine {
                     decrypted.price,
                     decrypted.size,
                     &nonce,
-                );
+                )?;
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
                         order_id: *order_id,
                     });
                 }
                 let ttl = if decrypted.ttl > 0 {
-                    Duration::from_nanos(decrypted.ttl as u64)
+                    Duration::from_nanos(decrypted.ttl as u64).min(crate::engine::MAX_TTL)
                 } else {
                     default_ttl
                 };

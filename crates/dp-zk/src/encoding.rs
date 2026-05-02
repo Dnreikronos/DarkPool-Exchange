@@ -38,6 +38,7 @@ pub fn decimal_to_scalar(d: Decimal) -> Result<Fr, EncodingError> {
     if !(0..MAX_ENCODED).contains(&int) {
         return Err(EncodingError::Overflow(d));
     }
+    debug_assert!(int >= 0, "negative int should have been caught by sign check");
     Ok(Fr::from(int as u128))
 }
 

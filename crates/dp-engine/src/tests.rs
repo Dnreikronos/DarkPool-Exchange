@@ -303,7 +303,7 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         &nonce,
     );
 
-    assert_eq!(persisted, expected.to_vec());
+    assert_eq!(persisted, expected.unwrap().to_vec());
     assert_ne!(persisted, vec![0xAB; 32], "engine must not echo client value");
 }
 
