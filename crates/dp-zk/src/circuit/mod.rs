@@ -180,7 +180,6 @@ impl BatchProofCircuit {
             notionals.push(inactive.notional);
             matches.push(inactive);
         }
-        let _ = zero;
         let commitments_root = hash_root_native(&leaves);
         let notionals_root = hash_root_native(&notionals);
         Self {

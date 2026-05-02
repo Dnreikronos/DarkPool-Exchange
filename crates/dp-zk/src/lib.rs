@@ -22,7 +22,7 @@ pub mod pedersen;
 pub mod witness;
 
 pub use circuit::{prove, verify, BatchProofCircuit, ProofBytes};
-pub use encoding::{decimal_to_scalar, scalar_to_decimal, EncodingError};
+pub use encoding::{decimal_to_scalar, EncodingError};
 pub use keys::{KeyMetadata, ProvingKeyBytes, VerifyingKeyBytes};
 pub use pedersen::{commit_native, OrderCommitmentInput};
 pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
