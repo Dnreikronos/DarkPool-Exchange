@@ -24,6 +24,8 @@ use crate::state::{AuctionExecutedRecord, EngineState};
 use crate::subscribe::AuctionNotification;
 use crate::{DEFAULT_AUCTION_INTERVAL, DEFAULT_SUBSCRIBER_CAPACITY};
 
+pub(crate) const MAX_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Per-order ZK witness secrets. NEVER persisted to the event store — held
 /// only in memory. Lost on restart; orphan-recovery falls back to a noop
 /// proof (see `recover.rs`).
@@ -87,6 +89,7 @@ pub(crate) struct Inner {
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
     pub(crate) salt_nonce: [u8; 32],
+    pub(crate) batch_size: usize,
 }
 
 #[derive(Clone)]
@@ -116,6 +119,7 @@ impl Engine {
                 subscribers: tx,
                 auction_interval: interval,
                 salt_nonce,
+                batch_size: 8,
             }),
         };
         // Suppress the boot warning under `cfg(test)` — every engine test
@@ -161,6 +165,12 @@ impl Engine {
         state.max_backoff = max;
     }
 
+    pub fn register_pair(&self, pair: String, config: crate::state::PairConfig) {
+        let mut state = self.inner.state.lock();
+        state.pairs.insert(pair.clone());
+        state.pair_tokens.insert(pair, config);
+    }
+
     pub fn auction_interval(&self) -> Duration {
         self.inner.auction_interval
     }
@@ -200,7 +210,7 @@ impl Engine {
 
         let default_ttl = self.inner.state.lock().default_ttl;
         let ttl = if decrypted.ttl > 0 {
-            Duration::from_nanos(decrypted.ttl as u64)
+            Duration::from_nanos(decrypted.ttl as u64).min(MAX_TTL)
         } else {
             default_ttl
         };
@@ -211,6 +221,7 @@ impl Engine {
 
         let order = Order {
             id: Uuid::new_v4(),
+            trader: decrypted.trader,
             pair: decrypted.pair.clone(),
             side: decrypted.side,
             price: decrypted.price,
@@ -235,7 +246,7 @@ impl Engine {
             order.size,
             self.inner.oracle.read().as_ref(),
             nonce,
-        );
+        )?;
         let commitment = secrets.commitment.to_vec();
         self.inner.secrets.lock().insert(order.id, secrets);
 
@@ -326,20 +337,17 @@ impl Engine {
 
     pub fn cancel_order(&self, order_id: Uuid, reason: Option<String>) -> Result<(), EngineError> {
         let reason = reason.unwrap_or_else(|| "user cancelled".to_string());
+
         let state = self.inner.state.lock();
         if !state.book.has_order(order_id) {
             return Err(EngineError::Validation(DarkPoolError::OrderNotFound));
         }
-        drop(state);
-
         let mut events = [Event {
             seq: 0,
             event_type: EventType::OrderCancelled,
             timestamp: Utc::now(),
             data: EventData::OrderCancelled { order_id, reason },
         }];
-
-        let state = self.inner.state.lock();
         self.inner.store.append(&mut events)?;
         state.book.apply(&events[0]);
         drop(state);
@@ -413,6 +421,7 @@ fn leg_witness_from(
         balance: secret.balance,
         position: secret.position.to_string(),
         limit_price: order.price,
+        order_size: order.size,
         side,
         commitment_key: order.commitment_key,
     }
@@ -435,19 +444,19 @@ fn derive_order_secrets(
     size: Decimal,
     oracle: &dyn BalanceOracle,
     nonce: &[u8; 32],
-) -> OrderSecrets {
+) -> Result<OrderSecrets, EngineError> {
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
     let salt = derive_salt(commitment_key, order_id, nonce);
-    let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt);
+    let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
 
     let (balance, position) = oracle.lookup(&trader_id);
-    OrderSecrets {
+    Ok(OrderSecrets {
         salt,
         trader_id,
         commitment,
         balance,
         position,
-    }
+    })
 }
 
 /// Recompute the persisted Poseidon commitment for a (commitment_key,
@@ -460,7 +469,7 @@ pub(crate) fn recompute_persisted_commitment(
     price: Decimal,
     size: Decimal,
     nonce: &[u8; 32],
-) -> [u8; 32] {
+) -> Result<[u8; 32], EngineError> {
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
     let salt = derive_salt(commitment_key, order_id, nonce);
     compute_poseidon_commitment(&trader_id, side, price, size, &salt)
@@ -487,18 +496,18 @@ pub(crate) fn compute_poseidon_commitment(
     price: Decimal,
     size: Decimal,
     salt: &[u8; 32],
-) -> [u8; 32] {
+) -> Result<[u8; 32], EngineError> {
     use ark_ff::{BigInteger, PrimeField};
     let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
     let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
     let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
-        .expect("decimal_to_scalar in valid range for active orders");
+        .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     let fr = dp_zk::commit_native(&input);
     let bytes = fr.into_bigint().to_bytes_be();
     let mut out = [0u8; 32];
     let take = bytes.len().min(32);
     out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
-    out
+    Ok(out)
 }
 
 pub(crate) fn record_to_notification(rec: &AuctionExecutedRecord) -> AuctionNotification {
@@ -528,6 +537,7 @@ pub(crate) fn order_matched_to_match(
 
 #[cfg(test)]
 pub(crate) fn build_decrypted_ciphertext(
+    trader: alloy_primitives::Address,
     pair: &str,
     side: Side,
     price: Decimal,
@@ -536,6 +546,7 @@ pub(crate) fn build_decrypted_ciphertext(
     ttl: Duration,
 ) -> (Vec<u8>, Vec<u8>) {
     let d = dp_crypto::DecryptedOrder {
+        trader,
         pair: pair.to_string(),
         side,
         price,

@@ -166,6 +166,7 @@ mod tests {
     fn make_order(side: Side, price: i64, size: i64) -> Order {
         Order {
             id: Uuid::new_v4(),
+            trader: alloy_primitives::Address::ZERO,
             pair: "BTC-USD".into(),
             side,
             price: Decimal::new(price, 0),

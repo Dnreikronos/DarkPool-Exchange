@@ -38,6 +38,7 @@ pub fn decimal_to_scalar(d: Decimal) -> Result<Fr, EncodingError> {
     if !(0..MAX_ENCODED).contains(&int) {
         return Err(EncodingError::Overflow(d));
     }
+    debug_assert!(int >= 0, "negative int should have been caught by sign check");
     Ok(Fr::from(int as u128))
 }
 
@@ -53,6 +54,18 @@ pub fn scalar_to_decimal(f: Fr) -> Decimal {
     buf[..take].copy_from_slice(&bytes[..take]);
     let raw = u128::from_le_bytes(buf) as i128;
     Decimal::new(raw as i64, DECIMAL_SCALE)
+}
+
+/// Convert a BN254 scalar to a big-endian 32-byte array suitable for
+/// constructing an `alloy_primitives::U256`.
+pub fn fr_to_bytes32(f: Fr) -> [u8; 32] {
+    use ark_ff::{BigInteger, PrimeField};
+    let le = f.into_bigint().to_bytes_le();
+    let mut be = [0u8; 32];
+    for (i, b) in le.iter().enumerate().take(32) {
+        be[31 - i] = *b;
+    }
+    be
 }
 
 /// i128 → Fr for signed values (e.g. position). Caller must keep |x| < 2^60.

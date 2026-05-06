@@ -33,6 +33,7 @@ mod tests {
     #[tokio::test]
     async fn noop_json_roundtrip() {
         let order = DecryptedOrder {
+            trader: alloy_primitives::Address::ZERO,
             pair: "BTC-USD".into(),
             side: dp_types::Side::Buy,
             price: Decimal::new(5000000, 2),

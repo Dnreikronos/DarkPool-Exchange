@@ -8,13 +8,11 @@ use alloy_provider::Provider;
 use alloy_rpc_types::{BlockNumberOrTag, TransactionRequest};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
-use dp_auction::Match;
-use uuid::Uuid;
 
 use crate::abi::{submitBatchCall, Match as SolMatch, MAX_MATCHES_PER_BATCH};
 use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
 use crate::submitter::Submitter;
-use crate::SettlementError;
+use crate::{SettlementError, SettlementMatch, SubmitBatchParams};
 
 pub struct EthSubmitterConfig {
     pub rpc_url: String,
@@ -48,50 +46,50 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
         })
     }
 
-    pub fn pack_submit(
-        batch_id: Uuid,
-        auction_id: Uuid,
-        matches: &[Match],
-        proof: &[u8],
-    ) -> Result<Vec<u8>, SettlementError> {
-        if matches.len() > MAX_MATCHES_PER_BATCH {
+    pub fn pack_submit(params: &SubmitBatchParams) -> Result<Vec<u8>, SettlementError> {
+        if params.matches.len() > MAX_MATCHES_PER_BATCH {
             return Err(SettlementError::TooManyMatches {
-                count: matches.len(),
+                count: params.matches.len(),
             });
         }
 
-        let sol_matches: Vec<SolMatch> = matches
+        let sol_matches: Vec<SolMatch> = params
+            .matches
             .iter()
-            .map(|m| {
-                Ok(SolMatch {
-                    bidOrderId: uuid_to_bytes32(m.bid.order_id),
-                    askOrderId: uuid_to_bytes32(m.ask.order_id),
-                    price: decimal_to_wei(m.price)?,
-                    size: decimal_to_wei(m.size)?,
-                })
-            })
+            .map(settlement_match_to_sol)
             .collect::<Result<_, SettlementError>>()?;
 
         let call = submitBatchCall {
-            batchId: uuid_to_bytes32(batch_id),
-            auctionId: uuid_to_bytes32(auction_id),
-            proof: Bytes::copy_from_slice(proof),
+            batchId: uuid_to_bytes32(params.batch_id),
+            auctionId: uuid_to_bytes32(params.auction_id),
+            proof: Bytes::copy_from_slice(&params.proof),
+            publicInputs: params.public_inputs,
             matches: sol_matches,
         };
         Ok(call.abi_encode())
     }
 }
 
+fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
+    Ok(SolMatch {
+        bidOrderId: uuid_to_bytes32(m.bid_order_id),
+        askOrderId: uuid_to_bytes32(m.ask_order_id),
+        bidTrader: m.bid_trader,
+        askTrader: m.ask_trader,
+        baseToken: m.base_token,
+        quoteToken: m.quote_token,
+        price: decimal_to_wei(m.price)?,
+        size: decimal_to_wei(m.size)?,
+    })
+}
+
 impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
     fn submit<'a>(
         &'a self,
-        batch_id: Uuid,
-        auction_id: Uuid,
-        matches: &'a [Match],
-        proof: &'a [u8],
+        params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
         Box::pin(async move {
-            let calldata = Self::pack_submit(batch_id, auction_id, matches, proof)?;
+            let calldata = Self::pack_submit(params)?;
 
             let nonce = self
                 .provider
@@ -118,7 +116,6 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 .get_max_priority_fee_per_gas()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
-            // 2x base_fee headroom for next-block inclusion (EIP-1559 recommendation)
             let fee_cap = u128::from(base_fee) * 2 + tip;
 
             let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
@@ -149,47 +146,45 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dp_types::Fill;
+    use alloy_primitives::{address, U256};
     use rust_decimal::Decimal;
+    use uuid::Uuid;
 
-    fn test_match() -> Match {
-        Match {
-            bid: Fill {
-                order_id: Uuid::new_v4(),
-                size: Decimal::from(10),
-            },
-            ask: Fill {
-                order_id: Uuid::new_v4(),
-                size: Decimal::from(10),
-            },
+    fn test_match() -> SettlementMatch {
+        SettlementMatch {
+            bid_order_id: Uuid::new_v4(),
+            ask_order_id: Uuid::new_v4(),
+            bid_trader: address!("0x0000000000000000000000000000000000000010"),
+            ask_trader: address!("0x0000000000000000000000000000000000000020"),
+            base_token: address!("0x0000000000000000000000000000000000000001"),
+            quote_token: address!("0x0000000000000000000000000000000000000002"),
             price: Decimal::from(100),
             size: Decimal::from(10),
         }
     }
 
+    fn test_params(matches: Vec<SettlementMatch>) -> SubmitBatchParams {
+        SubmitBatchParams {
+            batch_id: Uuid::new_v4(),
+            auction_id: Uuid::new_v4(),
+            proof: b"proof".to_vec(),
+            public_inputs: [U256::from(matches.len()); 6],
+            matches,
+        }
+    }
+
     #[test]
     fn pack_submit_valid_selector() {
-        let batch_id = Uuid::new_v4();
-        let auction_id = Uuid::new_v4();
-        let matches = vec![test_match()];
-        let proof = b"proof";
-
-        let data =
-            EthSubmitter::<alloy_provider::RootProvider>::pack_submit(batch_id, auction_id, &matches, proof)
-                .unwrap();
+        let params = test_params(vec![test_match()]);
+        let data = EthSubmitter::<alloy_provider::RootProvider>::pack_submit(&params).unwrap();
         assert!(data.len() > 4);
     }
 
     #[test]
     fn pack_submit_too_many_matches() {
-        let batch_id = Uuid::new_v4();
-        let auction_id = Uuid::new_v4();
-        let matches: Vec<Match> = (0..257).map(|_| test_match()).collect();
-        let proof = b"proof";
-
-        let err =
-            EthSubmitter::<alloy_provider::RootProvider>::pack_submit(batch_id, auction_id, &matches, proof)
-                .unwrap_err();
+        let matches: Vec<SettlementMatch> = (0..257).map(|_| test_match()).collect();
+        let params = test_params(matches);
+        let err = EthSubmitter::<alloy_provider::RootProvider>::pack_submit(&params).unwrap_err();
         assert!(matches!(err, SettlementError::TooManyMatches { count: 257 }));
     }
 }

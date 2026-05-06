@@ -160,6 +160,7 @@ mod tests {
     fn new_order(side: Side, price: i64, size: i64) -> Order {
         Order {
             id: Uuid::new_v4(),
+            trader: alloy_primitives::Address::ZERO,
             pair: "TEST/USD".to_string(),
             side,
             price: Decimal::from(price),

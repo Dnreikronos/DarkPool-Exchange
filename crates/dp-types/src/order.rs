@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use crate::Side;
 pub struct Order {
     #[serde(rename = "ID")]
     pub id: Uuid,
+    pub trader: Address,
     pub pair: String,
     pub side: Side,
     #[serde(with = "crate::decimal_bincode")]
@@ -41,6 +43,7 @@ mod tests {
     fn order_json_field_names() {
         let order = Order {
             id: Uuid::nil(),
+            trader: Address::ZERO,
             pair: "BTC-USD".into(),
             side: Side::Buy,
             price: Decimal::new(50000, 0),

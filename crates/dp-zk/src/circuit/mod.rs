@@ -66,6 +66,7 @@ struct CircuitMatch {
     bid_balance: Fr,
     bid_position: Fr,
     bid_commitment_key: Fr,
+    bid_order_size: Fr,
 
     ask_trader: Fr,
     ask_salt: Fr,
@@ -74,6 +75,7 @@ struct CircuitMatch {
     ask_balance: Fr,
     ask_position: Fr,
     ask_commitment_key: Fr,
+    ask_order_size: Fr,
 
     match_price: Fr,
     match_size: Fr,
@@ -231,6 +233,7 @@ fn build_inactive() -> CircuitMatch {
         bid_balance: zero,
         bid_position: zero,
         bid_commitment_key: zero,
+        bid_order_size: zero,
         ask_trader: zero,
         ask_salt: zero,
         ask_limit_price: zero,
@@ -238,6 +241,7 @@ fn build_inactive() -> CircuitMatch {
         ask_balance: zero,
         ask_position: zero,
         ask_commitment_key: zero,
+        ask_order_size: zero,
         match_price: zero,
         match_size: zero,
         bid_commitment: commit_native(&bid_input),
@@ -271,19 +275,21 @@ fn build_match(
 
     let match_price_s = decimal_to_scalar(match_price)?;
     let match_size_s = decimal_to_scalar(match_size)?;
+    let bid_order_size = m.bid.order_size_scalar()?;
+    let ask_order_size = m.ask.order_size_scalar()?;
 
     let bid_input = OrderCommitmentInput {
         trader_id: bid_trader,
         side: Fr::from(m.bid.side as u64),
         limit_price: m.bid.limit_price_scalar()?,
-        size: match_size_s,
+        size: bid_order_size,
         salt: bid_salt,
     };
     let ask_input = OrderCommitmentInput {
         trader_id: ask_trader,
         side: Fr::from(m.ask.side as u64),
         limit_price: m.ask.limit_price_scalar()?,
-        size: match_size_s,
+        size: ask_order_size,
         salt: ask_salt,
     };
     let bid_commitment = commit_native(&bid_input);
@@ -305,6 +311,7 @@ fn build_match(
         bid_balance,
         bid_position,
         bid_commitment_key,
+        bid_order_size,
         ask_trader,
         ask_salt,
         ask_limit_price: ask_input.limit_price,
@@ -312,6 +319,7 @@ fn build_match(
         ask_balance,
         ask_position,
         ask_commitment_key,
+        ask_order_size,
         match_price: match_price_s,
         match_size: match_size_s,
         bid_commitment,
@@ -339,6 +347,7 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
 
         let one = FpVar::<Fr>::one();
         let zero = FpVar::<Fr>::zero();
+        let cfg = poseidon_config();
 
         for cm in &self.matches {
             let bid_side = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.bid_side))?;
@@ -358,6 +367,8 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
             let ask_position = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.ask_position))?;
             let bid_ck = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.bid_commitment_key))?;
             let ask_ck = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.ask_commitment_key))?;
+            let bid_order_size = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.bid_order_size))?;
+            let ask_order_size = FpVar::<Fr>::new_witness(cs.clone(), || Ok(cm.ask_order_size))?;
 
             // Family 1: side bit well-formed (each side ∈ {0,1}).
             // is_active also ∈ {0,1}.
@@ -393,14 +404,22 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
             let ask_cross = (&m_price - &ask_lp) * &is_active;
             enforce_range_60(&ask_cross)?;
 
-            // Family 5: Poseidon commitment binding.
-            let cfg = poseidon_config();
+            // Family 5: Poseidon commitment binding. Uses the order's
+            // original size (not match fill size) to match the engine-side
+            // commitment computed at placement time.
+            enforce_range_60(&bid_order_size)?;
+            enforce_range_60(&ask_order_size)?;
+            let bid_os_ge_ms = (&bid_order_size - &m_size) * &is_active;
+            enforce_range_60(&bid_os_ge_ms)?;
+            let ask_os_ge_ms = (&ask_order_size - &m_size) * &is_active;
+            enforce_range_60(&ask_os_ge_ms)?;
+
             let mut sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            sponge.absorb(&[bid_trader.clone(), bid_side.clone(), bid_lp.clone(), m_size.clone(), bid_salt.clone()].as_ref())?;
+            sponge.absorb(&[bid_trader.clone(), bid_side.clone(), bid_lp.clone(), bid_order_size.clone(), bid_salt.clone()].as_ref())?;
             let bid_commit = sponge.squeeze_field_elements(1)?[0].clone();
 
             let mut sponge2 = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            sponge2.absorb(&[ask_trader.clone(), ask_side.clone(), ask_lp.clone(), m_size.clone(), ask_salt.clone()].as_ref())?;
+            sponge2.absorb(&[ask_trader.clone(), ask_side.clone(), ask_lp.clone(), ask_order_size.clone(), ask_salt.clone()].as_ref())?;
             let ask_commit = sponge2.squeeze_field_elements(1)?[0].clone();
 
             // Family 6: notional = price * size (computed in-circuit).
@@ -436,9 +455,7 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
             enforce_range_60(&ask_pos_hi)?;
 
             // Family 9: trader_id == poseidon(commitment_key_scalar) on
-            // active rows. Use the same Poseidon config as the leg
-            // commitment so prover + verifier agree byte-for-byte.
-            let cfg = poseidon_config();
+            // active rows.
             let mut bid_id_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
             bid_id_sponge.absorb(&[bid_ck.clone()].as_ref())?;
             let bid_derived = bid_id_sponge.squeeze_field_elements(1)?[0].clone();
@@ -456,7 +473,6 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
         }
 
         // commitments_root binding.
-        let cfg = poseidon_config();
         let mut root_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
         root_sponge.absorb(&all_leaves.as_slice())?;
         let computed_root = root_sponge.squeeze_field_elements(1)?[0].clone();
@@ -515,6 +531,61 @@ pub fn prove<R: RngCore + CryptoRng>(
         .serialize_with_mode(&mut buf, Compress::Yes)
         .map_err(|e| ZkError::Serialize(e.to_string()))?;
     Ok(ProofBytes(buf))
+}
+
+/// Compute the 6 public inputs `[match_count, commitments_root, notionals_root,
+/// min_size, min_price, position_limit]` from a witness without building the
+/// full prover circuit. Used by the engine to populate `SubmitBatchParams`.
+pub fn compute_public_inputs(
+    witness: &BatchWitness,
+    match_prices: &[rust_decimal::Decimal],
+    match_sizes: &[rust_decimal::Decimal],
+    batch_size: usize,
+) -> Result<[Fr; 6], ZkError> {
+    if witness.matches.len() != match_prices.len()
+        || match_prices.len() != match_sizes.len()
+    {
+        return Err(ZkError::Witness(
+            "match_prices/match_sizes length mismatch".into(),
+        ));
+    }
+    let min_size = decimal_to_scalar(witness.policy.min_size)?;
+    let min_price = decimal_to_scalar(witness.policy.min_price)?;
+    let pos_limit_i: i128 = witness
+        .policy
+        .position_limit
+        .parse()
+        .map_err(|_| ZkError::Witness("policy.position_limit invalid".into()))?;
+    let position_limit = crate::encoding::signed_to_scalar(pos_limit_i)?;
+
+    let mut leaves: Vec<Fr> = Vec::with_capacity(batch_size * 2);
+    let mut notionals: Vec<Fr> = Vec::with_capacity(batch_size);
+
+    for (i, m) in witness.matches.iter().enumerate() {
+        let cm = build_match(m, match_prices[i], match_sizes[i])?;
+        leaves.push(cm.bid_commitment);
+        leaves.push(cm.ask_commitment);
+        notionals.push(cm.notional);
+    }
+    while leaves.len() < batch_size * 2 {
+        let inactive = build_inactive();
+        leaves.push(inactive.bid_commitment);
+        leaves.push(inactive.ask_commitment);
+        notionals.push(inactive.notional);
+    }
+
+    let commitments_root = hash_root_native(&leaves);
+    let notionals_root = hash_root_native(&notionals);
+    let match_count = Fr::from(witness.matches.len() as u64);
+
+    Ok([
+        match_count,
+        commitments_root,
+        notionals_root,
+        min_size,
+        min_price,
+        position_limit,
+    ])
 }
 
 /// Verify a serialized Groth16 proof against the given public inputs.

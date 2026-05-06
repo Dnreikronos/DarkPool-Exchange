@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use alloy_primitives::U256;
 use chrono::Utc;
 use dp_aggregator::ProofAggregator;
 use dp_event::{Event, EventData};
+use dp_settlement::SettlementMatch;
 use dp_types::{EventType, Order};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -56,7 +58,37 @@ impl Engine {
                     continue;
                 }
             };
-            if let Err(e) = self.finalize_pending_batch(&p, proof) {
+            let match_prices: Vec<_> = p.matches.iter().map(|m| m.price).collect();
+            let match_sizes: Vec<_> = p.matches.iter().map(|m| m.size).collect();
+            let public_inputs = match dp_zk::compute_public_inputs(
+                &witness,
+                &match_prices,
+                &match_sizes,
+                self.inner.batch_size,
+            ) {
+                Ok(scalars) => scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
+                Err(e) => {
+                    tracing::error!(
+                        batch_id = %p.batch_id,
+                        "compute public_inputs failed: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            let settlement_matches = {
+                let state = self.inner.state.lock();
+                self.build_settlement_matches(&p, &state)
+            };
+            let settlement_matches = match settlement_matches {
+                Ok(sm) => sm,
+                Err(e) => {
+                    tracing::error!(batch_id = %p.batch_id, "build settlement_matches: {e}");
+                    continue;
+                }
+            };
+
+            if let Err(e) = self.finalize_pending_batch(&p, proof, public_inputs, settlement_matches) {
                 tracing::warn!(batch_id = %p.batch_id, "finalize batch: {e}");
                 continue;
             }
@@ -83,6 +115,45 @@ impl Engine {
         self.prune_dead_secrets();
 
         notifications
+    }
+
+    fn build_settlement_matches(
+        &self,
+        p: &PendingAggregation,
+        state: &crate::state::EngineState,
+    ) -> Result<Vec<SettlementMatch>, crate::error::EngineError> {
+        let mut out = Vec::with_capacity(p.matches.len());
+        for m in &p.matches {
+            let bid_order = p
+                .orders
+                .get(&m.bid.order_id)
+                .ok_or(crate::error::EngineError::WitnessOrderMissing {
+                    order_id: m.bid.order_id,
+                })?;
+            let ask_order = p
+                .orders
+                .get(&m.ask.order_id)
+                .ok_or(crate::error::EngineError::WitnessOrderMissing {
+                    order_id: m.ask.order_id,
+                })?;
+            let pair_cfg = state
+                .pair_tokens
+                .get(&bid_order.pair)
+                .ok_or_else(|| crate::error::EngineError::PairNotConfigured {
+                    pair: bid_order.pair.clone(),
+                })?;
+            out.push(SettlementMatch {
+                bid_order_id: m.bid.order_id,
+                ask_order_id: m.ask.order_id,
+                bid_trader: bid_order.trader,
+                ask_trader: ask_order.trader,
+                base_token: pair_cfg.base_token,
+                quote_token: pair_cfg.quote_token,
+                price: m.price,
+                size: m.size,
+            });
+        }
+        Ok(out)
     }
 
     fn tick_under_lock(

@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use alloy_primitives::{Address, U256};
 use dp_auction::Match;
 use dp_book::OrderBook;
+use dp_settlement::SettlementMatch;
 use uuid::Uuid;
 
 use crate::{
@@ -10,11 +12,19 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+pub struct PairConfig {
+    pub base_token: Address,
+    pub quote_token: Address,
+}
+
+#[derive(Clone, Debug)]
 pub struct PendingBatch {
     pub batch_id: Uuid,
     pub auction_id: Uuid,
     pub matches: Vec<Match>,
+    pub settlement_matches: Vec<SettlementMatch>,
     pub proof: Vec<u8>,
+    pub public_inputs: [U256; 6],
     pub attempts: u32,
     pub next_attempt: Option<Instant>,
     pub submitting: bool,
@@ -33,6 +43,7 @@ pub(crate) struct AuctionExecutedRecord {
 pub(crate) struct EngineState {
     pub book: OrderBook,
     pub pairs: HashSet<String>,
+    pub pair_tokens: HashMap<String, PairConfig>,
     pub auction_log: Vec<AuctionExecutedRecord>,
     pub pending_batches: HashMap<Uuid, PendingBatch>,
     pub submit_timeout: Duration,
@@ -47,6 +58,7 @@ impl EngineState {
         Self {
             book: OrderBook::new(),
             pairs: HashSet::new(),
+            pair_tokens: HashMap::new(),
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
             submit_timeout: DEFAULT_SUBMIT_TIMEOUT,

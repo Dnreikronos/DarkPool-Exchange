@@ -3,9 +3,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
 
+use alloy_primitives::U256;
 use chrono::Utc;
 use dp_event::{Event, EventData};
-use dp_settlement::{BatchSink, SettlementError};
+use dp_settlement::{BatchSink, SettlementError, SettlementMatch, SubmitBatchParams};
 use dp_types::EventType;
 use uuid::Uuid;
 
@@ -19,6 +20,8 @@ impl Engine {
         &self,
         p: &PendingAggregation,
         proof: Vec<u8>,
+        public_inputs: [U256; 6],
+        settlement_matches: Vec<SettlementMatch>,
     ) -> Result<(), EngineError> {
         let mut events = [Event {
             seq: 0,
@@ -42,7 +45,9 @@ impl Engine {
                 batch_id: p.batch_id,
                 auction_id: p.auction_id,
                 matches: p.matches.clone(),
+                settlement_matches,
                 proof,
+                public_inputs,
                 attempts: 0,
                 next_attempt: None,
                 submitting: false,
@@ -100,17 +105,26 @@ impl Engine {
             }
             pb.submitting = true;
             let auction_id = pb.auction_id;
-            let matches = pb.matches.clone();
+            let settlement_matches = pb.settlement_matches.clone();
             let proof = pb.proof.clone();
+            let public_inputs = pb.public_inputs;
             let timeout = state.submit_timeout;
-            (auction_id, matches, proof, timeout)
+            (auction_id, settlement_matches, proof, public_inputs, timeout)
         };
 
-        let (auction_id, matches, proof, timeout) = snapshot;
+        let (auction_id, settlement_matches, proof, public_inputs, timeout) = snapshot;
         let submitter = self.inner.submitter.read().clone();
 
+        let params = SubmitBatchParams {
+            batch_id,
+            auction_id,
+            proof,
+            public_inputs,
+            matches: settlement_matches,
+        };
+
         let result =
-            tokio::time::timeout(timeout, submitter.submit(batch_id, auction_id, &matches, &proof))
+            tokio::time::timeout(timeout, submitter.submit(&params))
                 .await;
 
         let submit_outcome: Result<String, SettlementError> = match result {

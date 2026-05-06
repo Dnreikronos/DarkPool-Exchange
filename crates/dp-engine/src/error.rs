@@ -44,4 +44,10 @@ pub enum EngineError {
 
     #[error("build witness: order {order_id} no longer in book")]
     WitnessOrderMissing { order_id: uuid::Uuid },
+
+    #[error("commitment encoding: {0}")]
+    CommitmentEncoding(String),
+
+    #[error("pair not configured for settlement: {pair}")]
+    PairNotConfigured { pair: String },
 }
