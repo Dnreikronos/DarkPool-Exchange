@@ -9,7 +9,7 @@ use dp_auction::Match;
 use dp_crypto::{CryptoError, DecryptedOrder, Decrypter};
 use dp_zk::witness::BatchWitness;
 use dp_event::{EventData, Store};
-use dp_settlement::{SettlementError, Submitter};
+use dp_settlement::{SettlementError, SubmitBatchParams, Submitter};
 use dp_types::EventType;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -46,14 +46,11 @@ impl StubSubmitter {
 impl Submitter for StubSubmitter {
     fn submit<'a>(
         &'a self,
-        _batch_id: Uuid,
-        _auction_id: Uuid,
-        _matches: &'a [Match],
-        proof: &'a [u8],
+        params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            *self.last_proof.lock() = proof.to_vec();
+            *self.last_proof.lock() = params.proof.clone();
             if self.fail.load(Ordering::SeqCst) {
                 return Err(SettlementError::Rpc("stub forced failure".into()));
             }
@@ -250,7 +247,8 @@ pub async fn place_plaintext_order(
     commitment_key: &str,
     ttl: Duration,
 ) -> Result<dp_types::Order, crate::EngineError> {
+    let trader = alloy_primitives::Address::ZERO;
     let (commit, ct) =
-        crate::engine::build_decrypted_ciphertext(pair, side, price, size, commitment_key, ttl);
+        crate::engine::build_decrypted_ciphertext(trader, pair, side, price, size, commitment_key, ttl);
     engine.place_encrypted_order(commit, vec![], ct).await
 }

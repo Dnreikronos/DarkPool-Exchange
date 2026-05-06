@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dp_aggregator::ProofAggregator;
+use alloy_primitives::Address;
 use dp_crypto::DecryptedOrder;
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::Submitter;
@@ -18,11 +19,28 @@ use crate::Engine;
 fn make_engine() -> (Engine, Arc<MemStore>) {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    engine.register_pair(
+        "BTC-USD".into(),
+        crate::state::PairConfig {
+            base_token: Address::ZERO,
+            quote_token: Address::ZERO,
+        },
+    );
     (engine, store)
 }
 
 fn dec(n: i64) -> Decimal {
     Decimal::new(n, 0)
+}
+
+fn register_btc_usd(engine: &Engine) {
+    engine.register_pair(
+        "BTC-USD".into(),
+        crate::state::PairConfig {
+            base_token: Address::ZERO,
+            quote_token: Address::ZERO,
+        },
+    );
 }
 
 // --- engine_test.go ports ---
@@ -250,6 +268,7 @@ async fn get_auction_history_filters_and_limits() {
 async fn place_encrypted_order_noop_round_trip() {
     let (engine, _) = make_engine();
     let d = DecryptedOrder {
+        trader: Address::ZERO,
         pair: "BTC-USD".into(),
         side: Side::Buy,
         price: dec(100),
@@ -269,6 +288,7 @@ async fn place_encrypted_order_noop_round_trip() {
 async fn place_encrypted_order_uses_engine_derived_commitment() {
     let (engine, store) = make_engine();
     let d = DecryptedOrder {
+        trader: Address::ZERO,
         pair: "BTC-USD".into(),
         side: Side::Buy,
         price: dec(100),
@@ -327,6 +347,7 @@ async fn event_store_contains_no_plaintext() {
     let pair = "SUPER-SECRET-PAIR";
     let commitment_key = "SUPER-SECRET-KEY";
     let d = DecryptedOrder {
+        trader: Address::ZERO,
         pair: pair.into(),
         side: Side::Buy,
         price: Decimal::new(123456789, 4),
@@ -366,6 +387,7 @@ async fn event_store_contains_no_plaintext() {
 async fn recover_from_mem_store() {
     let store = Arc::new(MemStore::new());
     let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine1);
     place_plaintext_order(
         &engine1,
         "BTC-USD",
@@ -391,6 +413,7 @@ async fn recover_from_mem_store() {
     assert_eq!(engine1.active_order_count(), 2);
 
     let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine2);
     engine2.recover().await.unwrap();
     assert_eq!(engine2.active_order_count(), 2);
 }
@@ -402,6 +425,7 @@ async fn recover_from_file_store() {
     let store: Arc<dyn dp_event::Store> = Arc::new(FileStore::open(&path).unwrap());
 
     let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine1);
     place_plaintext_order(
         &engine1,
         "BTC-USD",
@@ -430,6 +454,7 @@ async fn recover_from_file_store() {
 
     let store2: Arc<dyn dp_event::Store> = Arc::new(FileStore::open(&path).unwrap());
     let engine2 = Engine::new(store2, Duration::from_millis(50));
+    register_btc_usd(&engine2);
     engine2.recover().await.unwrap();
     let hist = engine2.get_auction_history(None, 10).unwrap();
     assert_eq!(hist.len(), 1);
@@ -522,6 +547,7 @@ async fn batch_lifecycle_noop_submitter() {
 async fn batch_lifecycle_crash_between_submit_and_confirm() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine);
     let stub = Arc::new(StubSubmitter::new());
     stub.set_fail(true);
     engine.set_submitter(stub.clone() as Arc<dyn Submitter>);
@@ -554,6 +580,7 @@ async fn batch_lifecycle_crash_between_submit_and_confirm() {
 
     // Fix submitter and recover -> retry should succeed.
     let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine2);
     let ok = Arc::new(StubSubmitter::new());
     engine2.set_submitter(ok.clone() as Arc<dyn Submitter>);
     engine2.set_retry_backoff(Duration::ZERO, Duration::ZERO);
@@ -569,6 +596,7 @@ async fn batch_lifecycle_crash_between_submit_and_confirm() {
 async fn recover_re_aggregates_orphan_matches() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine);
     let failing = Arc::new(FailingAggregator);
     engine.set_aggregator(failing as Arc<dyn ProofAggregator>);
 
@@ -604,6 +632,7 @@ async fn recover_re_aggregates_orphan_matches() {
 
     // Recover with working aggregator.
     let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine2);
     let stub_agg = Arc::new(StubAggregator::new(vec![0xab; 32]));
     engine2.set_aggregator(stub_agg.clone() as Arc<dyn ProofAggregator>);
     engine2.recover().await.unwrap();
@@ -621,6 +650,7 @@ async fn batch_lifecycle_recover_from_file_store() {
     let store: Arc<dyn dp_event::Store> = Arc::new(FileStore::open(&path).unwrap());
 
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine);
     let failing_stub = Arc::new(StubSubmitter::new());
     failing_stub.set_fail(true);
     engine.set_submitter(failing_stub as Arc<dyn Submitter>);
@@ -655,6 +685,7 @@ async fn batch_lifecycle_recover_from_file_store() {
 
     let store2: Arc<dyn dp_event::Store> = Arc::new(FileStore::open(&path).unwrap());
     let engine2 = Engine::new(store2, Duration::from_millis(50));
+    register_btc_usd(&engine2);
     let ok = Arc::new(StubSubmitter::new());
     engine2.set_submitter(ok.clone() as Arc<dyn Submitter>);
     engine2.set_retry_backoff(Duration::ZERO, Duration::ZERO);
@@ -707,6 +738,7 @@ async fn batch_lifecycle_retries_on_next_tick() {
 async fn batch_lifecycle_proof_persisted_and_reused_on_resubmit() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine);
     let agg_proof = vec![0xCD; 32];
     let stub_agg = Arc::new(StubAggregator::new(agg_proof.clone()));
     engine.set_aggregator(stub_agg.clone() as Arc<dyn ProofAggregator>);
@@ -744,6 +776,7 @@ async fn batch_lifecycle_proof_persisted_and_reused_on_resubmit() {
 
     // Recover with NoopAggregator: proof should come from event log, not re-aggregation.
     let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    register_btc_usd(&engine2);
     let ok = Arc::new(StubSubmitter::new());
     engine2.set_submitter(ok.clone() as Arc<dyn Submitter>);
     engine2.set_retry_backoff(Duration::ZERO, Duration::ZERO);
@@ -871,12 +904,20 @@ async fn full_pipeline_encrypted_order_to_settlement() {
 
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    engine.register_pair(
+        "ETH-USD".into(),
+        crate::state::PairConfig {
+            base_token: Address::ZERO,
+            quote_token: Address::ZERO,
+        },
+    );
     engine.set_decrypter(decrypter);
     engine.set_aggregator(aggregator.clone());
     engine.set_submitter(submitter);
 
     let encrypt_order = |side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
         let order = DecryptedOrder {
+            trader: Address::ZERO,
             pair: "ETH-USD".into(),
             side,
             price,

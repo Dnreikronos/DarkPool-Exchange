@@ -12,6 +12,7 @@ use dp_api::validation::{
     MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES, MSG_CIPHERTEXT_REQUIRED, MSG_CIPHERTEXT_TOO_LARGE,
     MSG_COMMITMENT_REQUIRED, MSG_PROOF_TOO_LARGE,
 };
+use alloy_primitives::Address;
 use dp_crypto::DecryptedOrder;
 use dp_engine::Engine;
 use dp_event::MemStore;
@@ -48,6 +49,7 @@ fn build_req(d: &DecryptedOrder) -> PlaceOrderRequest {
 fn valid_decrypted() -> DecryptedOrder {
     let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
     DecryptedOrder {
+        trader: Address::ZERO,
         pair: "ETH/USDC".to_string(),
         side: Side::Buy,
         price: Decimal::new(180050, 2),
@@ -66,6 +68,7 @@ async fn place_test_order(
 ) -> String {
     let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
     let d = DecryptedOrder {
+        trader: Address::ZERO,
         pair: pair.to_string(),
         side,
         price: price.parse().unwrap(),

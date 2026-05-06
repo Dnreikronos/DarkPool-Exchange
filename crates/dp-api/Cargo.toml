@@ -44,6 +44,7 @@ humantime.workspace = true
 futures-util.workspace = true
 
 [dev-dependencies]
+alloy-primitives.workspace = true
 http-body-util.workspace = true
 serial_test.workspace = true
 

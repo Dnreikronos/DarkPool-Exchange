@@ -12,4 +12,5 @@ chrono = { workspace = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]
+alloy-primitives = { workspace = true }
 serde_json = { workspace = true }

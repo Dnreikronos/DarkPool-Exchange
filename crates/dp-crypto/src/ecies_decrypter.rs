@@ -61,6 +61,7 @@ mod tests {
 
     fn test_order() -> DecryptedOrder {
         DecryptedOrder {
+            trader: alloy_primitives::Address::ZERO,
             pair: "ETH-USD".into(),
             side: dp_types::Side::Sell,
             price: Decimal::new(180000, 2),
