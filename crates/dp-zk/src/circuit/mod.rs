@@ -533,6 +533,61 @@ pub fn prove<R: RngCore + CryptoRng>(
     Ok(ProofBytes(buf))
 }
 
+/// Compute the 6 public inputs `[match_count, commitments_root, notionals_root,
+/// min_size, min_price, position_limit]` from a witness without building the
+/// full prover circuit. Used by the engine to populate `SubmitBatchParams`.
+pub fn compute_public_inputs(
+    witness: &BatchWitness,
+    match_prices: &[rust_decimal::Decimal],
+    match_sizes: &[rust_decimal::Decimal],
+    batch_size: usize,
+) -> Result<[Fr; 6], ZkError> {
+    if witness.matches.len() != match_prices.len()
+        || match_prices.len() != match_sizes.len()
+    {
+        return Err(ZkError::Witness(
+            "match_prices/match_sizes length mismatch".into(),
+        ));
+    }
+    let min_size = decimal_to_scalar(witness.policy.min_size)?;
+    let min_price = decimal_to_scalar(witness.policy.min_price)?;
+    let pos_limit_i: i128 = witness
+        .policy
+        .position_limit
+        .parse()
+        .map_err(|_| ZkError::Witness("policy.position_limit invalid".into()))?;
+    let position_limit = crate::encoding::signed_to_scalar(pos_limit_i)?;
+
+    let mut leaves: Vec<Fr> = Vec::with_capacity(batch_size * 2);
+    let mut notionals: Vec<Fr> = Vec::with_capacity(batch_size);
+
+    for (i, m) in witness.matches.iter().enumerate() {
+        let cm = build_match(m, match_prices[i], match_sizes[i])?;
+        leaves.push(cm.bid_commitment);
+        leaves.push(cm.ask_commitment);
+        notionals.push(cm.notional);
+    }
+    while leaves.len() < batch_size * 2 {
+        let inactive = build_inactive();
+        leaves.push(inactive.bid_commitment);
+        leaves.push(inactive.ask_commitment);
+        notionals.push(inactive.notional);
+    }
+
+    let commitments_root = hash_root_native(&leaves);
+    let notionals_root = hash_root_native(&notionals);
+    let match_count = Fr::from(witness.matches.len() as u64);
+
+    Ok([
+        match_count,
+        commitments_root,
+        notionals_root,
+        min_size,
+        min_price,
+        position_limit,
+    ])
+}
+
 /// Verify a serialized Groth16 proof against the given public inputs.
 pub fn verify(
     vk: &VerifyingKey<Bn254>,
