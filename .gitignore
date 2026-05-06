@@ -43,9 +43,7 @@ coverage/
 .pnp.js
 .yarn/install-state.gz
 
-# rust (future)
-target/
-Cargo.lock
+# rust
 
 # notes
 gotchas.md
