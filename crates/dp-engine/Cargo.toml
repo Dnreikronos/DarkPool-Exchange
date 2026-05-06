@@ -30,6 +30,7 @@ hex = { workspace = true }
 rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 ark-ff = { workspace = true, features = ["std"] }
+alloy-primitives = { workspace = true }
 
 [dev-dependencies]
 dp-zk-cli = { path = "../dp-zk-cli" }
@@ -38,7 +39,6 @@ ecies = { workspace = true }
 k256 = "0.13"
 rand = "0.8"
 bincode = { workspace = true }
-alloy-primitives = { workspace = true }
 alloy-provider = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-sol-types = { workspace = true }

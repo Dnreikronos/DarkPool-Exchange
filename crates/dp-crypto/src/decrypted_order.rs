@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -5,6 +6,7 @@ use dp_types::Side;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecryptedOrder {
+    pub trader: Address,
     pub pair: String,
     pub side: Side,
     pub price: Decimal,
@@ -19,6 +21,7 @@ mod tests {
 
     fn sample_order() -> DecryptedOrder {
         DecryptedOrder {
+            trader: Address::ZERO,
             pair: "ETH-USD".into(),
             side: Side::Buy,
             price: Decimal::new(250000, 2),

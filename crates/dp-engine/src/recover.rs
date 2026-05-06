@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use alloy_primitives::U256;
 use chrono::{DateTime, Utc};
 use dp_crypto::Decrypter;
 use dp_event::{Event, EventData};
@@ -122,13 +123,33 @@ impl Engine {
             let mut state = self.inner.state.lock();
             self.inner.store.append(&mut events)?;
             state.book.apply(&events[0]);
+
+            let settlement_matches = self.recover_settlement_matches(&matches, &state);
+            let public_inputs = match dp_zk::compute_public_inputs(
+                &witness,
+                &[],
+                &[],
+                self.inner.batch_size,
+            ) {
+                Ok(scalars) => scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
+                Err(e) => {
+                    tracing::warn!(
+                        batch_id = %batch_id,
+                        "compute_public_inputs failed during recovery: {e}; using zeros"
+                    );
+                    [U256::ZERO; 6]
+                }
+            };
+
             state.pending_batches.insert(
                 batch_id,
                 PendingBatch {
                     batch_id,
                     auction_id,
                     matches: matches.clone(),
+                    settlement_matches,
                     proof,
+                    public_inputs,
                     attempts: 0,
                     next_attempt: None,
                     submitting: false,
@@ -139,6 +160,37 @@ impl Engine {
         let mut state = self.inner.state.lock();
         state.recovered = true;
         Ok(())
+    }
+
+    fn recover_settlement_matches(
+        &self,
+        matches: &[dp_auction::Match],
+        state: &crate::state::EngineState,
+    ) -> Vec<dp_settlement::SettlementMatch> {
+        let mut out = Vec::with_capacity(matches.len());
+        for m in matches {
+            let bid = state.book.find_order(m.bid.order_id);
+            let ask = state.book.find_order(m.ask.order_id);
+            let (bid_order, ask_order) = match (bid, ask) {
+                (Some(b), Some(a)) => (b, a),
+                _ => continue,
+            };
+            let pair_cfg = match state.pair_tokens.get(&bid_order.pair) {
+                Some(c) => c,
+                None => continue,
+            };
+            out.push(dp_settlement::SettlementMatch {
+                bid_order_id: m.bid.order_id,
+                ask_order_id: m.ask.order_id,
+                bid_trader: bid_order.trader,
+                ask_trader: ask_order.trader,
+                base_token: pair_cfg.base_token,
+                quote_token: pair_cfg.quote_token,
+                price: m.price,
+                size: m.size,
+            });
+        }
+        out
     }
 
     async fn replay_event(
@@ -192,6 +244,7 @@ impl Engine {
                         .unwrap_or_else(|_| chrono::Duration::seconds(600));
                 let order = Order {
                     id: *order_id,
+                    trader: decrypted.trader,
                     pair: decrypted.pair.clone(),
                     side: decrypted.side,
                     price: decrypted.price,
@@ -266,13 +319,19 @@ impl Engine {
                     .collect();
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
+
+                let settlement_matches = self.recover_settlement_matches(&matches, &state);
+                let public_inputs = [U256::ZERO; 6];
+
                 state.pending_batches.insert(
                     *batch_id,
                     PendingBatch {
                         batch_id: *batch_id,
                         auction_id: *auction_id,
                         matches,
+                        settlement_matches,
                         proof: proof.clone(),
+                        public_inputs,
                         attempts: 0,
                         next_attempt: None,
                         submitting: false,

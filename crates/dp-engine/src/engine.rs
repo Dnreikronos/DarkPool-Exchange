@@ -89,6 +89,7 @@ pub(crate) struct Inner {
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
     pub(crate) salt_nonce: [u8; 32],
+    pub(crate) batch_size: usize,
 }
 
 #[derive(Clone)]
@@ -118,6 +119,7 @@ impl Engine {
                 subscribers: tx,
                 auction_interval: interval,
                 salt_nonce,
+                batch_size: 8,
             }),
         };
         // Suppress the boot warning under `cfg(test)` — every engine test
@@ -161,6 +163,12 @@ impl Engine {
         let mut state = self.inner.state.lock();
         state.min_backoff = min;
         state.max_backoff = max;
+    }
+
+    pub fn register_pair(&self, pair: String, config: crate::state::PairConfig) {
+        let mut state = self.inner.state.lock();
+        state.pairs.insert(pair.clone());
+        state.pair_tokens.insert(pair, config);
     }
 
     pub fn auction_interval(&self) -> Duration {
@@ -213,6 +221,7 @@ impl Engine {
 
         let order = Order {
             id: Uuid::new_v4(),
+            trader: decrypted.trader,
             pair: decrypted.pair.clone(),
             side: decrypted.side,
             price: decrypted.price,
@@ -528,6 +537,7 @@ pub(crate) fn order_matched_to_match(
 
 #[cfg(test)]
 pub(crate) fn build_decrypted_ciphertext(
+    trader: alloy_primitives::Address,
     pair: &str,
     side: Side,
     price: Decimal,
@@ -536,6 +546,7 @@ pub(crate) fn build_decrypted_ciphertext(
     ttl: Duration,
 ) -> (Vec<u8>, Vec<u8>) {
     let d = dp_crypto::DecryptedOrder {
+        trader,
         pair: pair.to_string(),
         side,
         price,

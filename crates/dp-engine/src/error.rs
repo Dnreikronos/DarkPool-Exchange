@@ -47,4 +47,7 @@ pub enum EngineError {
 
     #[error("commitment encoding: {0}")]
     CommitmentEncoding(String),
+
+    #[error("pair not configured for settlement: {pair}")]
+    PairNotConfigured { pair: String },
 }
