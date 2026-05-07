@@ -1,5 +1,4 @@
 [graph]
-targets = []
 all-features = false
 no-default-features = false
 
