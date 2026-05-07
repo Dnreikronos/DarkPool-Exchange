@@ -38,7 +38,10 @@ pub fn decimal_to_scalar(d: Decimal) -> Result<Fr, EncodingError> {
     if !(0..MAX_ENCODED).contains(&int) {
         return Err(EncodingError::Overflow(d));
     }
-    debug_assert!(int >= 0, "negative int should have been caught by sign check");
+    debug_assert!(
+        int >= 0,
+        "negative int should have been caught by sign check"
+    );
     Ok(Fr::from(int as u128))
 }
 
@@ -97,20 +100,29 @@ mod tests {
     #[test]
     fn rejects_negative() {
         let d = Decimal::new(-1, 0);
-        assert!(matches!(decimal_to_scalar(d), Err(EncodingError::Negative(_))));
+        assert!(matches!(
+            decimal_to_scalar(d),
+            Err(EncodingError::Negative(_))
+        ));
     }
 
     #[test]
     fn rejects_overflow() {
         let d = Decimal::from(i64::MAX);
-        assert!(matches!(decimal_to_scalar(d), Err(EncodingError::Overflow(_))));
+        assert!(matches!(
+            decimal_to_scalar(d),
+            Err(EncodingError::Overflow(_))
+        ));
     }
 
     #[test]
     fn rejects_excess_precision() {
         // 1e-9 cannot be represented at 8dp.
         let d = Decimal::new(1, 9);
-        assert!(matches!(decimal_to_scalar(d), Err(EncodingError::Precision(_))));
+        assert!(matches!(
+            decimal_to_scalar(d),
+            Err(EncodingError::Precision(_))
+        ));
     }
 
     #[test]

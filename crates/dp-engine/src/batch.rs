@@ -64,11 +64,7 @@ impl Engine {
                 .pending_batches
                 .iter()
                 .filter(|(id, pb)| {
-                    !skip.contains(*id)
-                        && pb
-                            .next_attempt
-                            .map(|t| now >= t)
-                            .unwrap_or(true)
+                    !skip.contains(*id) && pb.next_attempt.map(|t| now >= t).unwrap_or(true)
                 })
                 .map(|(id, _)| *id)
                 .collect()
@@ -109,7 +105,13 @@ impl Engine {
             let proof = pb.proof.clone();
             let public_inputs = pb.public_inputs;
             let timeout = state.submit_timeout;
-            (auction_id, settlement_matches, proof, public_inputs, timeout)
+            (
+                auction_id,
+                settlement_matches,
+                proof,
+                public_inputs,
+                timeout,
+            )
         };
 
         let (auction_id, settlement_matches, proof, public_inputs, timeout) = snapshot;
@@ -123,9 +125,7 @@ impl Engine {
             matches: settlement_matches,
         };
 
-        let result =
-            tokio::time::timeout(timeout, submitter.submit(&params))
-                .await;
+        let result = tokio::time::timeout(timeout, submitter.submit(&params)).await;
 
         let submit_outcome: Result<String, SettlementError> = match result {
             Ok(r) => r,
@@ -202,4 +202,3 @@ impl BatchSink for Engine {
         })
     }
 }
-

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dp_aggregator::ProofAggregator;
 use alloy_primitives::Address;
+use dp_aggregator::ProofAggregator;
 use dp_crypto::DecryptedOrder;
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::Submitter;
@@ -306,7 +306,11 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
     let (persisted, nonce) = events
         .iter()
         .find_map(|e| match &e.data {
-            EventData::OrderPlaced { commitment, salt_nonce, .. } => {
+            EventData::OrderPlaced {
+                commitment,
+                salt_nonce,
+                ..
+            } => {
                 let n: [u8; 32] = salt_nonce.as_slice().try_into().unwrap();
                 Some((commitment.clone(), n))
             }
@@ -324,7 +328,11 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
     );
 
     assert_eq!(persisted, expected.unwrap().to_vec());
-    assert_ne!(persisted, vec![0xAB; 32], "engine must not echo client value");
+    assert_ne!(
+        persisted,
+        vec![0xAB; 32],
+        "engine must not echo client value"
+    );
 }
 
 #[tokio::test]
@@ -376,10 +384,7 @@ async fn event_store_contains_no_plaintext() {
             !s.contains("123456789"),
             "price digits leaked in event: {s}"
         );
-        assert!(
-            !s.contains("987654321"),
-            "size digits leaked in event: {s}"
-        );
+        assert!(!s.contains("987654321"), "size digits leaked in event: {s}");
     }
 }
 

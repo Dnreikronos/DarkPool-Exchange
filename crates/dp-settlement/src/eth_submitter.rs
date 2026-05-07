@@ -185,6 +185,9 @@ mod tests {
         let matches: Vec<SettlementMatch> = (0..257).map(|_| test_match()).collect();
         let params = test_params(matches);
         let err = EthSubmitter::<alloy_provider::RootProvider>::pack_submit(&params).unwrap_err();
-        assert!(matches!(err, SettlementError::TooManyMatches { count: 257 }));
+        assert!(matches!(
+            err,
+            SettlementError::TooManyMatches { count: 257 }
+        ));
     }
 }

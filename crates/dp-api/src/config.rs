@@ -4,7 +4,10 @@ use std::time::Duration;
 use clap::Parser;
 
 #[derive(Parser, Clone, Debug)]
-#[command(name = "darkpool-server", about = "Dark Pool Exchange operator API server")]
+#[command(
+    name = "darkpool-server",
+    about = "Dark Pool Exchange operator API server"
+)]
 pub struct Config {
     #[arg(long, env = "DARKPOOL_GRPC_ADDR", default_value = "0.0.0.0:9090")]
     pub grpc_addr: SocketAddr,
@@ -109,7 +112,11 @@ impl Config {
 
 fn opt(s: &str) -> Option<&str> {
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {

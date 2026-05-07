@@ -80,12 +80,11 @@ fn load_and_truncate(file: &mut File) -> Result<(Vec<Event>, u64, u64), EventErr
             Err(e) => return Err(e.into()),
         }
 
-        let evt: Event = bincode::deserialize(&payload).map_err(|source| {
-            EventError::CorruptEvent {
+        let evt: Event =
+            bincode::deserialize(&payload).map_err(|source| EventError::CorruptEvent {
                 offset: good_end,
                 source,
-            }
-        })?;
+            })?;
 
         if evt.seq > seq {
             seq = evt.seq;
@@ -142,8 +141,8 @@ impl Store for FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::DateTime;
     use crate::EventData;
+    use chrono::DateTime;
     use dp_types::EventType;
     use uuid::Uuid;
 

@@ -45,9 +45,7 @@ async fn grpc_server_accepts_real_client() {
     let server_task = tokio::spawn(async move {
         Server::builder()
             .add_service(DarkPoolServiceServer::new(handler))
-            .serve_with_incoming_shutdown(incoming, async move {
-                server_cancel.cancelled().await
-            })
+            .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
             .await
             .expect("grpc server");
     });
@@ -58,7 +56,11 @@ async fn grpc_server_accepts_real_client() {
         let mut last_err: Option<tonic::transport::Error> = None;
         let mut ch = None;
         for _ in 0..50 {
-            match Channel::from_shared(endpoint.clone()).unwrap().connect().await {
+            match Channel::from_shared(endpoint.clone())
+                .unwrap()
+                .connect()
+                .await
+            {
                 Ok(c) => {
                     ch = Some(c);
                     break;
@@ -121,9 +123,7 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
             .layer(auth)
             .layer(rl)
             .add_service(DarkPoolServiceServer::new(handler))
-            .serve_with_incoming_shutdown(incoming, async move {
-                server_cancel.cancelled().await
-            })
+            .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
             .await
             .expect("grpc server");
     });
@@ -132,7 +132,11 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
     let channel = {
         let mut ch = None;
         for _ in 0..50 {
-            if let Ok(c) = Channel::from_shared(endpoint.clone()).unwrap().connect().await {
+            if let Ok(c) = Channel::from_shared(endpoint.clone())
+                .unwrap()
+                .connect()
+                .await
+            {
                 ch = Some(c);
                 break;
             }
@@ -144,7 +148,9 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
     // No api key → Unauthenticated.
     let mut anon = DarkPoolServiceClient::new(channel.clone());
     let err = anon
-        .get_order_book(GetOrderBookRequest { pair: "ETH/USDC".into() })
+        .get_order_book(GetOrderBookRequest {
+            pair: "ETH/USDC".into(),
+        })
         .await
         .expect_err("missing key must be rejected");
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
@@ -160,11 +166,15 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
         },
     );
     authed
-        .get_order_book(GetOrderBookRequest { pair: "ETH/USDC".into() })
+        .get_order_book(GetOrderBookRequest {
+            pair: "ETH/USDC".into(),
+        })
         .await
         .expect("first authed request");
     let err = authed
-        .get_order_book(GetOrderBookRequest { pair: "ETH/USDC".into() })
+        .get_order_book(GetOrderBookRequest {
+            pair: "ETH/USDC".into(),
+        })
         .await
         .expect_err("second request must be rate-limited");
     assert_eq!(err.code(), tonic::Code::ResourceExhausted);
@@ -187,16 +197,15 @@ async fn rest_server_accepts_real_http() {
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-            .with_graceful_shutdown(async move { shutdown_cancel.cancelled().await })
-            .await
-            .expect("rest server");
+        .with_graceful_shutdown(async move { shutdown_cancel.cancelled().await })
+        .await
+        .expect("rest server");
     });
 
     let body = http_get(addr, "/v1/orderbook?pair=ETH/USDC").await;
     let (status, payload) = parse_http_response(&body);
     assert_eq!(status, 200, "raw response: {body}");
-    let json: serde_json::Value =
-        serde_json::from_str(payload).expect("rest body should be JSON");
+    let json: serde_json::Value = serde_json::from_str(payload).expect("rest body should be JSON");
     assert_eq!(json["pair"], "ETH/USDC");
     assert!(json["bids"].as_array().unwrap().is_empty());
     assert!(json["asks"].as_array().unwrap().is_empty());

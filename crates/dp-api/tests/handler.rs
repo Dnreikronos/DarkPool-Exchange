@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use alloy_primitives::Address;
 use dp_api::handler::ApiHandler;
 use dp_api::pb::dark_pool_service_server::DarkPoolService;
 use dp_api::pb::{
@@ -12,7 +13,6 @@ use dp_api::validation::{
     MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES, MSG_CIPHERTEXT_REQUIRED, MSG_CIPHERTEXT_TOO_LARGE,
     MSG_COMMITMENT_REQUIRED, MSG_PROOF_TOO_LARGE,
 };
-use alloy_primitives::Address;
 use dp_crypto::DecryptedOrder;
 use dp_engine::Engine;
 use dp_event::MemStore;

@@ -134,13 +134,8 @@ pub fn poseidon_config() -> PoseidonConfig<Fr> {
     let capacity = 1;
     let modulus_bits = <Fr as ark_ff::PrimeField>::MODULUS_BIT_SIZE as u64;
 
-    let (ark, mds) = find_poseidon_ark_and_mds::<Fr>(
-        modulus_bits,
-        rate,
-        full_rounds,
-        partial_rounds,
-        0,
-    );
+    let (ark, mds) =
+        find_poseidon_ark_and_mds::<Fr>(modulus_bits, rate, full_rounds, partial_rounds, 0);
 
     PoseidonConfig::new(
         full_rounds as usize,

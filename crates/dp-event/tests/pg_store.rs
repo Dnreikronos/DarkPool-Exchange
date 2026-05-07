@@ -101,11 +101,7 @@ impl Drop for PgSandbox {
                 .build()
                 .expect("rt");
             rt.block_on(async {
-                if let Ok(pool) = PgPoolOptions::new()
-                    .max_connections(1)
-                    .connect(&url)
-                    .await
-                {
+                if let Ok(pool) = PgPoolOptions::new().max_connections(1).connect(&url).await {
                     let _ = sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema))
                         .execute(&pool)
                         .await;
@@ -205,9 +201,7 @@ async fn concurrent_appends() {
     let total = (writers * per_writer) as u64;
     assert_eq!(store.last_seq(), total);
 
-    let mut all = store
-        .read_from(0, (total as usize) + 1)
-        .expect("read all");
+    let mut all = store.read_from(0, (total as usize) + 1).expect("read all");
     assert_eq!(all.len() as u64, total);
 
     all.sort_by_key(|e| e.seq);

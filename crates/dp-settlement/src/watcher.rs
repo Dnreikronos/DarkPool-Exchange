@@ -63,10 +63,7 @@ impl<P: Provider + Send + Sync + 'static, S: BatchSink> Watcher<P, S> {
                     }
                     consecutive_failures = consecutive_failures.saturating_add(1);
                     if consecutive_failures >= CONSECUTIVE_FAIL_THRESHOLD {
-                        tracing::error!(
-                            consecutive_failures,
-                            "settlement watcher degraded: {e}"
-                        );
+                        tracing::error!(consecutive_failures, "settlement watcher degraded: {e}");
                     } else {
                         tracing::warn!("settlement watcher: {e} (reconnect in {backoff:?})");
                     }

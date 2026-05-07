@@ -18,10 +18,7 @@ pub struct PgStore {
 
 impl PgStore {
     pub async fn connect(url: &str) -> Result<Self, EventError> {
-        let pool = PgPoolOptions::new()
-            .max_connections(8)
-            .connect(url)
-            .await?;
+        let pool = PgPoolOptions::new().max_connections(8).connect(url).await?;
         Self::from_pool(pool).await
     }
 

@@ -59,10 +59,22 @@ mod tests {
         assert!(json.get("Pair").is_some(), "expected Pair field");
         assert!(json.get("Side").is_some(), "expected Side field");
         assert!(json.get("Price").is_some(), "expected Price field");
-        assert!(json.get("RemainingSize").is_some(), "expected RemainingSize field");
-        assert!(json.get("CommitmentKey").is_some(), "expected CommitmentKey field");
-        assert!(json.get("EncryptedPayload").is_some(), "expected EncryptedPayload field");
-        assert!(json.get("SubmittedAt").is_some(), "expected SubmittedAt field");
+        assert!(
+            json.get("RemainingSize").is_some(),
+            "expected RemainingSize field"
+        );
+        assert!(
+            json.get("CommitmentKey").is_some(),
+            "expected CommitmentKey field"
+        );
+        assert!(
+            json.get("EncryptedPayload").is_some(),
+            "expected EncryptedPayload field"
+        );
+        assert!(
+            json.get("SubmittedAt").is_some(),
+            "expected SubmittedAt field"
+        );
         assert!(json.get("ExpiresAt").is_some(), "expected ExpiresAt field");
     }
 

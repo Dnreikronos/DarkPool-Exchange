@@ -11,8 +11,8 @@ use dp_settlement::{NoopSubmitter, Submitter};
 use dp_types::Side;
 use dp_types::{DarkPoolError, EventType, Order};
 use parking_lot::{Mutex, RwLock};
-use rust_decimal::Decimal;
 use rand::RngCore;
+use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 #[cfg_attr(test, allow(unused_imports))]
@@ -205,7 +205,9 @@ impl Engine {
             return Err(EngineError::Validation(DarkPoolError::SizeMustBePositive));
         }
         if decrypted.commitment_key.is_empty() {
-            return Err(EngineError::Validation(DarkPoolError::CommitmentKeyRequired));
+            return Err(EngineError::Validation(
+                DarkPoolError::CommitmentKeyRequired,
+            ));
         }
 
         let default_ttl = self.inner.state.lock().default_ttl;
@@ -264,22 +266,34 @@ impl Engine {
         let secrets = self.inner.secrets.lock();
         let mut match_witnesses = Vec::with_capacity(matches.len());
         for m in matches {
-            let bid_secret = secrets
-                .get(&m.bid.order_id)
-                .cloned()
-                .ok_or(EngineError::WitnessSecretMissing { order_id: m.bid.order_id })?;
-            let ask_secret = secrets
-                .get(&m.ask.order_id)
-                .cloned()
-                .ok_or(EngineError::WitnessSecretMissing { order_id: m.ask.order_id })?;
-            let bid_order = orders
-                .get(&m.bid.order_id)
-                .cloned()
-                .ok_or(EngineError::WitnessOrderMissing { order_id: m.bid.order_id })?;
-            let ask_order = orders
-                .get(&m.ask.order_id)
-                .cloned()
-                .ok_or(EngineError::WitnessOrderMissing { order_id: m.ask.order_id })?;
+            let bid_secret =
+                secrets
+                    .get(&m.bid.order_id)
+                    .cloned()
+                    .ok_or(EngineError::WitnessSecretMissing {
+                        order_id: m.bid.order_id,
+                    })?;
+            let ask_secret =
+                secrets
+                    .get(&m.ask.order_id)
+                    .cloned()
+                    .ok_or(EngineError::WitnessSecretMissing {
+                        order_id: m.ask.order_id,
+                    })?;
+            let bid_order =
+                orders
+                    .get(&m.bid.order_id)
+                    .cloned()
+                    .ok_or(EngineError::WitnessOrderMissing {
+                        order_id: m.bid.order_id,
+                    })?;
+            let ask_order =
+                orders
+                    .get(&m.ask.order_id)
+                    .cloned()
+                    .ok_or(EngineError::WitnessOrderMissing {
+                        order_id: m.ask.order_id,
+                    })?;
             let bid = leg_witness_from(bid_secret, bid_order, 0);
             let ask = leg_witness_from(ask_secret, ask_order, 1);
             match_witnesses.push(dp_zk::witness::MatchWitness { bid, ask });
@@ -560,4 +574,3 @@ pub(crate) fn build_decrypted_ciphertext(
     // the engine via `compute_poseidon_commitment`.
     (vec![0u8; 32], ct)
 }
-

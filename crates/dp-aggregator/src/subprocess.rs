@@ -194,7 +194,12 @@ mod tests {
         let (_dir, path) = make_executable("#!/bin/sh\nprintf 'deadbeef'");
         let agg = SubprocessAggregator::new(&path, None).unwrap();
         let proof = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
+            .aggregate(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                &test_matches(),
+                &empty_witness(),
+            )
             .await
             .unwrap();
         assert_eq!(proof, b"deadbeef");
@@ -205,7 +210,12 @@ mod tests {
         let (_dir, path) = make_executable("#!/bin/sh\necho 'boom' >&2\nexit 3");
         let agg = SubprocessAggregator::new(&path, None).unwrap();
         let err = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
+            .aggregate(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                &test_matches(),
+                &empty_witness(),
+            )
             .await
             .unwrap_err();
         match err {
@@ -220,10 +230,14 @@ mod tests {
     #[tokio::test]
     async fn timeout() {
         let (_dir, path) = make_executable("#!/bin/sh\nsleep 60");
-        let agg =
-            SubprocessAggregator::new(&path, Some(Duration::from_millis(100))).unwrap();
+        let agg = SubprocessAggregator::new(&path, Some(Duration::from_millis(100))).unwrap();
         let err = agg
-            .aggregate(Uuid::new_v4(), Uuid::new_v4(), &test_matches(), &empty_witness())
+            .aggregate(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                &test_matches(),
+                &empty_witness(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, AggregatorError::Timeout));

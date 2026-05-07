@@ -33,17 +33,18 @@ impl Engine {
 
         let mut batches_to_submit = Vec::with_capacity(pending.len());
         for p in pending {
-            let witness = match self.build_batch_witness(p.batch_id, p.auction_id, &p.matches, &p.orders) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!(
-                        batch_id = %p.batch_id,
-                        auction_id = %p.auction_id,
-                        "build witness failed, skipping proof: {e}"
-                    );
-                    continue;
-                }
-            };
+            let witness =
+                match self.build_batch_witness(p.batch_id, p.auction_id, &p.matches, &p.orders) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        tracing::error!(
+                            batch_id = %p.batch_id,
+                            auction_id = %p.auction_id,
+                            "build witness failed, skipping proof: {e}"
+                        );
+                        continue;
+                    }
+                };
             let proof = match aggregator
                 .aggregate(p.batch_id, p.auction_id, &p.matches, &witness)
                 .await
@@ -88,7 +89,9 @@ impl Engine {
                 }
             };
 
-            if let Err(e) = self.finalize_pending_batch(&p, proof, public_inputs, settlement_matches) {
+            if let Err(e) =
+                self.finalize_pending_batch(&p, proof, public_inputs, settlement_matches)
+            {
                 tracing::warn!(batch_id = %p.batch_id, "finalize batch: {e}");
                 continue;
             }
@@ -124,24 +127,21 @@ impl Engine {
     ) -> Result<Vec<SettlementMatch>, crate::error::EngineError> {
         let mut out = Vec::with_capacity(p.matches.len());
         for m in &p.matches {
-            let bid_order = p
-                .orders
-                .get(&m.bid.order_id)
-                .ok_or(crate::error::EngineError::WitnessOrderMissing {
+            let bid_order = p.orders.get(&m.bid.order_id).ok_or(
+                crate::error::EngineError::WitnessOrderMissing {
                     order_id: m.bid.order_id,
-                })?;
-            let ask_order = p
-                .orders
-                .get(&m.ask.order_id)
-                .ok_or(crate::error::EngineError::WitnessOrderMissing {
+                },
+            )?;
+            let ask_order = p.orders.get(&m.ask.order_id).ok_or(
+                crate::error::EngineError::WitnessOrderMissing {
                     order_id: m.ask.order_id,
-                })?;
-            let pair_cfg = state
-                .pair_tokens
-                .get(&bid_order.pair)
-                .ok_or_else(|| crate::error::EngineError::PairNotConfigured {
+                },
+            )?;
+            let pair_cfg = state.pair_tokens.get(&bid_order.pair).ok_or_else(|| {
+                crate::error::EngineError::PairNotConfigured {
                     pair: bid_order.pair.clone(),
-                })?;
+                }
+            })?;
             out.push(SettlementMatch {
                 bid_order_id: m.bid.order_id,
                 ask_order_id: m.ask.order_id,
@@ -272,9 +272,7 @@ impl Engine {
                 matches: result
                     .matches
                     .iter()
-                    .map(|m| {
-                        order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size)
-                    })
+                    .map(|m| order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size))
                     .collect(),
                 orders: order_snapshot,
                 auction_at: now,

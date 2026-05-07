@@ -91,5 +91,11 @@ pub fn build_witness(input: AggregatorInput) -> Result<ParsedInput, String> {
         matches: private,
         policy,
     };
-    Ok(ParsedInput { batch_id, auction_ids, witness, prices, sizes })
+    Ok(ParsedInput {
+        batch_id,
+        auction_ids,
+        witness,
+        prices,
+        sizes,
+    })
 }

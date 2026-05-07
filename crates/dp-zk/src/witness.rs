@@ -60,8 +60,8 @@ pub struct PolicyDefault;
 impl PolicyDefault {
     pub fn into_policy(&self) -> Policy {
         Policy {
-            min_size: Decimal::new(1, 8),         // 1e-8
-            min_price: Decimal::new(1, 8),        // 1e-8
+            min_size: Decimal::new(1, 8),  // 1e-8
+            min_price: Decimal::new(1, 8), // 1e-8
             // 2^58 — large enough to be effectively unbounded, small
             // enough to fit the 60-bit encoder cap with margin.
             position_limit: (1i128 << 58).to_string(),

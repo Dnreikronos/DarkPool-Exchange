@@ -59,7 +59,9 @@ impl OrderBook {
         let inner = self.inner.read();
         let mut out: Vec<Order> = inner.bids.values().cloned().collect();
         out.sort_by(|a, b| {
-            b.price.cmp(&a.price).then(a.submitted_at.cmp(&b.submitted_at))
+            b.price
+                .cmp(&a.price)
+                .then(a.submitted_at.cmp(&b.submitted_at))
         });
         out
     }
@@ -68,7 +70,9 @@ impl OrderBook {
         let inner = self.inner.read();
         let mut out: Vec<Order> = inner.asks.values().cloned().collect();
         out.sort_by(|a, b| {
-            a.price.cmp(&b.price).then(a.submitted_at.cmp(&b.submitted_at))
+            a.price
+                .cmp(&b.price)
+                .then(a.submitted_at.cmp(&b.submitted_at))
         });
         out
     }
@@ -93,11 +97,7 @@ impl OrderBook {
 
     pub fn find_order(&self, id: Uuid) -> Option<Order> {
         let inner = self.inner.read();
-        inner
-            .bids
-            .get(&id)
-            .or_else(|| inner.asks.get(&id))
-            .cloned()
+        inner.bids.get(&id).or_else(|| inner.asks.get(&id)).cloned()
     }
 
     pub fn has_order(&self, id: Uuid) -> bool {

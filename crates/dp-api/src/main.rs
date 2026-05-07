@@ -70,8 +70,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(key_dir) = cfg.zk_proving_key_dir() {
             validate_zk_key_dir(key_dir)?;
         } else {
-            return Err("DARKPOOL_ZK_PROVING_KEY must be set when DARKPOOL_AGGREGATOR_BIN is set"
-                .into());
+            return Err(
+                "DARKPOOL_ZK_PROVING_KEY must be set when DARKPOOL_AGGREGATOR_BIN is set".into(),
+            );
         }
         let timeout = if cfg.aggregator_timeout.is_zero() {
             None
@@ -151,17 +152,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
     let rest_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(http_addr).await.map_err(|e| {
-            Box::<dyn std::error::Error + Send + Sync>::from(format!("bind {}: {}", http_addr, e))
-        })?;
+        let listener = tokio::net::TcpListener::bind(http_addr)
+            .await
+            .map_err(|e| {
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "bind {}: {}",
+                    http_addr, e
+                ))
+            })?;
         info!(addr = %http_addr, "REST server listening");
         axum::serve(
             listener,
             rest_app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-            .with_graceful_shutdown(async move { http_cancel.cancelled().await })
-            .await
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
+        .with_graceful_shutdown(async move { http_cancel.cancelled().await })
+        .await
+        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
     });
 
     tokio::select! {
@@ -237,10 +243,7 @@ mod tests {
 
     #[test]
     fn passthrough_without_userinfo() {
-        assert_eq!(
-            sanitize_db_url("postgres://host/db"),
-            "postgres://host/db"
-        );
+        assert_eq!(sanitize_db_url("postgres://host/db"), "postgres://host/db");
     }
 
     #[test]

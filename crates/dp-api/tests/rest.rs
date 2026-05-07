@@ -97,7 +97,9 @@ async fn place_order_missing_fields_400() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"commitment":"","proof":"","encryptedPayload":""}"#))
+                .body(Body::from(
+                    r#"{"commitment":"","proof":"","encryptedPayload":""}"#,
+                ))
                 .unwrap(),
         )
         .await

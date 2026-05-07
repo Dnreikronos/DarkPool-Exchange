@@ -27,8 +27,8 @@ pub type SharedHandler = Arc<ApiHandler>;
 const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
 
 pub fn router(handler: SharedHandler) -> Router {
-    let place_order = post(rest_place_order)
-        .layer(RequestBodyLimitLayer::new(PLACE_ORDER_BODY_LIMIT));
+    let place_order =
+        post(rest_place_order).layer(RequestBodyLimitLayer::new(PLACE_ORDER_BODY_LIMIT));
     Router::new()
         .route("/v1/orders", place_order)
         .route(
@@ -307,6 +307,8 @@ mod base64_bytes {
         if s.is_empty() {
             return Ok(Vec::new());
         }
-        STANDARD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
+        STANDARD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)
     }
 }

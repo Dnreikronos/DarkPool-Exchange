@@ -83,13 +83,14 @@ fn main() -> ExitCode {
         }
     };
 
-    let circuit = match dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, args.batch_size) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("build circuit: {e}");
-            return ExitCode::from(4);
-        }
-    };
+    let circuit =
+        match dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, args.batch_size) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("build circuit: {e}");
+                return ExitCode::from(4);
+            }
+        };
 
     let mut rng = StdRng::from_entropy();
     let proof = match dp_zk::prove(&pk, circuit, &mut rng) {
