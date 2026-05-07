@@ -4,7 +4,6 @@ no-default-features = false
 
 [advisories]
 ignore = [
-    "RUSTSEC-2023-0071",
     "RUSTSEC-2025-0055",
 ]
 
@@ -22,7 +21,13 @@ allow = [
     "OpenSSL",
     "CC0-1.0",
     "MPL-2.0",
+    "Unlicense",
 ]
+exceptions = []
+
+[licenses.private]
+registries = []
+ignore = true
 
 [bans]
 multiple-versions = "warn"
