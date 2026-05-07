@@ -231,7 +231,7 @@ fn sanitize_db_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_db_url;
+    use super::{sanitize_db_url, validate_zk_key_dir};
 
     #[test]
     fn strips_credentials() {
@@ -249,5 +249,27 @@ mod tests {
     #[test]
     fn passthrough_non_url() {
         assert_eq!(sanitize_db_url("nonsense"), "nonsense");
+    }
+
+    #[test]
+    fn validate_zk_key_dir_missing_dir() {
+        let err = validate_zk_key_dir("/nonexistent/path").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn validate_zk_key_dir_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = validate_zk_key_dir(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn validate_zk_key_dir_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["proving_key.bin", "verifying_key.bin", "keys_metadata.json"] {
+            std::fs::write(dir.path().join(f), b"x").unwrap();
+        }
+        assert!(validate_zk_key_dir(dir.path().to_str().unwrap()).is_ok());
     }
 }
