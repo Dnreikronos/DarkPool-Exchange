@@ -312,3 +312,113 @@ mod base64_bytes {
             .map_err(serde::de::Error::custom)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn side_str_buy() {
+        assert_eq!(side_str(pb::Side::Buy as i32), "SIDE_BUY");
+    }
+
+    #[test]
+    fn side_str_sell() {
+        assert_eq!(side_str(pb::Side::Sell as i32), "SIDE_SELL");
+    }
+
+    #[test]
+    fn side_str_unspecified() {
+        assert_eq!(side_str(pb::Side::Unspecified as i32), "SIDE_UNSPECIFIED");
+    }
+
+    #[test]
+    fn side_str_invalid_falls_back() {
+        assert_eq!(side_str(999), "SIDE_UNSPECIFIED");
+    }
+
+    #[test]
+    fn api_error_maps_invalid_argument_to_400() {
+        let err = ApiError(tonic::Status::invalid_argument("bad"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn api_error_maps_not_found_to_404() {
+        let err = ApiError(tonic::Status::not_found("gone"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn api_error_maps_unauthenticated_to_401() {
+        let err = ApiError(tonic::Status::unauthenticated("no auth"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn api_error_maps_permission_denied_to_403() {
+        let err = ApiError(tonic::Status::permission_denied("nope"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn api_error_maps_resource_exhausted_to_429() {
+        let err = ApiError(tonic::Status::resource_exhausted("slow down"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn api_error_maps_internal_to_500() {
+        let err = ApiError(tonic::Status::internal("oops"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn base64_deserialize_empty_string() {
+        let json = serde_json::json!("");
+        let result: Vec<u8> =
+            base64_bytes::deserialize(json).expect("empty string should produce empty vec");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn base64_deserialize_valid() {
+        let json = serde_json::json!("aGVsbG8=");
+        let result: Vec<u8> = base64_bytes::deserialize(json).expect("valid base64 should decode");
+        assert_eq!(result, b"hello");
+    }
+
+    #[test]
+    fn base64_deserialize_invalid() {
+        let json = serde_json::json!("!!!invalid!!!");
+        let result: Result<Vec<u8>, _> = base64_bytes::deserialize(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn order_info_json_conversion() {
+        let info = pb::OrderInfo {
+            id: "abc".into(),
+            pair: "BTC/USD".into(),
+            side: pb::Side::Buy as i32,
+            price: "100.5".into(),
+            size: "1.0".into(),
+            remaining_size: "0.5".into(),
+            commitment_key: "ck".into(),
+            submitted_at_unix: 1000,
+            expires_at_unix: 2000,
+        };
+        let json: OrderInfoJson = info.into();
+        assert_eq!(json.side, "SIDE_BUY");
+        assert_eq!(json.pair, "BTC/USD");
+        assert_eq!(json.submitted_at_unix, "1000");
+        assert_eq!(json.expires_at_unix, "2000");
+    }
+}
