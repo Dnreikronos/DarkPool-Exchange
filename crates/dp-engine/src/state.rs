@@ -7,9 +7,7 @@ use dp_book::OrderBook;
 use dp_settlement::SettlementMatch;
 use uuid::Uuid;
 
-use crate::{
-    DEFAULT_MAX_BACKOFF, DEFAULT_MIN_BACKOFF, DEFAULT_ORDER_TTL, DEFAULT_SUBMIT_TIMEOUT,
-};
+use crate::{DEFAULT_MAX_BACKOFF, DEFAULT_MIN_BACKOFF, DEFAULT_ORDER_TTL, DEFAULT_SUBMIT_TIMEOUT};
 
 #[derive(Clone, Debug)]
 pub struct PairConfig {

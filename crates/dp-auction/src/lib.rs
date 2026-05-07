@@ -247,10 +247,7 @@ mod tests {
 
     #[test]
     fn clearing_price_maximizes_volume() {
-        let bids = vec![
-            new_order(Side::Buy, 110, 10),
-            new_order(Side::Buy, 100, 20),
-        ];
+        let bids = vec![new_order(Side::Buy, 110, 10), new_order(Side::Buy, 100, 20)];
         let asks = vec![
             new_order(Side::Sell, 90, 10),
             new_order(Side::Sell, 100, 10),

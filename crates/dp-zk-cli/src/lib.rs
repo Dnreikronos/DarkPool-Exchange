@@ -43,6 +43,7 @@ pub fn resolve_keys_dir(flag: Option<PathBuf>) -> PathBuf {
 /// Output of [`build_witness`]: parsed batch metadata, per-match
 /// (price, size) pulled directly off the wire, and the full
 /// [`BatchWitness`] ready to feed [`dp_zk::BatchProofCircuit`].
+#[derive(Debug)]
 pub struct ParsedInput {
     pub batch_id: Uuid,
     pub auction_ids: Vec<Uuid>,
@@ -91,5 +92,132 @@ pub fn build_witness(input: AggregatorInput) -> Result<ParsedInput, String> {
         matches: private,
         policy,
     };
-    Ok(ParsedInput { batch_id, auction_ids, witness, prices, sizes })
+    Ok(ParsedInput {
+        batch_id,
+        auction_ids,
+        witness,
+        prices,
+        sizes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dp_zk::witness::{MatchWitness, OrderLegWitness};
+    use rust_decimal::Decimal;
+
+    fn dummy_leg() -> OrderLegWitness {
+        OrderLegWitness {
+            trader_id: "aa".repeat(32),
+            salt: "bb".repeat(32),
+            balance: Decimal::new(1000, 0),
+            position: "0".into(),
+            limit_price: Decimal::new(100, 0),
+            order_size: Decimal::new(10, 0),
+            side: 0,
+            commitment_key: "ck".into(),
+        }
+    }
+
+    fn dummy_match_witness() -> MatchWitness {
+        MatchWitness {
+            bid: dummy_leg(),
+            ask: {
+                let mut a = dummy_leg();
+                a.side = 1;
+                a
+            },
+        }
+    }
+
+    fn valid_input() -> AggregatorInput {
+        let aid = uuid::Uuid::new_v4().to_string();
+        AggregatorInput {
+            batch_id: uuid::Uuid::new_v4().to_string(),
+            matches: vec![AggregatorMatch {
+                auction_id: aid,
+                bid_order_id: uuid::Uuid::new_v4().to_string(),
+                ask_order_id: uuid::Uuid::new_v4().to_string(),
+                price: Decimal::new(100, 0),
+                size: Decimal::new(10, 0),
+            }],
+            private_witness: Some(vec![dummy_match_witness()]),
+            policy: None,
+        }
+    }
+
+    #[test]
+    fn build_witness_ok() {
+        let result = build_witness(valid_input());
+        assert!(result.is_ok());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.prices.len(), 1);
+        assert_eq!(parsed.sizes.len(), 1);
+    }
+
+    #[test]
+    fn build_witness_bad_batch_id() {
+        let mut input = valid_input();
+        input.batch_id = "not-a-uuid".into();
+        let err = build_witness(input).unwrap_err();
+        assert!(err.contains("batch_id"));
+    }
+
+    #[test]
+    fn build_witness_empty_matches() {
+        let mut input = valid_input();
+        input.matches = vec![];
+        let err = build_witness(input).unwrap_err();
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn build_witness_multiple_auction_ids() {
+        let mut input = valid_input();
+        let m2 = AggregatorMatch {
+            auction_id: uuid::Uuid::new_v4().to_string(),
+            bid_order_id: uuid::Uuid::new_v4().to_string(),
+            ask_order_id: uuid::Uuid::new_v4().to_string(),
+            price: Decimal::new(100, 0),
+            size: Decimal::new(5, 0),
+        };
+        input.matches.push(m2);
+        input
+            .private_witness
+            .as_mut()
+            .unwrap()
+            .push(dummy_match_witness());
+        let err = build_witness(input).unwrap_err();
+        assert!(err.contains("multiple auction ids"));
+    }
+
+    #[test]
+    fn build_witness_missing_private_witness() {
+        let mut input = valid_input();
+        input.private_witness = None;
+        let err = build_witness(input).unwrap_err();
+        assert!(err.contains("missing private_witness"));
+    }
+
+    #[test]
+    fn build_witness_length_mismatch() {
+        let mut input = valid_input();
+        input.private_witness = Some(vec![dummy_match_witness(), dummy_match_witness()]);
+        let err = build_witness(input).unwrap_err();
+        assert!(err.contains("mismatch"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_flag_takes_precedence() {
+        let p = resolve_keys_dir(Some(PathBuf::from("/custom/path")));
+        assert_eq!(p, PathBuf::from("/custom/path"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_falls_back_to_manifest() {
+        std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
+        let p = resolve_keys_dir(None);
+        assert!(p.to_str().unwrap().contains("dp-zk/keys"));
+    }
 }

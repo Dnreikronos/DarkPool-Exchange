@@ -1,11 +1,11 @@
 use super::*;
 use crate::pedersen::derive_trader_id;
 use crate::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
-use ark_ff::PrimeField;
 use ark_ff::BigInteger;
-use ark_relations::r1cs::{ConstraintSystem, ConstraintSynthesizer};
-use ark_std::rand::SeedableRng;
+use ark_ff::PrimeField;
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
 use ark_std::rand::rngs::StdRng;
+use ark_std::rand::SeedableRng;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 

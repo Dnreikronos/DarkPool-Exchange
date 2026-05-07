@@ -21,10 +21,7 @@ pub enum EventError {
     #[error(transparent)]
     Bincode(#[from] bincode::Error),
     #[error("corrupt event at offset {offset}: {source}")]
-    CorruptEvent {
-        offset: u64,
-        source: bincode::Error,
-    },
+    CorruptEvent { offset: u64, source: bincode::Error },
     #[cfg(feature = "postgres")]
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),

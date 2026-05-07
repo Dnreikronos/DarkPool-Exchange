@@ -59,8 +59,8 @@ impl Store for MemStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
     use crate::EventData;
+    use chrono::{DateTime, Utc};
     use dp_types::EventType;
     use uuid::Uuid;
 

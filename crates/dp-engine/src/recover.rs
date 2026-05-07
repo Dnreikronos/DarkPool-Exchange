@@ -125,21 +125,17 @@ impl Engine {
             state.book.apply(&events[0]);
 
             let settlement_matches = self.recover_settlement_matches(&matches, &state);
-            let public_inputs = match dp_zk::compute_public_inputs(
-                &witness,
-                &[],
-                &[],
-                self.inner.batch_size,
-            ) {
-                Ok(scalars) => scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
-                Err(e) => {
-                    tracing::warn!(
-                        batch_id = %batch_id,
-                        "compute_public_inputs failed during recovery: {e}; using zeros"
-                    );
-                    [U256::ZERO; 6]
-                }
-            };
+            let public_inputs =
+                match dp_zk::compute_public_inputs(&witness, &[], &[], self.inner.batch_size) {
+                    Ok(scalars) => scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
+                    Err(e) => {
+                        tracing::warn!(
+                            batch_id = %batch_id,
+                            "compute_public_inputs failed during recovery: {e}; using zeros"
+                        );
+                        [U256::ZERO; 6]
+                    }
+                };
 
             state.pending_batches.insert(
                 batch_id,
@@ -209,18 +205,13 @@ impl Engine {
                 salt_nonce,
                 ..
             } => {
-                let decrypted =
-                    decrypter
-                        .decrypt(ciphertext)
-                        .await
-                        .map_err(|source| EngineError::RecoverDecrypt {
-                            order_id: *order_id,
-                            source,
-                        })?;
-                let nonce: [u8; 32] = salt_nonce
-                    .as_slice()
-                    .try_into()
-                    .unwrap_or([0u8; 32]);
+                let decrypted = decrypter.decrypt(ciphertext).await.map_err(|source| {
+                    EngineError::RecoverDecrypt {
+                        order_id: *order_id,
+                        source,
+                    }
+                })?;
+                let nonce: [u8; 32] = salt_nonce.as_slice().try_into().unwrap_or([0u8; 32]);
                 let recomputed = crate::engine::recompute_persisted_commitment(
                     *order_id,
                     &decrypted.commitment_key,
@@ -338,7 +329,8 @@ impl Engine {
                     },
                 );
             }
-            EventData::BatchConfirmed { batch_id, .. } | EventData::BatchSettled { batch_id, .. } => {
+            EventData::BatchConfirmed { batch_id, .. }
+            | EventData::BatchSettled { batch_id, .. } => {
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
                 state.pending_batches.remove(batch_id);
@@ -347,4 +339,3 @@ impl Engine {
         Ok(())
     }
 }
-

@@ -77,7 +77,10 @@ impl DarkPoolService for ApiHandler {
             Some(o) => Ok(Response::new(GetOrderResponse {
                 order: Some(order_to_proto(&o)),
             })),
-            None => Err(Status::not_found(format!("order {} not found", req.order_id))),
+            None => Err(Status::not_found(format!(
+                "order {} not found",
+                req.order_id
+            ))),
         }
     }
 
@@ -134,12 +137,9 @@ impl DarkPoolService for ApiHandler {
             // Surface broadcast lag to the client instead of silently swallowing
             // missed auctions. The stream stays live after this Err frame; the
             // client should treat data_loss as a signal to reconnect/resync.
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                Some(Err(Status::data_loss(format!(
-                    "stream lagged; {} auction events skipped",
-                    n
-                ))))
-            }
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => Some(Err(
+                Status::data_loss(format!("stream lagged; {} auction events skipped", n)),
+            )),
         });
         Ok(Response::new(Box::pin(stream)))
     }

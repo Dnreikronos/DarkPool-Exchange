@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check docs
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - name: Detect unused dependencies
+        continue-on-error: true
+        run: |
+          cargo install cargo-machete
+          cargo machete --with-metadata
+
+  test-coverage:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+      - name: Run tests with coverage
+        run: |
+          cargo tarpaulin --workspace \
+            --engine llvm \
+            --timeout 300 \
+            --skip-clean \
+            --out xml \
+            --output-dir coverage
+      - name: Convert coverage to generic format
+        run: |
+          python3 -c "
+          import xml.etree.ElementTree as ET, os
+          tree = ET.parse('coverage/cobertura.xml')
+          root = tree.getroot()
+          out = ET.Element('coverage', version='1')
+          for pkg in root.findall('.//package'):
+              for cls in pkg.findall('.//class'):
+                  fn = cls.get('filename', '')
+                  if not fn:
+                      continue
+                  fnode = ET.SubElement(out, 'file', path=fn)
+                  for line in cls.findall('.//line'):
+                      num = line.get('number')
+                      hits = line.get('hits', '0')
+                      if num:
+                          ET.SubElement(fnode, 'lineToCover', lineNumber=num, covered=('true' if int(hits) > 0 else 'false'))
+          os.makedirs('coverage', exist_ok=True)
+          ET.ElementTree(out).write('coverage/sonar-coverage.xml', xml_declaration=True, encoding='UTF-8')
+          "
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -18,8 +18,7 @@ impl Submitter for NoopSubmitter {
         _params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
         Box::pin(async {
-            Ok("0x0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string())
+            Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
         })
     }
 }

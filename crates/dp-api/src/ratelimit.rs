@@ -65,7 +65,9 @@ impl RateLimitCore {
             tokens: capacity,
             last_fill: now,
         });
-        let elapsed = now.saturating_duration_since(bucket.last_fill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(bucket.last_fill)
+            .as_secs_f64();
         bucket.tokens += elapsed * rate;
         if bucket.tokens > capacity {
             bucket.tokens = capacity;
@@ -199,15 +201,11 @@ pub async fn ratelimit_axum_mw(
     req: AxumRequest,
     next: Next,
 ) -> AxumResponse {
-    let peer = req
-        .extensions()
-        .get::<SocketAddr>()
-        .copied()
-        .or_else(|| {
-            req.extensions()
-                .get::<ConnectInfo<SocketAddr>>()
-                .map(|ci| ci.0)
-        });
+    let peer = req.extensions().get::<SocketAddr>().copied().or_else(|| {
+        req.extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0)
+    });
     let key = client_key(req.headers(), peer);
     if let Err(status) = core.allow(&key) {
         return crate::rest::status_to_response(status);

@@ -29,8 +29,8 @@
 //!    leg, gated by `is_active`.
 
 use ark_bn254::{Bn254, Fr};
-use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
 use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
+use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
 use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_r1cs_std::alloc::AllocVar;
 use ark_r1cs_std::eq::EqGadget;
@@ -262,7 +262,9 @@ fn build_match(
             .map_err(|e| ZkError::Witness(format!("bid trader_id: {e}")))?,
     );
     let bid_salt = crate::pedersen::bytes_to_scalar(
-        &m.bid.salt_bytes().map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?,
+        &m.bid
+            .salt_bytes()
+            .map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?,
     );
     let ask_trader = crate::pedersen::bytes_to_scalar(
         &m.ask
@@ -270,7 +272,9 @@ fn build_match(
             .map_err(|e| ZkError::Witness(format!("ask trader_id: {e}")))?,
     );
     let ask_salt = crate::pedersen::bytes_to_scalar(
-        &m.ask.salt_bytes().map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?,
+        &m.ask
+            .salt_bytes()
+            .map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?,
     );
 
     let match_price_s = decimal_to_scalar(match_price)?;
@@ -415,11 +419,29 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
             enforce_range_60(&ask_os_ge_ms)?;
 
             let mut sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            sponge.absorb(&[bid_trader.clone(), bid_side.clone(), bid_lp.clone(), bid_order_size.clone(), bid_salt.clone()].as_ref())?;
+            sponge.absorb(
+                &[
+                    bid_trader.clone(),
+                    bid_side.clone(),
+                    bid_lp.clone(),
+                    bid_order_size.clone(),
+                    bid_salt.clone(),
+                ]
+                .as_ref(),
+            )?;
             let bid_commit = sponge.squeeze_field_elements(1)?[0].clone();
 
             let mut sponge2 = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            sponge2.absorb(&[ask_trader.clone(), ask_side.clone(), ask_lp.clone(), ask_order_size.clone(), ask_salt.clone()].as_ref())?;
+            sponge2.absorb(
+                &[
+                    ask_trader.clone(),
+                    ask_side.clone(),
+                    ask_lp.clone(),
+                    ask_order_size.clone(),
+                    ask_salt.clone(),
+                ]
+                .as_ref(),
+            )?;
             let ask_commit = sponge2.squeeze_field_elements(1)?[0].clone();
 
             // Family 6: notional = price * size (computed in-circuit).
@@ -431,11 +453,9 @@ impl ConstraintSynthesizer<Fr> for BatchProofCircuit {
             // proof. Padded rows have zero balance/notional → diff = 0.
             enforce_range_60(&bid_balance)?;
             enforce_range_60(&ask_balance)?;
-            let bid_solvency_diff =
-                (&bid_balance * &scale_factor - &notional) * &is_active;
+            let bid_solvency_diff = (&bid_balance * &scale_factor - &notional) * &is_active;
             enforce_range_n(&bid_solvency_diff, SOLVENCY_DIFF_BITS)?;
-            let ask_solvency_diff =
-                (&ask_balance * &scale_factor - &notional) * &is_active;
+            let ask_solvency_diff = (&ask_balance * &scale_factor - &notional) * &is_active;
             enforce_range_n(&ask_solvency_diff, SOLVENCY_DIFF_BITS)?;
 
             // Family 8: post-trade position-limit (two-sided range). For
@@ -524,8 +544,8 @@ pub fn prove<R: RngCore + CryptoRng>(
     rng: &mut R,
 ) -> Result<ProofBytes, ZkError> {
     use ark_serialize::{CanonicalSerialize, Compress};
-    let proof = Groth16::<Bn254>::prove(pk, circuit, rng)
-        .map_err(|e| ZkError::Prove(e.to_string()))?;
+    let proof =
+        Groth16::<Bn254>::prove(pk, circuit, rng).map_err(|e| ZkError::Prove(e.to_string()))?;
     let mut buf = Vec::with_capacity(proof.serialized_size(Compress::Yes));
     proof
         .serialize_with_mode(&mut buf, Compress::Yes)
@@ -542,9 +562,7 @@ pub fn compute_public_inputs(
     match_sizes: &[rust_decimal::Decimal],
     batch_size: usize,
 ) -> Result<[Fr; 6], ZkError> {
-    if witness.matches.len() != match_prices.len()
-        || match_prices.len() != match_sizes.len()
-    {
+    if witness.matches.len() != match_prices.len() || match_prices.len() != match_sizes.len() {
         return Err(ZkError::Witness(
             "match_prices/match_sizes length mismatch".into(),
         ));

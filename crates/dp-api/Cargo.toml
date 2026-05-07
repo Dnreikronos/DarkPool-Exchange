@@ -47,6 +47,7 @@ futures-util.workspace = true
 alloy-primitives.workspace = true
 http-body-util.workspace = true
 serial_test.workspace = true
+tempfile = "3"
 
 [build-dependencies]
 tonic-build.workspace = true

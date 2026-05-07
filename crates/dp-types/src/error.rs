@@ -27,7 +27,10 @@ mod tests {
             (DarkPoolError::PairRequired, "pair is required"),
             (DarkPoolError::PriceMustBePositive, "price must be positive"),
             (DarkPoolError::SizeMustBePositive, "size must be positive"),
-            (DarkPoolError::CommitmentKeyRequired, "commitment key is required"),
+            (
+                DarkPoolError::CommitmentKeyRequired,
+                "commitment key is required",
+            ),
             (DarkPoolError::LimitMustBePositive, "limit must be > 0"),
             (DarkPoolError::OrderNotFound, "order not found"),
         ];

@@ -7,10 +7,10 @@ use std::time::Duration;
 use dp_aggregator::{AggregatorError, ProofAggregator};
 use dp_auction::Match;
 use dp_crypto::{CryptoError, DecryptedOrder, Decrypter};
-use dp_zk::witness::BatchWitness;
 use dp_event::{EventData, Store};
 use dp_settlement::{SettlementError, SubmitBatchParams, Submitter};
 use dp_types::EventType;
+use dp_zk::witness::BatchWitness;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -248,7 +248,14 @@ pub async fn place_plaintext_order(
     ttl: Duration,
 ) -> Result<dp_types::Order, crate::EngineError> {
     let trader = alloy_primitives::Address::ZERO;
-    let (commit, ct) =
-        crate::engine::build_decrypted_ciphertext(trader, pair, side, price, size, commitment_key, ttl);
+    let (commit, ct) = crate::engine::build_decrypted_ciphertext(
+        trader,
+        pair,
+        side,
+        price,
+        size,
+        commitment_key,
+        ttl,
+    );
     engine.place_encrypted_order(commit, vec![], ct).await
 }

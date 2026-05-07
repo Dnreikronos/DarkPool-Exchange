@@ -4,7 +4,10 @@ use std::time::Duration;
 use clap::Parser;
 
 #[derive(Parser, Clone, Debug)]
-#[command(name = "darkpool-server", about = "Dark Pool Exchange operator API server")]
+#[command(
+    name = "darkpool-server",
+    about = "Dark Pool Exchange operator API server"
+)]
 pub struct Config {
     #[arg(long, env = "DARKPOOL_GRPC_ADDR", default_value = "0.0.0.0:9090")]
     pub grpc_addr: SocketAddr,
@@ -109,9 +112,41 @@ impl Config {
 
 fn opt(s: &str) -> Option<&str> {
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
     humantime::parse_duration(s).map_err(|e| format!("invalid duration {}: {}", s, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opt_returns_none_for_empty() {
+        assert!(opt("").is_none());
+        assert!(opt("   ").is_none());
+    }
+
+    #[test]
+    fn opt_returns_trimmed_value() {
+        assert_eq!(opt("  hello  "), Some("hello"));
+        assert_eq!(opt("value"), Some("value"));
+    }
+
+    #[test]
+    fn parse_duration_valid() {
+        assert_eq!(parse_duration("5s").unwrap(), Duration::from_secs(5));
+        assert_eq!(parse_duration("2m30s").unwrap(), Duration::from_secs(150));
+    }
+
+    #[test]
+    fn parse_duration_invalid() {
+        assert!(parse_duration("not-a-duration").is_err());
+    }
 }
