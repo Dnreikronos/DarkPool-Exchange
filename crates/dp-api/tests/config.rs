@@ -83,3 +83,33 @@ fn empty_api_keys_string_yields_empty_vec() {
     assert!(cfg.api_keys().is_empty());
     clear_env();
 }
+
+#[test]
+#[serial]
+fn optional_accessors_empty_by_default() {
+    clear_env();
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.event_db_url().is_none());
+    assert!(cfg.event_log_path().is_none());
+    assert!(cfg.operator_key_path().is_none());
+    assert!(cfg.aggregator_bin_path().is_none());
+    assert!(cfg.zk_proving_key_dir().is_none());
+    assert!(cfg.eth_rpc_url().is_none());
+    assert!(cfg.contract_address().is_none());
+}
+
+#[test]
+#[serial]
+fn optional_accessors_return_values() {
+    clear_env();
+    std::env::set_var("DARKPOOL_EVENT_DB", "postgres://host/db");
+    std::env::set_var("DARKPOOL_EVENT_LOG", "/tmp/events.log");
+    std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    std::env::set_var("DARKPOOL_CONTRACT_ADDR", "0xabc");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(cfg.event_db_url(), Some("postgres://host/db"));
+    assert_eq!(cfg.event_log_path(), Some("/tmp/events.log"));
+    assert_eq!(cfg.eth_rpc_url(), Some("http://localhost:8545"));
+    assert_eq!(cfg.contract_address(), Some("0xabc"));
+    clear_env();
+}

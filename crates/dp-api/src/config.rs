@@ -122,3 +122,31 @@ fn opt(s: &str) -> Option<&str> {
 fn parse_duration(s: &str) -> Result<Duration, String> {
     humantime::parse_duration(s).map_err(|e| format!("invalid duration {}: {}", s, e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opt_returns_none_for_empty() {
+        assert!(opt("").is_none());
+        assert!(opt("   ").is_none());
+    }
+
+    #[test]
+    fn opt_returns_trimmed_value() {
+        assert_eq!(opt("  hello  "), Some("hello"));
+        assert_eq!(opt("value"), Some("value"));
+    }
+
+    #[test]
+    fn parse_duration_valid() {
+        assert_eq!(parse_duration("5s").unwrap(), Duration::from_secs(5));
+        assert_eq!(parse_duration("2m30s").unwrap(), Duration::from_secs(150));
+    }
+
+    #[test]
+    fn parse_duration_invalid() {
+        assert!(parse_duration("not-a-duration").is_err());
+    }
+}
