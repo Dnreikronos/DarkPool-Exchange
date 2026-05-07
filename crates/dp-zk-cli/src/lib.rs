@@ -43,6 +43,7 @@ pub fn resolve_keys_dir(flag: Option<PathBuf>) -> PathBuf {
 /// Output of [`build_witness`]: parsed batch metadata, per-match
 /// (price, size) pulled directly off the wire, and the full
 /// [`BatchWitness`] ready to feed [`dp_zk::BatchProofCircuit`].
+#[derive(Debug)]
 pub struct ParsedInput {
     pub batch_id: Uuid,
     pub auction_ids: Vec<Uuid>,
