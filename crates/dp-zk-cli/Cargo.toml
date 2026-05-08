@@ -11,6 +11,14 @@ path = "src/bin/dp-zk-cli.rs"
 name = "dp-zk-keygen"
 path = "src/bin/dp-zk-keygen.rs"
 
+[[bin]]
+name = "dp-zk-vk-export"
+path = "src/bin/dp-zk-vk-export.rs"
+
+[[bin]]
+name = "dp-zk-fixture-gen"
+path = "src/bin/dp-zk-fixture-gen.rs"
+
 [dependencies]
 dp-zk = { path = "../dp-zk" }
 clap = { workspace = true }
@@ -20,5 +28,9 @@ uuid = { workspace = true }
 rust_decimal = { workspace = true }
 hex = { workspace = true }
 ark-bn254 = { workspace = true, features = ["std"] }
+ark-ec = { workspace = true, features = ["std"] }
 ark-ff = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
+ark-groth16 = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-snark = { workspace = true }
