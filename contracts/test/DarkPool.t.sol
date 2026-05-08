@@ -10,18 +10,23 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 contract MockVerifier is Groth16Verifier {
     bool public shouldReturn;
 
-    constructor(bool shouldReturn_) {
+    constructor(bool shouldReturn_) Groth16Verifier(_dummyG1(), _dummyG2(), _dummyG2(), _dummyG2(), _dummyIc()) {
         shouldReturn = shouldReturn_;
-        vkInitialized = true;
     }
 
-    function verifyProof(
-        uint256[2] calldata,
-        uint256[2][2] calldata,
-        uint256[2] calldata,
-        uint256[6] calldata
-    ) external view override returns (bool) {
+    function verifyProof(uint256[2] calldata, uint256[2][2] calldata, uint256[2] calldata, uint256[6] calldata)
+        external
+        view
+        override
+        returns (bool)
+    {
         return shouldReturn;
+    }
+
+    function _dummyG1() private pure returns (uint256[2] memory a) { a = [uint256(1), 2]; }
+    function _dummyG2() private pure returns (uint256[2][2] memory g) { g = [[uint256(1), 2], [uint256(3), 4]]; }
+    function _dummyIc() private pure returns (uint256[2][7] memory ic) {
+        for (uint256 i = 0; i < 7; i++) ic[i] = [uint256(i + 1), uint256(i + 1)];
     }
 }
 

@@ -88,11 +88,9 @@ contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
     }
 
     function _decodeProof(bytes calldata proof)
-        internal pure returns (
-            uint256[2] memory a,
-            uint256[2][2] memory b,
-            uint256[2] memory c
-        )
+        internal
+        pure
+        returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c)
     {
         a[0] = uint256(bytes32(proof[0:32]));
         a[1] = uint256(bytes32(proof[32:64]));
