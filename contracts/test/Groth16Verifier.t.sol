@@ -206,6 +206,73 @@ contract Groth16VerifierTest is Test {
         verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
     }
 
+    // --- Constructor validation ---
+
+    function test_constructor_rejectsAlpha1AtInfinity() public {
+        (
+            uint256[2] memory alpha1,
+            uint256[2][2] memory beta2,
+            uint256[2][2] memory gamma2,
+            uint256[2][2] memory delta2,
+            uint256[2][7] memory ic
+        ) = _loadVk();
+        alpha1 = [uint256(0), uint256(0)];
+        vm.expectRevert("alpha1 point at infinity");
+        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    function test_constructor_rejectsBeta2AtInfinity() public {
+        (
+            uint256[2] memory alpha1,
+            uint256[2][2] memory beta2,
+            uint256[2][2] memory gamma2,
+            uint256[2][2] memory delta2,
+            uint256[2][7] memory ic
+        ) = _loadVk();
+        beta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
+        vm.expectRevert("beta2 point at infinity");
+        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    function test_constructor_rejectsGamma2AtInfinity() public {
+        (
+            uint256[2] memory alpha1,
+            uint256[2][2] memory beta2,
+            uint256[2][2] memory gamma2,
+            uint256[2][2] memory delta2,
+            uint256[2][7] memory ic
+        ) = _loadVk();
+        gamma2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
+        vm.expectRevert("gamma2 point at infinity");
+        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    function test_constructor_rejectsDelta2AtInfinity() public {
+        (
+            uint256[2] memory alpha1,
+            uint256[2][2] memory beta2,
+            uint256[2][2] memory gamma2,
+            uint256[2][2] memory delta2,
+            uint256[2][7] memory ic
+        ) = _loadVk();
+        delta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
+        vm.expectRevert("delta2 point at infinity");
+        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    function test_constructor_rejectsIcAtInfinity() public {
+        (
+            uint256[2] memory alpha1,
+            uint256[2][2] memory beta2,
+            uint256[2][2] memory gamma2,
+            uint256[2][2] memory delta2,
+            uint256[2][7] memory ic
+        ) = _loadVk();
+        ic[3] = [uint256(0), uint256(0)];
+        vm.expectRevert("ic point at infinity");
+        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
     // --- Fixture loaders ---
 
     function _loadVk()

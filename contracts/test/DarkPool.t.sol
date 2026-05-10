@@ -395,6 +395,82 @@ contract DarkPoolTest is Test {
         pool.acceptOwnership();
     }
 
+    // --- removeOperator auth ---
+
+    function test_removeOperator_notOwner_reverts() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.removeOperator(operator);
+    }
+
+    // --- pause auth ---
+
+    function test_pause_notOwner_reverts() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.pause();
+    }
+
+    function test_unpause_notOwner_reverts() public {
+        pool.pause();
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.unpause();
+    }
+
+    function test_submitBatch_whenPaused_reverts() public {
+        pool.pause();
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        pool.submitBatch(bytes32(uint256(1)), bytes32(0), new bytes(256), _zeroInputs(), _singleMatch());
+    }
+
+    // --- Policy mismatch branches ---
+
+    function test_submitBatch_minPriceMismatch_reverts() public {
+        pool.setPolicy(0, 1e18, 0);
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+        inputs[4] = 0;
+
+        vm.prank(operator);
+        vm.expectRevert("minPrice mismatch");
+        pool.submitBatch(bytes32(uint256(1)), bytes32(0), new bytes(256), inputs, _singleMatch());
+    }
+
+    function test_submitBatch_positionLimitMismatch_reverts() public {
+        pool.setPolicy(0, 0, 1e18);
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+        inputs[5] = 0;
+
+        vm.prank(operator);
+        vm.expectRevert("positionLimit mismatch");
+        pool.submitBatch(bytes32(uint256(1)), bytes32(0), new bytes(256), inputs, _singleMatch());
+    }
+
+    // --- setFeeRecipient auth ---
+
+    function test_setFeeRecipient_notOwner_reverts() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.setFeeRecipient(address(0x55));
+    }
+
+    // --- Withdraw event ---
+
+    function test_withdraw_emits_event() public {
+        uint256 amount = 50e18;
+        _deposit(trader1, address(quoteToken), amount);
+
+        vm.prank(trader1);
+        vm.expectEmit(true, true, false, true);
+        emit IDarkPool.Withdrawal(trader1, address(quoteToken), amount);
+        pool.withdraw(address(quoteToken), amount);
+    }
+
     // --- Batch size cap ---
 
     function test_submitBatch_tooMany_reverts() public {
