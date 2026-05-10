@@ -11,51 +11,38 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "dp-zk-vk-export", about = "Export arkworks VK to Solidity JSON")]
 struct Args {
-    /// Directory containing `verifying_key.bin` (and `keys_metadata.json`).
     #[arg(long)]
     keys_dir: PathBuf,
-    /// Output JSON path. Omit for stdout.
     #[arg(long)]
     out: Option<PathBuf>,
 }
 
-fn main() -> ExitCode {
-    let args = Args::parse();
-
-    let vk = match dp_zk::keys::read_vk(&args.keys_dir) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("read_vk: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
+fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    let vk = dp_zk::keys::read_vk(&args.keys_dir)?;
     let sol = dp_zk::keys::vk_to_solidity(&vk);
-    let json = match serde_json::to_string_pretty(&sol) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("serialize: {e}");
-            return ExitCode::from(2);
-        }
-    };
+    let json = serde_json::to_string_pretty(&sol)?;
 
     match args.out {
         Some(path) => {
-            if let Err(e) = fs::write(&path, json.as_bytes()) {
-                eprintln!("write {}: {e}", path.display());
-                return ExitCode::from(2);
-            }
+            fs::write(&path, json.as_bytes())?;
             eprintln!("wrote {} ({} ic entries)", path.display(), sol.ic.len());
         }
         None => {
             let mut stdout = io::stdout().lock();
-            if let Err(e) = stdout.write_all(json.as_bytes()) {
-                eprintln!("stdout: {e}");
-                return ExitCode::from(2);
-            }
+            stdout.write_all(json.as_bytes())?;
             let _ = stdout.write_all(b"\n");
         }
     }
+    Ok(())
+}
 
-    ExitCode::SUCCESS
+fn main() -> ExitCode {
+    let args = Args::parse();
+    match run(args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
+    }
 }

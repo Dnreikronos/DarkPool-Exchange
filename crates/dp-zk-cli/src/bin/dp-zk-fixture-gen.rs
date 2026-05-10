@@ -32,13 +32,10 @@ use uuid::Uuid;
 #[derive(Parser, Debug)]
 #[command(name = "dp-zk-fixture-gen", about = "Emit Groth16 fixtures for Solidity tests")]
 struct Args {
-    /// Output directory. vk.json + proof.json will be written here.
     #[arg(long)]
     out_dir: PathBuf,
-    /// Deterministic seed (defaults to 42 — keep stable so fixtures hash-pin).
     #[arg(long, default_value_t = 42u64)]
     seed: u64,
-    /// Circuit batch size.
     #[arg(long, default_value_t = 2usize)]
     batch_size: usize,
 }
@@ -94,70 +91,29 @@ fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
     (w, vec![Decimal::from(100)], vec![Decimal::from(10)])
 }
 
-fn main() -> ExitCode {
-    let args = Args::parse();
-
-    if let Err(e) = fs::create_dir_all(&args.out_dir) {
-        eprintln!("create_dir_all: {e}");
-        return ExitCode::from(2);
-    }
+fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(&args.out_dir)?;
 
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let (pk, vk) = match setup(args.batch_size, &mut rng) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("setup: {e}");
-            return ExitCode::from(2);
-        }
-    };
+    let (pk, vk) = setup(args.batch_size, &mut rng)?;
 
     let sol_vk = dp_zk::keys::vk_to_solidity(&vk);
-    let vk_json = match serde_json::to_string_pretty(&sol_vk) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("vk serialize: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    if let Err(e) = fs::write(args.out_dir.join("vk.json"), vk_json.as_bytes()) {
-        eprintln!("write vk.json: {e}");
-        return ExitCode::from(2);
-    }
+    let vk_json = serde_json::to_string_pretty(&sol_vk)?;
+    fs::write(args.out_dir.join("vk.json"), vk_json.as_bytes())?;
 
     let (witness, prices, sizes) = sample_witness();
-    let circuit =
-        match BatchProofCircuit::from_witness(&witness, &prices, &sizes, args.batch_size) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("from_witness: {e}");
-                return ExitCode::from(2);
-            }
-        };
+    let circuit = BatchProofCircuit::from_witness(&witness, &prices, &sizes, args.batch_size)?;
     let public_inputs = circuit.public_inputs();
-    let proof_bytes = match prove(&pk, circuit, &mut rng) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("prove: {e}");
-            return ExitCode::from(2);
-        }
-    };
+    let proof_bytes = prove(&pk, circuit, &mut rng)?;
 
-    let proof = match Proof::<Bn254>::deserialize_with_mode(
+    let proof = Proof::<Bn254>::deserialize_with_mode(
         proof_bytes.0.as_slice(),
         Compress::Yes,
         Validate::Yes,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("deserialize proof: {e}");
-            return ExitCode::from(2);
-        }
-    };
+    )?;
 
-    // Sanity check: native verify before emitting JSON.
     let pvk = Groth16::<Bn254>::process_vk(&vk).expect("process_vk");
-    let ok = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &public_inputs, &proof)
-        .expect("verify");
+    let ok = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &public_inputs, &proof)?;
     assert!(ok, "fixture proof failed Rust-side verification");
 
     let (ax, ay) = proof.a.xy().expect("a not infinity");
@@ -167,7 +123,6 @@ fn main() -> ExitCode {
     let proof_json = ProofJson {
         a: [fq_to_hex(&ax), fq_to_hex(&ay)],
         b: [
-            // Match precompile order: [c1, c0] per Fq2 coord.
             [fq_to_hex(&bx.c1), fq_to_hex(&bx.c0)],
             [fq_to_hex(&by.c1), fq_to_hex(&by.c0)],
         ],
@@ -175,21 +130,20 @@ fn main() -> ExitCode {
         public_inputs: public_inputs.iter().map(fq_to_hex).collect(),
     };
 
-    let pj = match serde_json::to_string_pretty(&proof_json) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("proof serialize: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    if let Err(e) = fs::write(args.out_dir.join("proof.json"), pj.as_bytes()) {
-        eprintln!("write proof.json: {e}");
-        return ExitCode::from(2);
-    }
+    let pj = serde_json::to_string_pretty(&proof_json)?;
+    fs::write(args.out_dir.join("proof.json"), pj.as_bytes())?;
 
-    eprintln!(
-        "wrote {} (vk.json, proof.json)",
-        args.out_dir.display()
-    );
-    ExitCode::SUCCESS
+    eprintln!("wrote {} (vk.json, proof.json)", args.out_dir.display());
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let args = Args::parse();
+    match run(args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
+    }
 }
