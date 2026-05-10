@@ -148,19 +148,12 @@ contract Groth16Verifier {
         uint256 r0 = uint256(keccak256(abi.encode(aArr, bArr, cArr, inputs))) % SNARK_SCALAR_FIELD;
         if (r0 == 0) r0 = 1;
 
-        // The batch verification equation we evaluate (for r_i = r0^i):
-        //   Π_i [ e(r_i·(-A_i), B_i) · e(r_i·α, β) · e(r_i·L_i, γ) · e(r_i·C_i, δ) ] = 1
-        // Constant-side products fold across i since β, γ, δ are shared:
-        //   e((Σ r_i)·α, β) · e(Σ r_i·L_i, γ) · e(Σ r_i·C_i, δ).
-        // Total pairings: n + 3. r_0 drawn via Fiat–Shamir over all proofs+inputs.
-        uint256 rSum = _rSum(n, r0);
-        uint256[2] memory accL = _accumulateL(inputs, n, r0);
-        uint256[2] memory accC = _accumulateC(cArr, n, r0);
+        (uint256 rSum, uint256[2] memory accL) = _accumulateRL(inputs, n, r0);
 
         uint256[2] memory accAlpha;
         (accAlpha[0], accAlpha[1]) = ecMul([ALPHA1_X, ALPHA1_Y], rSum);
 
-        uint256[] memory pIn = _buildBatchPairingInput(aArr, bArr, n, r0, accAlpha, accL, accC);
+        uint256[] memory pIn = _buildBatchPairingInput(aArr, bArr, cArr, n, r0, accAlpha, accL);
         return ecPairingDynamic(pIn);
     }
 
@@ -173,38 +166,19 @@ contract Groth16Verifier {
         }
     }
 
-    function _rSum(uint256 n, uint256 r0) internal pure returns (uint256 rSum) {
+    function _accumulateRL(uint256[NUM_PUBLIC_INPUTS][] calldata inputs, uint256 n, uint256 r0)
+        internal
+        view
+        returns (uint256 rSum, uint256[2] memory accL)
+    {
         uint256 ri = 1;
         for (uint256 i = 0; i < n; i++) {
             if (i > 0) ri = mulmod(ri, r0, SNARK_SCALAR_FIELD);
             rSum = addmod(rSum, ri, SNARK_SCALAR_FIELD);
-        }
-    }
 
-    function _accumulateL(uint256[NUM_PUBLIC_INPUTS][] calldata inputs, uint256 n, uint256 r0)
-        internal
-        view
-        returns (uint256[2] memory accL)
-    {
-        uint256 ri = 1;
-        for (uint256 i = 0; i < n; i++) {
-            if (i > 0) ri = mulmod(ri, r0, SNARK_SCALAR_FIELD);
             uint256[2] memory li = _publicInputAccumulator(inputs[i]);
             (uint256 lx, uint256 ly) = ecMul(li, ri);
             (accL[0], accL[1]) = ecAdd(accL[0], accL[1], lx, ly);
-        }
-    }
-
-    function _accumulateC(uint256[2][] calldata cArr, uint256 n, uint256 r0)
-        internal
-        view
-        returns (uint256[2] memory accC)
-    {
-        uint256 ri = 1;
-        for (uint256 i = 0; i < n; i++) {
-            if (i > 0) ri = mulmod(ri, r0, SNARK_SCALAR_FIELD);
-            (uint256 cx, uint256 cy) = ecMul(cArr[i], ri);
-            (accC[0], accC[1]) = ecAdd(accC[0], accC[1], cx, cy);
         }
     }
 
@@ -223,14 +197,15 @@ contract Groth16Verifier {
     function _buildBatchPairingInput(
         uint256[2][] calldata aArr,
         uint256[2][2][] calldata bArr,
+        uint256[2][] calldata cArr,
         uint256 n,
         uint256 r0,
         uint256[2] memory accAlpha,
-        uint256[2] memory accL,
-        uint256[2] memory accC
+        uint256[2] memory accL
     ) internal view returns (uint256[] memory pIn) {
         pIn = new uint256[]((n + 3) * 6);
 
+        uint256[2] memory accC;
         uint256 ri = 1;
         for (uint256 i = 0; i < n; i++) {
             if (i > 0) ri = mulmod(ri, r0, SNARK_SCALAR_FIELD);
@@ -238,12 +213,13 @@ contract Groth16Verifier {
             uint256 base = i * 6;
             pIn[base + 0] = ax;
             pIn[base + 1] = ay;
-            // bArr layout is [[x.c1, x.c0], [y.c1, y.c0]] — same canonical
-            // (imag, real) feed order as ecPairingSingle.
             pIn[base + 2] = bArr[i][0][0];
             pIn[base + 3] = bArr[i][0][1];
             pIn[base + 4] = bArr[i][1][0];
             pIn[base + 5] = bArr[i][1][1];
+
+            (uint256 cx, uint256 cy) = ecMul(cArr[i], ri);
+            (accC[0], accC[1]) = ecAdd(accC[0], accC[1], cx, cy);
         }
 
         uint256 off = n * 6;
