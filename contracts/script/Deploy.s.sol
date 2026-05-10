@@ -45,14 +45,21 @@ contract DeployScript is Script {
         )
     {
         string memory json = vm.readFile(path);
-        alpha1 = abi.decode(json.parseRaw(".alpha1"), (uint256[2]));
-        beta2 = abi.decode(json.parseRaw(".beta2"), (uint256[2][2]));
-        gamma2 = abi.decode(json.parseRaw(".gamma2"), (uint256[2][2]));
-        delta2 = abi.decode(json.parseRaw(".delta2"), (uint256[2][2]));
-        uint256[2][] memory icDyn = abi.decode(json.parseRaw(".ic"), (uint256[2][]));
-        require(icDyn.length == 7, "ic length must be 7");
+        alpha1[0] = json.readUint(".alpha1[0]");
+        alpha1[1] = json.readUint(".alpha1[1]");
+        _loadG2(json, ".beta2", beta2);
+        _loadG2(json, ".gamma2", gamma2);
+        _loadG2(json, ".delta2", delta2);
         for (uint256 i = 0; i < 7; i++) {
-            ic[i] = icDyn[i];
+            ic[i][0] = json.readUint(string.concat(".ic[", vm.toString(i), "][0]"));
+            ic[i][1] = json.readUint(string.concat(".ic[", vm.toString(i), "][1]"));
         }
+    }
+
+    function _loadG2(string memory json, string memory base, uint256[2][2] memory g) internal pure {
+        g[0][0] = json.readUint(string.concat(base, "[0][0]"));
+        g[0][1] = json.readUint(string.concat(base, "[0][1]"));
+        g[1][0] = json.readUint(string.concat(base, "[1][0]"));
+        g[1][1] = json.readUint(string.concat(base, "[1][1]"));
     }
 }
