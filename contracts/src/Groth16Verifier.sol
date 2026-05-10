@@ -139,7 +139,7 @@ contract Groth16Verifier {
         uint256[2][2][] calldata bArr,
         uint256[2][] calldata cArr,
         uint256[NUM_PUBLIC_INPUTS][] calldata inputs
-    ) external view returns (bool) {
+    ) external view virtual returns (bool) {
         uint256 n = aArr.length;
         require(n > 0, "empty batch");
         require(bArr.length == n && cArr.length == n && inputs.length == n, "length mismatch");
