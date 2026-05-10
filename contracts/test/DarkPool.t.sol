@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {IDarkPool} from "../src/interfaces/IDarkPool.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
 contract MockVerifier is Groth16Verifier {
@@ -119,7 +120,7 @@ contract DarkPoolTest is Test {
 
     function test_addOperator_notOwner_reverts() public {
         vm.prank(address(0xdead));
-        vm.expectRevert("not owner");
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
         pool.addOperator(address(0x99));
     }
 
@@ -282,7 +283,7 @@ contract DarkPoolTest is Test {
 
     function test_setPolicy_notOwner_reverts() public {
         vm.prank(address(0xdead));
-        vm.expectRevert("not owner");
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
         pool.setPolicy(0, 0, 0);
     }
 
@@ -350,6 +351,48 @@ contract DarkPoolTest is Test {
     function test_constructor_zeroFeeRecipient_reverts() public {
         vm.expectRevert("zero fee recipient");
         new DarkPool(address(verifier), address(0));
+    }
+
+    // --- Immutable verifier ---
+
+    function test_verifier_isImmutable() public view {
+        assertEq(address(pool.verifier()), address(verifier));
+    }
+
+    // --- transferOwnership (2-step) ---
+
+    function test_transferOwnership_twoStep() public {
+        address newOwner = address(0x777);
+
+        pool.transferOwnership(newOwner);
+        assertEq(pool.owner(), owner);
+        assertEq(pool.pendingOwner(), newOwner);
+
+        vm.prank(newOwner);
+        pool.acceptOwnership();
+        assertEq(pool.owner(), newOwner);
+        assertEq(pool.pendingOwner(), address(0));
+
+        vm.prank(newOwner);
+        pool.addOperator(address(0x888));
+        assertTrue(pool.operators(address(0x888)));
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        pool.addOperator(address(0x999));
+    }
+
+    function test_transferOwnership_notOwner_reverts() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.transferOwnership(address(0x777));
+    }
+
+    function test_acceptOwnership_notPending_reverts() public {
+        pool.transferOwnership(address(0x777));
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.acceptOwnership();
     }
 
     // --- Batch size cap ---
