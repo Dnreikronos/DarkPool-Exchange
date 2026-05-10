@@ -107,15 +107,12 @@ contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
         uint256 fee = notional * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         uint256 askReceives = notional - fee;
 
-        // Bid: pays quote, receives base
         balances[m.bidTrader][m.quoteToken] -= notional;
         balances[m.bidTrader][m.baseToken] += m.size;
 
-        // Ask: pays base, receives quote minus fee
         balances[m.askTrader][m.baseToken] -= m.size;
         balances[m.askTrader][m.quoteToken] += askReceives;
 
-        // Protocol fee from ask-side notional
         balances[feeRecipient][m.quoteToken] += fee;
     }
 
