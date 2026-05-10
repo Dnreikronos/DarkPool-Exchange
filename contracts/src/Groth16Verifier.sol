@@ -57,6 +57,14 @@ contract Groth16Verifier {
         uint256[2][2] memory _delta2,
         uint256[2][IC_LEN] memory _ic
     ) {
+        require(_alpha1[0] != 0 || _alpha1[1] != 0, "alpha1 point at infinity");
+        require(_beta2[0][0] != 0 || _beta2[0][1] != 0 || _beta2[1][0] != 0 || _beta2[1][1] != 0, "beta2 point at infinity");
+        require(_gamma2[0][0] != 0 || _gamma2[0][1] != 0 || _gamma2[1][0] != 0 || _gamma2[1][1] != 0, "gamma2 point at infinity");
+        require(_delta2[0][0] != 0 || _delta2[0][1] != 0 || _delta2[1][0] != 0 || _delta2[1][1] != 0, "delta2 point at infinity");
+        for (uint256 i = 0; i < IC_LEN; i++) {
+            require(_ic[i][0] != 0 || _ic[i][1] != 0, "ic point at infinity");
+        }
+
         ALPHA1_X = _alpha1[0];
         ALPHA1_Y = _alpha1[1];
 
@@ -74,10 +82,6 @@ contract Groth16Verifier {
         DELTA2_X0 = _delta2[0][1];
         DELTA2_Y1 = _delta2[1][0];
         DELTA2_Y0 = _delta2[1][1];
-
-        for (uint256 i = 0; i < IC_LEN; i++) {
-            require(_ic[i][0] != 0 || _ic[i][1] != 0, "ic point at infinity");
-        }
 
         IC_0_X = _ic[0][0];
         IC_0_Y = _ic[0][1];
