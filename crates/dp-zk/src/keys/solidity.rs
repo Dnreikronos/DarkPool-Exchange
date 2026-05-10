@@ -5,7 +5,7 @@
 //! `contracts/src/Groth16Verifier.sol` (the `[c1, c0]` ordering for each
 //! Fq2 coordinate, see lines 126–150).
 
-use ark_bn254::{Bn254, Fq, G1Affine, G2Affine};
+use ark_bn254::{Bn254, G1Affine, G2Affine};
 use ark_ec::AffineRepr;
 use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::VerifyingKey;
@@ -20,7 +20,7 @@ pub struct SolidityVk {
     pub ic: Vec<[String; 2]>,
 }
 
-fn fq_to_hex(f: &Fq) -> String {
+pub fn fq_to_hex<F: PrimeField>(f: &F) -> String {
     let bytes = f.into_bigint().to_bytes_be();
     let mut s = String::with_capacity(2 + bytes.len() * 2);
     s.push_str("0x");
@@ -37,7 +37,6 @@ fn g1_xy(p: &G1Affine) -> [String; 2] {
 
 fn g2_xy(p: &G2Affine) -> [[String; 2]; 2] {
     let (x, y) = p.xy().expect("G2 point at infinity in VK");
-    // Solidity precompile expects Fq2 coordinates as [c1, c0].
     [
         [fq_to_hex(&x.c1), fq_to_hex(&x.c0)],
         [fq_to_hex(&y.c1), fq_to_hex(&y.c0)],

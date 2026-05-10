@@ -1,7 +1,7 @@
 //! Proving/verifying key serde + on-disk metadata.
 
 pub mod solidity;
-pub use solidity::{vk_to_solidity, SolidityVk};
+pub use solidity::{fq_to_hex, vk_to_solidity, SolidityVk};
 
 use std::fs;
 use std::path::Path;

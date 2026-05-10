@@ -21,6 +21,7 @@ use ark_std::rand::rngs::StdRng;
 use ark_std::rand::SeedableRng;
 use clap::Parser;
 use dp_zk::circuit::{prove, setup};
+use dp_zk::keys::fq_to_hex;
 use dp_zk::pedersen::derive_trader_id;
 use dp_zk::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
 use dp_zk::BatchProofCircuit;
@@ -48,16 +49,6 @@ struct ProofJson {
     b: [[String; 2]; 2],
     c: [String; 2],
     public_inputs: Vec<String>,
-}
-
-fn field_hex<F: PrimeField>(f: &F) -> String {
-    let bytes = f.into_bigint().to_bytes_be();
-    let mut s = String::with_capacity(2 + bytes.len() * 2);
-    s.push_str("0x");
-    for b in &bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 fn trader_id_hex(commitment_key: &str) -> String {
@@ -102,7 +93,6 @@ fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
     };
     (w, vec![Decimal::from(100)], vec![Decimal::from(10)])
 }
-
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -175,14 +165,14 @@ fn main() -> ExitCode {
     let (cx, cy) = proof.c.xy().expect("c not infinity");
 
     let proof_json = ProofJson {
-        a: [field_hex(&ax), field_hex(&ay)],
+        a: [fq_to_hex(&ax), fq_to_hex(&ay)],
         b: [
             // Match precompile order: [c1, c0] per Fq2 coord.
-            [field_hex(&bx.c1), field_hex(&bx.c0)],
-            [field_hex(&by.c1), field_hex(&by.c0)],
+            [fq_to_hex(&bx.c1), fq_to_hex(&bx.c0)],
+            [fq_to_hex(&by.c1), fq_to_hex(&by.c0)],
         ],
-        c: [field_hex(&cx), field_hex(&cy)],
-        public_inputs: public_inputs.iter().map(field_hex).collect(),
+        c: [fq_to_hex(&cx), fq_to_hex(&cy)],
+        public_inputs: public_inputs.iter().map(fq_to_hex).collect(),
     };
 
     let pj = match serde_json::to_string_pretty(&proof_json) {
