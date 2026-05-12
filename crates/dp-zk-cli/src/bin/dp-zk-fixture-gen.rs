@@ -30,7 +30,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
-#[command(name = "dp-zk-fixture-gen", about = "Emit Groth16 fixtures for Solidity tests")]
+#[command(
+    name = "dp-zk-fixture-gen",
+    about = "Emit Groth16 fixtures for Solidity tests"
+)]
 struct Args {
     #[arg(long)]
     out_dir: PathBuf,

@@ -9,7 +9,10 @@ use std::process::ExitCode;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "dp-zk-vk-export", about = "Export arkworks VK to Solidity JSON")]
+#[command(
+    name = "dp-zk-vk-export",
+    about = "Export arkworks VK to Solidity JSON"
+)]
 struct Args {
     #[arg(long)]
     keys_dir: PathBuf,
