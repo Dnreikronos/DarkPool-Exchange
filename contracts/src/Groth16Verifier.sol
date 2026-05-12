@@ -4,6 +4,13 @@ pragma solidity ^0.8.24;
 /// @title Groth16 verifier (BN254) with an immutable verifying key.
 /// @notice The verifying key is bound at construction. Upgrades require
 ///         deploying a new verifier and rewiring downstream contracts.
+/// @dev    Deployer-trust assumption: VK points are produced by a trusted
+///         setup and serialized in the precompile-canonical (imag, real)
+///         order. The constructor only rejects point-at-infinity; off-curve
+///         or wrong-subgroup VK points will surface on the first verify call
+///         when the precompile rejects them. G2 subgroup self-checks are
+///         omitted intentionally (a pairing per coord would balloon deploy
+///         gas) — the trusted-setup ceremony is the source of truth.
 contract Groth16Verifier {
     uint256 internal constant SNARK_SCALAR_FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;

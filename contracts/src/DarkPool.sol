@@ -81,6 +81,13 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         emit BatchSettled(batchId, block.timestamp);
     }
 
+    /// @dev Uncompressed Groth16 proof layout (256 bytes): A.x, A.y, B.x.c1,
+    ///      B.x.c0, B.y.c1, B.y.c0, C.x, C.y — each as a 32-byte big-endian
+    ///      uint. The G2 element B MUST be serialized in (imag, real) order
+    ///      to match Groth16Verifier's precompile-canonical layout; the
+    ///      verifier passes B through to bn256Pairing without re-ordering.
+    ///      Off-chain encoders that produce snarkjs-style (real, imag) bytes
+    ///      will silently fail verification.
     function _decodeProof(bytes calldata proof)
         internal
         pure
