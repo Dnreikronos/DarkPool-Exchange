@@ -189,6 +189,16 @@ contract Groth16VerifierTest is Test {
         verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
     }
 
+    function test_verifyProofBatch_oversize_reverts() public {
+        uint256 n = 257; // one over MAX_BATCH
+        uint256[2][] memory aArr = new uint256[2][](n);
+        uint256[2][2][] memory bArr = new uint256[2][2][](n);
+        uint256[2][] memory cArr = new uint256[2][](n);
+        uint256[6][] memory inputs = new uint256[6][](n);
+        vm.expectRevert("batch too large");
+        verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
+    }
+
     function test_verifyProofBatch_inputOverflow_reverts() public {
         uint256 n = 2;
         uint256[2][] memory aArr = new uint256[2][](n);

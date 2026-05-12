@@ -11,6 +11,11 @@ contract Groth16Verifier {
 
     uint256 internal constant NUM_PUBLIC_INPUTS = 6;
     uint256 internal constant IC_LEN = 7; // NUM_PUBLIC_INPUTS + 1
+    uint256 internal constant MAX_BATCH = 256; // mirrors DarkPool.MAX_BATCH_SIZE
+
+    // Fiat-Shamir domain separator. Bumping this string is a hard fork of the
+    // batch transcript and is reserved for breaking changes to the batch path.
+    bytes32 internal constant FS_DOMAIN = keccak256("Groth16Batch-v1");
 
     // alpha (G1) — 2 scalars.
     uint256 internal immutable ALPHA1_X;
@@ -146,11 +151,17 @@ contract Groth16Verifier {
     ) external view virtual returns (bool) {
         uint256 n = aArr.length;
         require(n > 0, "empty batch");
+        require(n <= MAX_BATCH, "batch too large");
         require(bArr.length == n && cArr.length == n && inputs.length == n, "length mismatch");
         _checkInputsRange(inputs);
 
-        uint256 r0 = uint256(keccak256(abi.encode(aArr, bArr, cArr, inputs))) % SNARK_SCALAR_FIELD;
-        if (r0 == 0) r0 = 1;
+        // Domain-separated FS challenge; rehash on the 1/2^254 chance r0 hits 0
+        // (or 1, which would collapse r_i = r0^i to all-ones and degrade RLC to
+        // a naive ΣA·B aggregation).
+        uint256 r0 = uint256(keccak256(abi.encode(FS_DOMAIN, aArr, bArr, cArr, inputs))) % SNARK_SCALAR_FIELD;
+        while (r0 == 0 || r0 == 1) {
+            r0 = uint256(keccak256(abi.encode(FS_DOMAIN, r0, "retry"))) % SNARK_SCALAR_FIELD;
+        }
 
         (uint256 rSum, uint256[2] memory accL) = _accumulateRL(inputs, n, r0);
 
