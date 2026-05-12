@@ -134,6 +134,11 @@ contract Groth16VerifierTest is Test {
         assertEq(batchOk, singleOk, "batch(1) must match single verify");
     }
 
+    // NOTE: this exercises the batch path with N=3 *identical* fixtures because
+    // the fixture generator emits a single proof. RLC soundness is not stressed
+    // here — distinct fixtures (different seeds) would be needed to catch a
+    // broken cross-term. The poisoned-proof test below covers the rejection
+    // branch; tampering tests cover RLC sensitivity in aggregate.
     function test_verifyProofBatch_acceptsValid() public view {
         uint256 n = 3;
         uint256[2][] memory aArr = new uint256[2][](n);
