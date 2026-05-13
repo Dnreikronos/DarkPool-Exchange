@@ -37,13 +37,26 @@ contract Groth16VerifierTest is Test {
         assertTrue(verifier.verifyProof(proofA, proofB, proofC, proofInputs));
     }
 
-    function test_noSetVerifyingKeyFunctionExists() public {
-        // The verifier must not expose any way to mutate the VK.
-        // Confirm the legacy selector is not present on the deployed bytecode.
+    function test_noSetVerifyingKeyFunctionExists() public view {
+        // The verifier must not expose any way to mutate the VK. A bare
+        // staticcall would also "fail" if the function existed but reverted
+        // on missing args, so we scan deployed bytecode for the selector.
         bytes4 legacy =
             bytes4(keccak256("setVerifyingKey(uint256[2],uint256[2][2],uint256[2][2],uint256[2][2],uint256[2][])"));
-        (bool ok,) = address(verifier).staticcall(abi.encodeWithSelector(legacy));
-        assertFalse(ok, "legacy setter still callable");
+        bytes memory code = address(verifier).code;
+        assertGt(code.length, 0, "verifier has no code");
+        bool found = _containsSelector(code, legacy);
+        assertFalse(found, "legacy setter selector present in bytecode");
+    }
+
+    function _containsSelector(bytes memory code, bytes4 sel) internal pure returns (bool) {
+        if (code.length < 4) return false;
+        for (uint256 i = 0; i + 4 <= code.length; i++) {
+            if (code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2] && code[i + 3] == sel[3]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- Single proof ---
