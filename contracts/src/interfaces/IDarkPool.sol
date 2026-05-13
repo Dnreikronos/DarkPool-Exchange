@@ -18,7 +18,6 @@ interface IDarkPool {
     event Withdrawal(address indexed trader, address indexed token, uint256 amount);
     event OperatorAdded(address indexed operator);
     event OperatorRemoved(address indexed operator);
-
     function deposit(address token, uint256 amount) external;
     function withdraw(address token, uint256 amount) external;
     function submitBatch(

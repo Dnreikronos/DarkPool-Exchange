@@ -5,18 +5,18 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IDarkPool} from "./interfaces/IDarkPool.sol";
 import {Groth16Verifier} from "./Groth16Verifier.sol";
 
-contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
+contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     uint256 public constant PROTOCOL_FEE_BPS = 5;
     uint256 public constant MAX_BATCH_SIZE = 256;
     uint256 private constant BPS_DENOMINATOR = 10_000;
 
-    address public owner;
-    Groth16Verifier public verifier;
+    Groth16Verifier public immutable verifier;
 
     mapping(address => bool) public operators;
     mapping(bytes32 => bool) public settled;
@@ -27,20 +27,14 @@ contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
     uint256 public minPrice;
     uint256 public positionLimit;
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "not owner");
-        _;
-    }
-
     modifier onlyOperator() {
         require(operators[msg.sender], "not operator");
         _;
     }
 
-    constructor(address verifier_, address feeRecipient_) {
+    constructor(address verifier_, address feeRecipient_) Ownable(msg.sender) {
         require(verifier_ != address(0), "zero verifier");
         require(feeRecipient_ != address(0), "zero fee recipient");
-        owner = msg.sender;
         verifier = Groth16Verifier(verifier_);
         feeRecipient = feeRecipient_;
     }
@@ -87,12 +81,17 @@ contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
         emit BatchSettled(batchId, block.timestamp);
     }
 
+    /// @dev Uncompressed Groth16 proof layout (256 bytes): A.x, A.y, B.x.c1,
+    ///      B.x.c0, B.y.c1, B.y.c0, C.x, C.y — each as a 32-byte big-endian
+    ///      uint. The G2 element B MUST be serialized in (imag, real) order
+    ///      to match Groth16Verifier's precompile-canonical layout; the
+    ///      verifier passes B through to bn256Pairing without re-ordering.
+    ///      Off-chain encoders that produce snarkjs-style (real, imag) bytes
+    ///      will silently fail verification.
     function _decodeProof(bytes calldata proof)
-        internal pure returns (
-            uint256[2] memory a,
-            uint256[2][2] memory b,
-            uint256[2] memory c
-        )
+        internal
+        pure
+        returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c)
     {
         a[0] = uint256(bytes32(proof[0:32]));
         a[1] = uint256(bytes32(proof[32:64]));
@@ -109,15 +108,12 @@ contract DarkPool is IDarkPool, ReentrancyGuard, Pausable {
         uint256 fee = notional * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         uint256 askReceives = notional - fee;
 
-        // Bid: pays quote, receives base
         balances[m.bidTrader][m.quoteToken] -= notional;
         balances[m.bidTrader][m.baseToken] += m.size;
 
-        // Ask: pays base, receives quote minus fee
         balances[m.askTrader][m.baseToken] -= m.size;
         balances[m.askTrader][m.quoteToken] += askReceives;
 
-        // Protocol fee from ask-side notional
         balances[feeRecipient][m.quoteToken] += fee;
     }
 
