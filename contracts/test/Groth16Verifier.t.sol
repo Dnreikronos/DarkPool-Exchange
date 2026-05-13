@@ -134,14 +134,8 @@ contract Groth16VerifierTest is Test {
     // --- Batch verification ---
 
     function test_verifyProofBatch_singleMatchesSingle() public view {
-        uint256[2][] memory aArr = new uint256[2][](1);
-        uint256[2][2][] memory bArr = new uint256[2][2][](1);
-        uint256[2][] memory cArr = new uint256[2][](1);
-        uint256[6][] memory inputs = new uint256[6][](1);
-        aArr[0] = proofA;
-        bArr[0] = proofB;
-        cArr[0] = proofC;
-        inputs[0] = proofInputs;
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(1);
         bool batchOk = verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
         bool singleOk = verifier.verifyProof(proofA, proofB, proofC, proofInputs);
         assertEq(batchOk, singleOk, "batch(1) must match single verify");
@@ -153,32 +147,14 @@ contract Groth16VerifierTest is Test {
     // broken cross-term. The poisoned-proof test below covers the rejection
     // branch; tampering tests cover RLC sensitivity in aggregate.
     function test_verifyProofBatch_acceptsValid() public view {
-        uint256 n = 3;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(3);
         assertTrue(verifier.verifyProofBatch(aArr, bArr, cArr, inputs));
     }
 
     function test_verifyProofBatch_rejectsAnyInvalid() public {
-        uint256 n = 3;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(3);
         // Poison the middle proof's public input.
         inputs[1][1] ^= 1;
         try verifier.verifyProofBatch(aArr, bArr, cArr, inputs) returns (bool ok) {
@@ -218,17 +194,8 @@ contract Groth16VerifierTest is Test {
     }
 
     function test_verifyProofBatch_inputOverflow_reverts() public {
-        uint256 n = 2;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(2);
         inputs[1][3] = type(uint256).max;
         vm.expectRevert("input overflow");
         verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
@@ -300,6 +267,30 @@ contract Groth16VerifierTest is Test {
 
         vm.expectRevert(bytes(expectedRevert));
         new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    /// @dev Build a length-N batch where every entry replays the cached fixture.
+    /// Used by the batch tests that don't care about per-proof distinctness.
+    function _replicatedBatch(uint256 n)
+        internal
+        view
+        returns (
+            uint256[2][] memory aArr,
+            uint256[2][2][] memory bArr,
+            uint256[2][] memory cArr,
+            uint256[6][] memory inputs
+        )
+    {
+        aArr = new uint256[2][](n);
+        bArr = new uint256[2][2][](n);
+        cArr = new uint256[2][](n);
+        inputs = new uint256[6][](n);
+        for (uint256 i = 0; i < n; i++) {
+            aArr[i] = proofA;
+            bArr[i] = proofB;
+            cArr[i] = proofC;
+            inputs[i] = proofInputs;
+        }
     }
 
     // --- Fixture loaders ---
