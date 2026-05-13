@@ -235,60 +235,40 @@ contract Groth16VerifierTest is Test {
     }
 
     // --- Constructor validation ---
+    //
+    // Each case mutates one VK field to the point-at-infinity and asserts the
+    // matching revert. The shared helper _expectInfinityRevert keeps the
+    // pattern (load VK → poison field → expect revert → redeploy) in one place.
 
     function test_constructor_rejectsAlpha1AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        alpha1 = [uint256(0), uint256(0)];
-        vm.expectRevert("alpha1 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Alpha1);
     }
 
     function test_constructor_rejectsBeta2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        beta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("beta2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Beta2);
     }
 
     function test_constructor_rejectsGamma2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        gamma2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("gamma2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Gamma2);
     }
 
     function test_constructor_rejectsDelta2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        delta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("delta2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Delta2);
     }
 
     function test_constructor_rejectsIcAtInfinity() public {
+        _expectInfinityRevert(VkField.Ic);
+    }
+
+    enum VkField {
+        Alpha1,
+        Beta2,
+        Gamma2,
+        Delta2,
+        Ic
+    }
+
+    function _expectInfinityRevert(VkField field) internal {
         (
             uint256[2] memory alpha1,
             uint256[2][2] memory beta2,
@@ -296,8 +276,29 @@ contract Groth16VerifierTest is Test {
             uint256[2][2] memory delta2,
             uint256[2][7] memory ic
         ) = _loadVk();
-        ic[3] = [uint256(0), uint256(0)];
-        vm.expectRevert("ic point at infinity");
+
+        uint256[2] memory zeroG1 = [uint256(0), uint256(0)];
+        uint256[2][2] memory zeroG2 = [zeroG1, zeroG1];
+
+        string memory expectedRevert;
+        if (field == VkField.Alpha1) {
+            alpha1 = zeroG1;
+            expectedRevert = "alpha1 point at infinity";
+        } else if (field == VkField.Beta2) {
+            beta2 = zeroG2;
+            expectedRevert = "beta2 point at infinity";
+        } else if (field == VkField.Gamma2) {
+            gamma2 = zeroG2;
+            expectedRevert = "gamma2 point at infinity";
+        } else if (field == VkField.Delta2) {
+            delta2 = zeroG2;
+            expectedRevert = "delta2 point at infinity";
+        } else {
+            ic[3] = zeroG1;
+            expectedRevert = "ic point at infinity";
+        }
+
+        vm.expectRevert(bytes(expectedRevert));
         new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
     }
 
