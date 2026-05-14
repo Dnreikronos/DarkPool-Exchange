@@ -22,7 +22,7 @@ struct Args {
 
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let vk = dp_zk::keys::read_vk(&args.keys_dir)?;
-    let sol = dp_zk::keys::vk_to_solidity(&vk);
+    let sol = dp_zk::keys::vk_to_solidity(&vk)?;
     let json = serde_json::to_string_pretty(&sol)?;
 
     match args.out {

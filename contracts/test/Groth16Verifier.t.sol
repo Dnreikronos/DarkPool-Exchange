@@ -37,13 +37,26 @@ contract Groth16VerifierTest is Test {
         assertTrue(verifier.verifyProof(proofA, proofB, proofC, proofInputs));
     }
 
-    function test_noSetVerifyingKeyFunctionExists() public {
-        // The verifier must not expose any way to mutate the VK.
-        // Confirm the legacy selector is not present on the deployed bytecode.
+    function test_noSetVerifyingKeyFunctionExists() public view {
+        // The verifier must not expose any way to mutate the VK. A bare
+        // staticcall would also "fail" if the function existed but reverted
+        // on missing args, so we scan deployed bytecode for the selector.
         bytes4 legacy =
             bytes4(keccak256("setVerifyingKey(uint256[2],uint256[2][2],uint256[2][2],uint256[2][2],uint256[2][])"));
-        (bool ok,) = address(verifier).staticcall(abi.encodeWithSelector(legacy));
-        assertFalse(ok, "legacy setter still callable");
+        bytes memory code = address(verifier).code;
+        assertGt(code.length, 0, "verifier has no code");
+        bool found = _containsSelector(code, legacy);
+        assertFalse(found, "legacy setter selector present in bytecode");
+    }
+
+    function _containsSelector(bytes memory code, bytes4 sel) internal pure returns (bool) {
+        if (code.length < 4) return false;
+        for (uint256 i = 0; i + 4 <= code.length; i++) {
+            if (code[i] == sel[0] && code[i + 1] == sel[1] && code[i + 2] == sel[2] && code[i + 3] == sel[3]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- Single proof ---
@@ -121,14 +134,8 @@ contract Groth16VerifierTest is Test {
     // --- Batch verification ---
 
     function test_verifyProofBatch_singleMatchesSingle() public view {
-        uint256[2][] memory aArr = new uint256[2][](1);
-        uint256[2][2][] memory bArr = new uint256[2][2][](1);
-        uint256[2][] memory cArr = new uint256[2][](1);
-        uint256[6][] memory inputs = new uint256[6][](1);
-        aArr[0] = proofA;
-        bArr[0] = proofB;
-        cArr[0] = proofC;
-        inputs[0] = proofInputs;
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(1);
         bool batchOk = verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
         bool singleOk = verifier.verifyProof(proofA, proofB, proofC, proofInputs);
         assertEq(batchOk, singleOk, "batch(1) must match single verify");
@@ -140,32 +147,14 @@ contract Groth16VerifierTest is Test {
     // broken cross-term. The poisoned-proof test below covers the rejection
     // branch; tampering tests cover RLC sensitivity in aggregate.
     function test_verifyProofBatch_acceptsValid() public view {
-        uint256 n = 3;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(3);
         assertTrue(verifier.verifyProofBatch(aArr, bArr, cArr, inputs));
     }
 
     function test_verifyProofBatch_rejectsAnyInvalid() public {
-        uint256 n = 3;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(3);
         // Poison the middle proof's public input.
         inputs[1][1] ^= 1;
         try verifier.verifyProofBatch(aArr, bArr, cArr, inputs) returns (bool ok) {
@@ -205,77 +194,48 @@ contract Groth16VerifierTest is Test {
     }
 
     function test_verifyProofBatch_inputOverflow_reverts() public {
-        uint256 n = 2;
-        uint256[2][] memory aArr = new uint256[2][](n);
-        uint256[2][2][] memory bArr = new uint256[2][2][](n);
-        uint256[2][] memory cArr = new uint256[2][](n);
-        uint256[6][] memory inputs = new uint256[6][](n);
-        for (uint256 i = 0; i < n; i++) {
-            aArr[i] = proofA;
-            bArr[i] = proofB;
-            cArr[i] = proofC;
-            inputs[i] = proofInputs;
-        }
+        (uint256[2][] memory aArr, uint256[2][2][] memory bArr, uint256[2][] memory cArr, uint256[6][] memory inputs) =
+            _replicatedBatch(2);
         inputs[1][3] = type(uint256).max;
         vm.expectRevert("input overflow");
         verifier.verifyProofBatch(aArr, bArr, cArr, inputs);
     }
 
     // --- Constructor validation ---
+    //
+    // Each case mutates one VK field to the point-at-infinity and asserts the
+    // matching revert. The shared helper _expectInfinityRevert keeps the
+    // pattern (load VK → poison field → expect revert → redeploy) in one place.
 
     function test_constructor_rejectsAlpha1AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        alpha1 = [uint256(0), uint256(0)];
-        vm.expectRevert("alpha1 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Alpha1);
     }
 
     function test_constructor_rejectsBeta2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        beta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("beta2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Beta2);
     }
 
     function test_constructor_rejectsGamma2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        gamma2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("gamma2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Gamma2);
     }
 
     function test_constructor_rejectsDelta2AtInfinity() public {
-        (
-            uint256[2] memory alpha1,
-            uint256[2][2] memory beta2,
-            uint256[2][2] memory gamma2,
-            uint256[2][2] memory delta2,
-            uint256[2][7] memory ic
-        ) = _loadVk();
-        delta2 = [[uint256(0), uint256(0)], [uint256(0), uint256(0)]];
-        vm.expectRevert("delta2 point at infinity");
-        new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+        _expectInfinityRevert(VkField.Delta2);
     }
 
     function test_constructor_rejectsIcAtInfinity() public {
+        _expectInfinityRevert(VkField.Ic);
+    }
+
+    enum VkField {
+        Alpha1,
+        Beta2,
+        Gamma2,
+        Delta2,
+        Ic
+    }
+
+    function _expectInfinityRevert(VkField field) internal {
         (
             uint256[2] memory alpha1,
             uint256[2][2] memory beta2,
@@ -283,9 +243,54 @@ contract Groth16VerifierTest is Test {
             uint256[2][2] memory delta2,
             uint256[2][7] memory ic
         ) = _loadVk();
-        ic[3] = [uint256(0), uint256(0)];
-        vm.expectRevert("ic point at infinity");
+
+        uint256[2] memory zeroG1 = [uint256(0), uint256(0)];
+        uint256[2][2] memory zeroG2 = [zeroG1, zeroG1];
+
+        string memory expectedRevert;
+        if (field == VkField.Alpha1) {
+            alpha1 = zeroG1;
+            expectedRevert = "alpha1 point at infinity";
+        } else if (field == VkField.Beta2) {
+            beta2 = zeroG2;
+            expectedRevert = "beta2 point at infinity";
+        } else if (field == VkField.Gamma2) {
+            gamma2 = zeroG2;
+            expectedRevert = "gamma2 point at infinity";
+        } else if (field == VkField.Delta2) {
+            delta2 = zeroG2;
+            expectedRevert = "delta2 point at infinity";
+        } else {
+            ic[3] = zeroG1;
+            expectedRevert = "ic point at infinity";
+        }
+
+        vm.expectRevert(bytes(expectedRevert));
         new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
+    }
+
+    /// @dev Build a length-N batch where every entry replays the cached fixture.
+    /// Used by the batch tests that don't care about per-proof distinctness.
+    function _replicatedBatch(uint256 n)
+        internal
+        view
+        returns (
+            uint256[2][] memory aArr,
+            uint256[2][2][] memory bArr,
+            uint256[2][] memory cArr,
+            uint256[6][] memory inputs
+        )
+    {
+        aArr = new uint256[2][](n);
+        bArr = new uint256[2][2][](n);
+        cArr = new uint256[2][](n);
+        inputs = new uint256[6][](n);
+        for (uint256 i = 0; i < n; i++) {
+            aArr[i] = proofA;
+            bArr[i] = proofB;
+            cArr[i] = proofC;
+            inputs[i] = proofInputs;
+        }
     }
 
     // --- Fixture loaders ---

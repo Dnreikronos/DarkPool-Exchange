@@ -100,7 +100,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = StdRng::seed_from_u64(args.seed);
     let (pk, vk) = setup(args.batch_size, &mut rng)?;
 
-    let sol_vk = dp_zk::keys::vk_to_solidity(&vk);
+    let sol_vk = dp_zk::keys::vk_to_solidity(&vk)?;
     let vk_json = serde_json::to_string_pretty(&sol_vk)?;
     fs::write(args.out_dir.join("vk.json"), vk_json.as_bytes())?;
 

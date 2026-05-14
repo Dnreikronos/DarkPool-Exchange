@@ -11,6 +11,8 @@ use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::VerifyingKey;
 use serde::Serialize;
 
+use crate::ZkError;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SolidityVk {
     pub alpha1: [String; 2],
@@ -30,27 +32,35 @@ pub fn fq_to_hex<F: PrimeField>(f: &F) -> String {
     s
 }
 
-fn g1_xy(p: &G1Affine) -> [String; 2] {
-    let (x, y) = p.xy().expect("G1 point at infinity in VK");
-    [fq_to_hex(&x), fq_to_hex(&y)]
+fn g1_xy(p: &G1Affine) -> Result<[String; 2], ZkError> {
+    let (x, y) = p
+        .xy()
+        .ok_or_else(|| ZkError::Serialize("G1 point at infinity in VK".into()))?;
+    Ok([fq_to_hex(&x), fq_to_hex(&y)])
 }
 
-fn g2_xy(p: &G2Affine) -> [[String; 2]; 2] {
-    let (x, y) = p.xy().expect("G2 point at infinity in VK");
-    [
+fn g2_xy(p: &G2Affine) -> Result<[[String; 2]; 2], ZkError> {
+    let (x, y) = p
+        .xy()
+        .ok_or_else(|| ZkError::Serialize("G2 point at infinity in VK".into()))?;
+    Ok([
         [fq_to_hex(&x.c1), fq_to_hex(&x.c0)],
         [fq_to_hex(&y.c1), fq_to_hex(&y.c0)],
-    ]
+    ])
 }
 
-pub fn vk_to_solidity(vk: &VerifyingKey<Bn254>) -> SolidityVk {
-    SolidityVk {
-        alpha1: g1_xy(&vk.alpha_g1),
-        beta2: g2_xy(&vk.beta_g2),
-        gamma2: g2_xy(&vk.gamma_g2),
-        delta2: g2_xy(&vk.delta_g2),
-        ic: vk.gamma_abc_g1.iter().map(g1_xy).collect(),
-    }
+pub fn vk_to_solidity(vk: &VerifyingKey<Bn254>) -> Result<SolidityVk, ZkError> {
+    Ok(SolidityVk {
+        alpha1: g1_xy(&vk.alpha_g1)?,
+        beta2: g2_xy(&vk.beta_g2)?,
+        gamma2: g2_xy(&vk.gamma_g2)?,
+        delta2: g2_xy(&vk.delta_g2)?,
+        ic: vk
+            .gamma_abc_g1
+            .iter()
+            .map(g1_xy)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
 }
 
 #[cfg(test)]
@@ -84,7 +94,7 @@ mod tests {
     #[test]
     fn g1_xy_valid_point() {
         let g = G1Affine::generator();
-        let [x, y] = g1_xy(&g);
+        let [x, y] = g1_xy(&g).expect("generator has affine coords");
         assert!(x.starts_with("0x"));
         assert!(y.starts_with("0x"));
         assert_eq!(x.len(), 66);
@@ -92,15 +102,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "G1 point at infinity")]
-    fn g1_xy_panics_on_infinity() {
-        g1_xy(&G1Affine::zero());
+    fn g1_xy_errors_on_infinity() {
+        let err = g1_xy(&G1Affine::zero()).expect_err("infinity must error");
+        assert!(matches!(err, ZkError::Serialize(ref m) if m.contains("G1 point at infinity")));
     }
 
     #[test]
     fn g2_xy_valid_point() {
         let g = G2Affine::generator();
-        let coords = g2_xy(&g);
+        let coords = g2_xy(&g).expect("generator has affine coords");
         for pair in &coords {
             for s in pair {
                 assert!(s.starts_with("0x"));
@@ -110,9 +120,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "G2 point at infinity")]
-    fn g2_xy_panics_on_infinity() {
-        g2_xy(&G2Affine::zero());
+    fn g2_xy_errors_on_infinity() {
+        let err = g2_xy(&G2Affine::zero()).expect_err("infinity must error");
+        assert!(matches!(err, ZkError::Serialize(ref m) if m.contains("G2 point at infinity")));
     }
 
     #[test]
@@ -121,7 +131,7 @@ mod tests {
         use ark_std::rand::SeedableRng;
         let mut rng = StdRng::seed_from_u64(99);
         let (_, vk) = crate::circuit::setup(1, &mut rng).expect("setup");
-        let sol = vk_to_solidity(&vk);
+        let sol = vk_to_solidity(&vk).expect("convert VK");
 
         assert_eq!(sol.alpha1.len(), 2);
         assert_eq!(sol.beta2.len(), 2);
@@ -136,5 +146,16 @@ mod tests {
         let json = serde_json::to_string(&sol).expect("serialize");
         assert!(json.contains("alpha1"));
         assert!(json.contains("ic"));
+    }
+
+    #[test]
+    fn vk_to_solidity_errors_on_infinity_vk() {
+        use ark_std::rand::rngs::StdRng;
+        use ark_std::rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(7);
+        let (_, mut vk) = crate::circuit::setup(1, &mut rng).expect("setup");
+        vk.alpha_g1 = G1Affine::zero();
+        let err = vk_to_solidity(&vk).expect_err("must reject infinity");
+        assert!(matches!(err, ZkError::Serialize(_)));
     }
 }

@@ -144,12 +144,15 @@ contract Groth16Verifier {
 
     /// @notice Batch-verify N Groth16 proofs against the committed VK.
     /// @dev Uses the standard random-linear-combination soundness trick:
-    ///      sample r = H(proofs‖inputs), accumulate
-    ///        Σ r_i · A_i in G1, Σ r_i · L_i in G1, Σ r_i · C_i in G1,
-    ///      and the constant-side accumulator (Σ r_i) · α in G1, then
-    ///      verify a single pairing of size 4. This catches any tampered
-    ///      proof with overwhelming probability and never accepts a forged
-    ///      sum that would slip past a naive ΣA·B aggregation.
+    ///      sample r = H(proofs‖inputs); the prover-specific A_i/B_i pairs
+    ///      stay as N separate pairings e(r_i · -A_i, B_i) because B_i
+    ///      varies per proof, while the constant-side G1 accumulators
+    ///        Σ r_i · L_i  (pairs against γ)
+    ///        Σ r_i · C_i  (pairs against δ)
+    ///        (Σ r_i) · α  (pairs against β)
+    ///      collapse into 3 terms. Final pairing has N+3 terms, not 4.
+    ///      Any tampered proof is rejected with overwhelming probability;
+    ///      a forged sum can't slip past since each B_i is checked separately.
     function verifyProofBatch(
         uint256[2][] calldata aArr,
         uint256[2][2][] calldata bArr,
