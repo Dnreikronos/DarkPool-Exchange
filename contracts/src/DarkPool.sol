@@ -34,6 +34,9 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
 
     constructor(address verifier_, address feeRecipient_) Ownable(msg.sender) {
         require(verifier_ != address(0), "zero verifier");
+        // The verifier slot is immutable — a non-contract address would brick
+        // submitBatch with no recovery path, so reject it at construction.
+        require(verifier_.code.length > 0, "verifier has no code");
         require(feeRecipient_ != address(0), "zero fee recipient");
         verifier = IVerifier(verifier_);
         feeRecipient = feeRecipient_;

@@ -350,6 +350,13 @@ contract DarkPoolTest is Test {
         new DarkPool(address(0), feeRecipient);
     }
 
+    function test_constructor_eoaVerifier_reverts() public {
+        // The verifier slot is immutable, so a non-contract address (EOA or
+        // never-deployed) would permanently brick submitBatch.
+        vm.expectRevert("verifier has no code");
+        new DarkPool(address(0xBEEF), feeRecipient);
+    }
+
     function test_constructor_zeroFeeRecipient_reverts() public {
         vm.expectRevert("zero fee recipient");
         new DarkPool(address(verifier), address(0));
