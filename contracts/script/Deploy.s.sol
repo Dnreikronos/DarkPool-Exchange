@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
+import {VerifierProxy} from "../src/VerifierProxy.sol";
 
 contract DeployScript is Script {
     using stdJson for string;
@@ -13,6 +14,17 @@ contract DeployScript is Script {
         address feeRecipient = vm.envAddress("FEE_RECIPIENT");
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         string memory vkPath = vm.envString("VK_JSON_PATH");
+        address deployer = vm.addr(deployerKey);
+        // VERIFIER_GOVERNOR: address that can rotate the verifier backend.
+        // In production this should be a TimelockController (or a multisig
+        // fronting one); the default falls back to the deployer for local
+        // and CI deploys. On mainnet we refuse the silent fallback — a single
+        // EOA holding VK-rotation rights would be a governance footgun.
+        require(
+            block.chainid != 1 || vm.envExists("VERIFIER_GOVERNOR"),
+            "VERIFIER_GOVERNOR must be set on mainnet"
+        );
+        address governor = vm.envOr("VERIFIER_GOVERNOR", deployer);
 
         (
             uint256[2] memory alpha1,
@@ -27,7 +39,11 @@ contract DeployScript is Script {
         Groth16Verifier verifier = new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
         console.log("Groth16Verifier:", address(verifier));
 
-        DarkPool pool = new DarkPool(address(verifier), feeRecipient);
+        VerifierProxy proxy = new VerifierProxy(address(verifier), governor);
+        console.log("VerifierProxy:", address(proxy));
+        console.log("VerifierProxy owner:", governor);
+
+        DarkPool pool = new DarkPool(address(proxy), feeRecipient);
         console.log("DarkPool:", address(pool));
 
         vm.stopBroadcast();
