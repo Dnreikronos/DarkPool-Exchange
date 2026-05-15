@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use alloy_primitives::{Address, FixedBytes};
+use alloy_primitives::Address;
 use alloy_provider::Provider;
 use alloy_rpc_types::Filter;
 use alloy_sol_types::SolEvent;
@@ -100,13 +100,15 @@ impl<P: Provider + Send + Sync + 'static, S: BatchSink> Watcher<P, S> {
                         return Err(SettlementError::Rpc("subscription closed".into()));
                     };
 
-                    if log.topics().len() < 2 {
-                        tracing::warn!("BatchSettled log missing indexed batchId");
-                        continue;
-                    }
+                    let decoded = match BatchSettled::decode_log(&log.inner) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!("decode BatchSettled log: {e}");
+                            continue;
+                        }
+                    };
 
-                    let batch_id_bytes: FixedBytes<32> = log.topics()[1];
-                    let batch_id = match bytes32_to_uuid(batch_id_bytes) {
+                    let batch_id = match bytes32_to_uuid(decoded.data.batchId) {
                         Ok(id) => id,
                         Err(e) => {
                             tracing::warn!("decode batchId: {e}");
