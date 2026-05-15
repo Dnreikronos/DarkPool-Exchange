@@ -36,6 +36,10 @@ contract VerifierProxy is IVerifier, Ownable2Step {
 
     function _setVerifier(address newVerifier, address old) internal {
         require(newVerifier != address(0), "zero verifier");
+        // Self-assignment would make verifyProof() recurse into the proxy until
+        // OOG. Recoverable via another rotation, but a clear governance footgun
+        // — reject it up front.
+        require(newVerifier != address(this), "self verifier");
         require(newVerifier.code.length > 0, "verifier has no code");
         verifier = IVerifier(newVerifier);
         emit VerifierUpdated(old, newVerifier);

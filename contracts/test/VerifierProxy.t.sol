@@ -116,6 +116,13 @@ contract VerifierProxyTest is VkFixture {
         proxy.setVerifier(address(backend));
     }
 
+    function test_setVerifier_rejectsSelf() public {
+        // Pointing the proxy at itself would make verifyProof() recurse into
+        // the proxy and OOG on every call — a governance footgun.
+        vm.expectRevert("self verifier");
+        proxy.setVerifier(address(proxy));
+    }
+
     function test_setVerifier_swapsBackend() public {
         // Build a second Groth16Verifier with a structurally valid but
         // semantically different VK by swapping two IC points. Both points
