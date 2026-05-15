@@ -4,30 +4,32 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {IDarkPool} from "../src/interfaces/IDarkPool.sol";
-import {Groth16Verifier} from "../src/Groth16Verifier.sol";
+import {IVerifier} from "../src/interfaces/IVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-contract MockVerifier is Groth16Verifier {
+contract MockVerifier is IVerifier {
     bool public shouldReturn;
 
-    constructor(bool shouldReturn_) Groth16Verifier(_dummyG1(), _dummyG2(), _dummyG2(), _dummyG2(), _dummyIc()) {
+    constructor(bool shouldReturn_) {
         shouldReturn = shouldReturn_;
     }
 
     function verifyProof(uint256[2] calldata, uint256[2][2] calldata, uint256[2] calldata, uint256[6] calldata)
         external
         view
-        override
         returns (bool)
     {
         return shouldReturn;
     }
 
-    function _dummyG1() private pure returns (uint256[2] memory a) { a = [uint256(1), 2]; }
-    function _dummyG2() private pure returns (uint256[2][2] memory g) { g = [[uint256(1), 2], [uint256(3), 4]]; }
-    function _dummyIc() private pure returns (uint256[2][7] memory ic) {
-        for (uint256 i = 0; i < 7; i++) ic[i] = [uint256(i + 1), uint256(i + 1)];
+    function verifyProofBatch(
+        uint256[2][] calldata,
+        uint256[2][2][] calldata,
+        uint256[2][] calldata,
+        uint256[6][] calldata
+    ) external view returns (bool) {
+        return shouldReturn;
     }
 }
 
@@ -346,6 +348,13 @@ contract DarkPoolTest is Test {
     function test_constructor_zeroVerifier_reverts() public {
         vm.expectRevert("zero verifier");
         new DarkPool(address(0), feeRecipient);
+    }
+
+    function test_constructor_eoaVerifier_reverts() public {
+        // The verifier slot is immutable, so a non-contract address (EOA or
+        // never-deployed) would permanently brick submitBatch.
+        vm.expectRevert("verifier has no code");
+        new DarkPool(address(0xBEEF), feeRecipient);
     }
 
     function test_constructor_zeroFeeRecipient_reverts() public {

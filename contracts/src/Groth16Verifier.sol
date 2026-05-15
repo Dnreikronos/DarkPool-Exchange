@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IVerifier} from "./interfaces/IVerifier.sol";
+
 /// @title Groth16 verifier (BN254) with an immutable verifying key.
 /// @notice The verifying key is bound at construction. Upgrades require
 ///         deploying a new verifier and rewiring downstream contracts.
@@ -11,7 +13,7 @@ pragma solidity ^0.8.24;
 ///         when the precompile rejects them. G2 subgroup self-checks are
 ///         omitted intentionally (a pairing per coord would balloon deploy
 ///         gas) — the trusted-setup ceremony is the source of truth.
-contract Groth16Verifier {
+contract Groth16Verifier is IVerifier {
     uint256 internal constant SNARK_SCALAR_FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
     uint256 internal constant PRIME_Q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
@@ -128,7 +130,7 @@ contract Groth16Verifier {
         uint256[2][2] calldata b,
         uint256[2] calldata c,
         uint256[NUM_PUBLIC_INPUTS] calldata input
-    ) external view virtual returns (bool) {
+    ) external view virtual override returns (bool) {
         for (uint256 i = 0; i < NUM_PUBLIC_INPUTS; i++) {
             require(input[i] < SNARK_SCALAR_FIELD, "input overflow");
         }
@@ -158,7 +160,7 @@ contract Groth16Verifier {
         uint256[2][2][] calldata bArr,
         uint256[2][] calldata cArr,
         uint256[NUM_PUBLIC_INPUTS][] calldata inputs
-    ) external view virtual returns (bool) {
+    ) external view virtual override returns (bool) {
         uint256 n = aArr.length;
         require(n > 0, "empty batch");
         require(n <= MAX_BATCH, "batch too large");

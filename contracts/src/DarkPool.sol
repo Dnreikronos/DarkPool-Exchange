@@ -7,7 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IDarkPool} from "./interfaces/IDarkPool.sol";
-import {Groth16Verifier} from "./Groth16Verifier.sol";
+import {IVerifier} from "./interfaces/IVerifier.sol";
 
 contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -16,7 +16,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     uint256 public constant MAX_BATCH_SIZE = 256;
     uint256 private constant BPS_DENOMINATOR = 10_000;
 
-    Groth16Verifier public immutable verifier;
+    IVerifier public immutable verifier;
 
     mapping(address => bool) public operators;
     mapping(bytes32 => bool) public settled;
@@ -34,8 +34,11 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
 
     constructor(address verifier_, address feeRecipient_) Ownable(msg.sender) {
         require(verifier_ != address(0), "zero verifier");
+        // The verifier slot is immutable — a non-contract address would brick
+        // submitBatch with no recovery path, so reject it at construction.
+        require(verifier_.code.length > 0, "verifier has no code");
         require(feeRecipient_ != address(0), "zero fee recipient");
-        verifier = Groth16Verifier(verifier_);
+        verifier = IVerifier(verifier_);
         feeRecipient = feeRecipient_;
     }
 
