@@ -46,6 +46,9 @@ coverage/
 
 # rust
 
+# forge broadcast artifacts (run-latest.json etc., regenerated each deploy)
+contracts/broadcast/
+
 # notes
 gotchas.md
 
