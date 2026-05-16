@@ -40,19 +40,38 @@ fn check(contract: &str, artifact_sol_dir: &str) {
         .get("abi")
         .unwrap_or_else(|| panic!("{}: missing .abi field", artifact_path.display()));
 
-    if &snapshot != live_abi {
+    if sort_abi_top_level(snapshot) != sort_abi_top_level(live_abi.clone()) {
         panic!(
-            "{contract} ABI drift detected.\n\
-             Snapshot: {}\n\
-             Artifact: {}\n\
-             Regenerate with:\n  \
-               jq '.abi' {} > {}",
+            "{contract} ABI drift detected.\n  Snapshot: {}\n  Artifact: {}\nRegenerate:\n\
+             jq '.abi' {} > {}",
             snapshot_path.display(),
             artifact_path.display(),
             relative_from_workspace(&artifact_path),
             relative_from_workspace(&snapshot_path),
         );
     }
+}
+
+// Sort top-level ABI entries so a Foundry re-emit that only reorders items
+// does not register as drift. Nested arrays (inputs/outputs/components) keep
+// their order — parameter position is semantically meaningful.
+fn sort_abi_top_level(v: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Array(mut arr) = v else {
+        return v;
+    };
+    arr.sort_by_key(abi_entry_key);
+    serde_json::Value::Array(arr)
+}
+
+fn abi_entry_key(v: &serde_json::Value) -> String {
+    let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    let n = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+    // Include input type signature so overloaded functions stay distinct.
+    let inputs = v
+        .get("inputs")
+        .map(|i| serde_json::to_string(i).unwrap_or_default())
+        .unwrap_or_default();
+    format!("{t}\u{1f}{n}\u{1f}{inputs}")
 }
 
 fn relative_from_workspace(p: &Path) -> String {
