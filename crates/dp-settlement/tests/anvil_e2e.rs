@@ -52,6 +52,12 @@ fn read_bytecode(rel_dir: &str, contract: &str) -> Option<Vec<u8>> {
     hex::decode(hex_str).ok()
 }
 
+macro_rules! await_tx {
+    ($call:expr) => {
+        $call.send().await.unwrap().get_receipt().await.unwrap()
+    };
+}
+
 struct BatchCollector {
     inner: Mutex<Option<oneshot::Sender<Uuid>>>,
 }
@@ -174,59 +180,15 @@ async fn settles_batch_end_to_end() {
 
     let base = MockERC20Iface::new(base_addr, &http_provider);
     let quote = MockERC20Iface::new(quote_addr, &http_provider);
-    base.mint(signer_addr, size)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    quote
-        .mint(signer_addr, notional)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    base.approve(pool_addr, size)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    quote
-        .approve(pool_addr, notional)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+    await_tx!(base.mint(signer_addr, size));
+    await_tx!(quote.mint(signer_addr, notional));
+    await_tx!(base.approve(pool_addr, size));
+    await_tx!(quote.approve(pool_addr, notional));
 
     let pool = DarkPool::new(pool_addr, &http_provider);
-    pool.deposit(base_addr, size)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    pool.deposit(quote_addr, notional)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    pool.addOperator(signer_addr)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+    await_tx!(pool.deposit(base_addr, size));
+    await_tx!(pool.deposit(quote_addr, notional));
+    await_tx!(pool.addOperator(signer_addr));
 
     // Spawn watcher and await its subscribe_logs handshake before submitting.
     let (sink, batch_rx) = BatchCollector::new();
