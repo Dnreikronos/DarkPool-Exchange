@@ -80,9 +80,11 @@ fn load_or_skip(rel_dir: &str, contract: &str) -> Option<Vec<u8>> {
 }
 
 macro_rules! await_tx {
-    ($call:expr) => {
-        $call.send().await.unwrap().get_receipt().await.unwrap()
-    };
+    ($call:expr) => {{
+        let receipt = $call.send().await.unwrap().get_receipt().await.unwrap();
+        alloy_network::ReceiptResponse::ensure_success(&receipt).unwrap();
+        receipt
+    }};
 }
 
 struct BatchCollector {
