@@ -56,16 +56,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install Foundry (anvil + forge for e2e settlement test)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build Solidity artifacts
+        working-directory: contracts
+        run: forge build
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
       - name: Run tests with coverage
+        # `--include-ignored` runs anvil_e2e, which covers EthSubmitter::submit
+        # and Watcher::run paths that have no provider-mock alternative.
         run: |
           cargo tarpaulin --workspace \
             --engine llvm \
             --timeout 300 \
             --skip-clean \
             --out xml \
-            --output-dir coverage
+            --output-dir coverage \
+            -- --include-ignored
       - name: Convert coverage to generic format
         run: |
           python3 -c "
