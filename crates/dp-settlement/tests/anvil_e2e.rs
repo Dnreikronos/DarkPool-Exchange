@@ -39,17 +39,45 @@ fn workspace_root() -> PathBuf {
         .join("..")
 }
 
-fn read_bytecode(rel_dir: &str, contract: &str) -> Option<Vec<u8>> {
+// Returns:
+//   Ok(Some(bytes)) → artifact present and parsed.
+//   Ok(None)        → artifact file absent (legitimate skip).
+//   Err(msg)        → file present but corrupt/invalid (must fail loudly).
+fn read_bytecode(rel_dir: &str, contract: &str) -> Result<Option<Vec<u8>>, String> {
     let path = workspace_root()
         .join("contracts")
         .join("out")
         .join(rel_dir)
         .join(format!("{contract}.json"));
-    let content = std::fs::read_to_string(&path).ok()?;
-    let v: Value = serde_json::from_str(&content).ok()?;
-    let hex_str = v.get("bytecode")?.get("object")?.as_str()?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
+    let v: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let hex_str = v
+        .get("bytecode")
+        .and_then(|b| b.get("object"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{}: missing bytecode.object", path.display()))?;
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    hex::decode(hex_str).ok()
+    let bytes =
+        hex::decode(hex_str).map_err(|e| format!("decode {}: {e}", path.display()))?;
+    Ok(Some(bytes))
+}
+
+fn load_or_skip(rel_dir: &str, contract: &str) -> Option<Vec<u8>> {
+    match read_bytecode(rel_dir, contract) {
+        Ok(Some(bc)) => Some(bc),
+        Ok(None) => {
+            eprintln!(
+                "skip anvil_e2e: {contract} artifact missing (run `cd contracts && forge build`)"
+            );
+            None
+        }
+        Err(msg) => panic!("anvil_e2e: {contract} artifact invalid: {msg}"),
+    }
 }
 
 macro_rules! await_tx {
@@ -112,18 +140,13 @@ async fn settles_batch_end_to_end() {
         return;
     }
 
-    let Some(mock_verifier_bc) = read_bytecode("DarkPool.t.sol", "MockVerifier") else {
-        eprintln!(
-            "skip anvil_e2e: MockVerifier artifact missing (run `cd contracts && forge build`)"
-        );
+    let Some(mock_verifier_bc) = load_or_skip("DarkPool.t.sol", "MockVerifier") else {
         return;
     };
-    let Some(erc20_bc) = read_bytecode("MockERC20.sol", "MockERC20") else {
-        eprintln!("skip anvil_e2e: MockERC20 artifact missing");
+    let Some(erc20_bc) = load_or_skip("MockERC20.sol", "MockERC20") else {
         return;
     };
-    let Some(pool_bc) = read_bytecode("DarkPool.sol", "DarkPool") else {
-        eprintln!("skip anvil_e2e: DarkPool artifact missing");
+    let Some(pool_bc) = load_or_skip("DarkPool.sol", "DarkPool") else {
         return;
     };
 
