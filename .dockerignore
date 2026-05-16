@@ -15,5 +15,8 @@ LICENSE*
 .env
 .env.*
 docker-compose*.yml
-Dockerfile*
 .dockerignore
+contracts/out
+contracts/cache
+contracts/lib
+contracts/broadcast
