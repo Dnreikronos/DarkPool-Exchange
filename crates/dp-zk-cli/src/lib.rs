@@ -1,7 +1,11 @@
 //! Helpers shared by the dp-zk-cli + dp-zk-keygen binaries.
 
+use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
+use ark_std::rand::rngs::StdRng;
+use ark_std::rand::SeedableRng;
 use dp_zk::witness::BatchWitness;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -99,6 +103,94 @@ pub fn build_witness(input: AggregatorInput) -> Result<ParsedInput, String> {
         prices,
         sizes,
     })
+}
+
+/// Stdin JSON → stdout proof bytes. Shared body of the dp-zk-cli +
+/// dp-aggregator binaries.
+///
+/// Exit codes:
+/// - 0: proof written to stdout.
+/// - 2: stdin read failure, missing private_witness, or invalid input.
+/// - 3: keys missing / version mismatch.
+/// - 4: circuit build, prover, or stdout write failure.
+pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+        eprintln!("read stdin: {e}");
+        return ExitCode::from(2);
+    }
+    let input: AggregatorInput = match serde_json::from_slice(&buf) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("parse input: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let ParsedInput {
+        witness,
+        prices,
+        sizes,
+        ..
+    } = match build_witness(input) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let dir = resolve_keys_dir(keys_dir);
+    let meta = match dp_zk::keys::read_metadata(&dir) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("read metadata: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    if let Err(e) = meta.check_compatible() {
+        eprintln!("{e}");
+        return ExitCode::from(3);
+    }
+    if meta.batch_size as usize != batch_size {
+        eprintln!(
+            "batch_size mismatch: keys={}, requested={}",
+            meta.batch_size, batch_size
+        );
+        return ExitCode::from(3);
+    }
+    let pk = match dp_zk::keys::read_pk(&dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("read pk: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
+    let circuit =
+        match dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, batch_size) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("build circuit: {e}");
+                return ExitCode::from(4);
+            }
+        };
+
+    let mut rng = StdRng::from_entropy();
+    let proof = match dp_zk::prove(&pk, circuit, &mut rng) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("prove: {e}");
+            return ExitCode::from(4);
+        }
+    };
+
+    if let Err(e) = std::io::stdout().write_all(&proof.0) {
+        eprintln!("write stdout: {e}");
+        return ExitCode::from(4);
+    }
+
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
