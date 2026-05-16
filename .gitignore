@@ -12,6 +12,7 @@ target/
 .env
 .env.*
 .env*.local
+!.env.example
 
 # os
 .DS_Store
