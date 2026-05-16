@@ -4,6 +4,7 @@ mod helpers;
 mod submitter;
 mod watcher;
 
+pub use abi::DarkPool;
 pub use eth_submitter::{EthSubmitter, EthSubmitterConfig};
 pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
 pub use submitter::{NoopSubmitter, Submitter};

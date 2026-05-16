@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use dp_settlement::{
-    BatchSink, EthSubmitter, EthSubmitterConfig, SettlementError, SettlementMatch,
+    BatchSink, DarkPool, EthSubmitter, EthSubmitterConfig, SettlementError, SettlementMatch,
     SubmitBatchParams, Submitter, Watcher,
 };
 
@@ -32,12 +32,6 @@ sol! {
         function approve(address spender, uint256 amount) external returns (bool);
     }
 }
-
-sol!(
-    #[sol(rpc)]
-    DarkPool,
-    "abi/DarkPool.json"
-);
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
