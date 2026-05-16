@@ -26,3 +26,5 @@ futures-util = "0.3"
 
 [dev-dependencies]
 dp-types = { path = "../dp-types" }
+alloy-node-bindings = "1"
+which = "6"

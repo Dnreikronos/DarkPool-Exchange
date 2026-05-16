@@ -30,7 +30,7 @@ ecies = { version = "0.2", default-features = false, features = ["pure"] }
 bincode = "1"
 tokio-util = { version = "0.7", features = ["rt"] }
 alloy-primitives = "1"
-alloy-sol-types = "1"
+alloy-sol-types = { version = "1", features = ["json"] }
 alloy-provider = { version = "1", features = ["ws"] }
 alloy-signer-local = "1"
 alloy-network = "1"

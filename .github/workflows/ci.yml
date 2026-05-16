@@ -47,6 +47,23 @@ jobs:
   test-coverage:
     name: Tests & Coverage
     runs-on: ubuntu-latest
+    services:
+      # Required by crates/dp-event/tests/pg_store.rs once --include-ignored
+      # is set; those tests panic without DARKPOOL_TEST_PG_URL.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: dp
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DARKPOOL_TEST_PG_URL: postgres://postgres:dp@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,16 +73,27 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install Foundry (anvil + forge for e2e settlement test)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build Solidity artifacts
+        working-directory: contracts
+        run: forge build
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
       - name: Run tests with coverage
+        # `--include-ignored` runs anvil_e2e (covers EthSubmitter::submit and
+        # Watcher::run, which have no provider-mock alternative) and pg_store
+        # (which uses the postgres service above).
         run: |
           cargo tarpaulin --workspace \
             --engine llvm \
             --timeout 300 \
             --skip-clean \
             --out xml \
-            --output-dir coverage
+            --output-dir coverage \
+            -- --include-ignored
       - name: Convert coverage to generic format
         run: |
           python3 -c "

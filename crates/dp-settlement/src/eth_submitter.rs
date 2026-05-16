@@ -2,14 +2,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 
-use alloy_network::{Ethereum, EthereumWallet, NetworkWallet, TransactionBuilder};
+use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider;
-use alloy_rpc_types::{BlockNumberOrTag, TransactionRequest};
+use alloy_rpc_types::BlockNumberOrTag;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::SolCall;
 
-use crate::abi::{submitBatchCall, Match as SolMatch, MAX_MATCHES_PER_BATCH};
+use crate::abi::{DarkPool, SolMatch, MAX_MATCHES_PER_BATCH};
 use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
 use crate::submitter::Submitter;
 use crate::{SettlementError, SettlementMatch, SubmitBatchParams};
@@ -46,19 +45,11 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
         })
     }
 
+    #[cfg(test)]
     pub fn pack_submit(params: &SubmitBatchParams) -> Result<Vec<u8>, SettlementError> {
-        if params.matches.len() > MAX_MATCHES_PER_BATCH {
-            return Err(SettlementError::TooManyMatches {
-                count: params.matches.len(),
-            });
-        }
-
-        let sol_matches: Vec<SolMatch> = params
-            .matches
-            .iter()
-            .map(settlement_match_to_sol)
-            .collect::<Result<_, SettlementError>>()?;
-
+        use crate::abi::submitBatchCall;
+        use alloy_sol_types::SolCall;
+        let sol_matches = build_sol_matches(params)?;
         let call = submitBatchCall {
             batchId: uuid_to_bytes32(params.batch_id),
             auctionId: uuid_to_bytes32(params.auction_id),
@@ -68,6 +59,15 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
         };
         Ok(call.abi_encode())
     }
+}
+
+fn build_sol_matches(params: &SubmitBatchParams) -> Result<Vec<SolMatch>, SettlementError> {
+    if params.matches.len() > MAX_MATCHES_PER_BATCH {
+        return Err(SettlementError::TooManyMatches {
+            count: params.matches.len(),
+        });
+    }
+    params.matches.iter().map(settlement_match_to_sol).collect()
 }
 
 fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
@@ -89,13 +89,12 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
         params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
         Box::pin(async move {
-            let calldata = Self::pack_submit(params)?;
+            let sol_matches = build_sol_matches(params)?;
+            let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
             let nonce = self
                 .provider
-                .get_transaction_count(NetworkWallet::<Ethereum>::default_signer_address(
-                    &self.wallet,
-                ))
+                .get_transaction_count(sender)
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
@@ -118,20 +117,24 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
             let fee_cap = u128::from(base_fee) * 2 + tip;
 
-            let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
-            let mut tx = TransactionRequest::default()
+            let contract = DarkPool::new(self.contract, &self.provider);
+            let call = contract
+                .submitBatch(
+                    uuid_to_bytes32(params.batch_id),
+                    uuid_to_bytes32(params.auction_id),
+                    Bytes::copy_from_slice(&params.proof),
+                    params.public_inputs,
+                    sol_matches,
+                )
                 .from(sender)
-                .to(self.contract)
-                .input(calldata.into())
                 .nonce(nonce)
-                .gas_limit(self.gas_limit)
+                .gas(self.gas_limit)
                 .max_fee_per_gas(fee_cap)
-                .max_priority_fee_per_gas(tip);
-            tx.set_chain_id(self.chain_id);
+                .max_priority_fee_per_gas(tip)
+                .chain_id(self.chain_id);
 
-            let receipt = self
-                .provider
-                .send_transaction(tx)
+            let receipt = call
+                .send()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?
                 .get_receipt()
