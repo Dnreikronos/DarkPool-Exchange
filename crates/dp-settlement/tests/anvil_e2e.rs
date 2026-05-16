@@ -54,16 +54,15 @@ fn read_bytecode(rel_dir: &str, contract: &str) -> Result<Option<Vec<u8>>, Strin
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("read {}: {e}", path.display())),
     };
-    let v: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let v: Value =
+        serde_json::from_str(&content).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let hex_str = v
         .get("bytecode")
         .and_then(|b| b.get("object"))
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{}: missing bytecode.object", path.display()))?;
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytes =
-        hex::decode(hex_str).map_err(|e| format!("decode {}: {e}", path.display()))?;
+    let bytes = hex::decode(hex_str).map_err(|e| format!("decode {}: {e}", path.display()))?;
     Ok(Some(bytes))
 }
 
@@ -217,8 +216,8 @@ async fn settles_batch_end_to_end() {
     let (sink, batch_rx) = BatchCollector::new();
     let cancel = CancellationToken::new();
     let (ready_tx, ready_rx) = oneshot::channel();
-    let watcher = Watcher::new(ws_provider, pool_addr, sink, cancel.clone())
-        .with_ready_signal(ready_tx);
+    let watcher =
+        Watcher::new(ws_provider, pool_addr, sink, cancel.clone()).with_ready_signal(ready_tx);
     let watcher_handle = tokio::spawn(async move { watcher.run().await });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx)

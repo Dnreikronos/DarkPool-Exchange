@@ -47,8 +47,8 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
 
     #[cfg(test)]
     pub fn pack_submit(params: &SubmitBatchParams) -> Result<Vec<u8>, SettlementError> {
-        use alloy_sol_types::SolCall;
         use crate::abi::submitBatchCall;
+        use alloy_sol_types::SolCall;
         let sol_matches = build_sol_matches(params)?;
         let call = submitBatchCall {
             batchId: uuid_to_bytes32(params.batch_id),
@@ -67,11 +67,7 @@ fn build_sol_matches(params: &SubmitBatchParams) -> Result<Vec<SolMatch>, Settle
             count: params.matches.len(),
         });
     }
-    params
-        .matches
-        .iter()
-        .map(settlement_match_to_sol)
-        .collect()
+    params.matches.iter().map(settlement_match_to_sol).collect()
 }
 
 fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
