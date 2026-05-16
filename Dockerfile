@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- builder ----------
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.91-bookworm AS builder
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         protobuf-compiler \
+        libprotobuf-dev \
         pkg-config \
         libssl-dev \
         ca-certificates \
@@ -16,7 +17,10 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --bin darkpool-server
+RUN cargo build --release --locked \
+        --bin darkpool-server \
+        --bin dp-aggregator \
+        --bin dp-zk-keygen
 
 
 # ---------- runtime ----------
@@ -32,6 +36,8 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /build/target/release/darkpool-server /usr/local/bin/darkpool-server
+COPY --from=builder /build/target/release/dp-aggregator   /usr/local/bin/dp-aggregator
+COPY --from=builder /build/target/release/dp-zk-keygen    /usr/local/bin/dp-zk-keygen
 
 USER darkpool
 
