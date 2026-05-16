@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use alloy_primitives::Address;
@@ -7,6 +8,7 @@ use alloy_provider::Provider;
 use alloy_rpc_types::Filter;
 use alloy_sol_types::SolEvent;
 use futures_util::StreamExt;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -28,6 +30,7 @@ pub struct Watcher<P, S> {
     sink: S,
     contract: Address,
     cancel: CancellationToken,
+    ready: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl<P: Provider + Send + Sync + 'static, S: BatchSink> Watcher<P, S> {
@@ -37,7 +40,15 @@ impl<P: Provider + Send + Sync + 'static, S: BatchSink> Watcher<P, S> {
             sink,
             contract,
             cancel,
+            ready: Mutex::new(None),
         }
+    }
+
+    /// Fires once when the first `eth_subscribe` succeeds. Intended for tests
+    /// that need a deterministic handshake instead of a timed warm-up.
+    pub fn with_ready_signal(mut self, tx: oneshot::Sender<()>) -> Self {
+        self.ready = Mutex::new(Some(tx));
+        self
     }
 
     /// Requires a provider that supports `eth_subscribe` with `logs` filter.
@@ -89,6 +100,10 @@ impl<P: Provider + Send + Sync + 'static, S: BatchSink> Watcher<P, S> {
             .subscribe_logs(&filter)
             .await
             .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+
+        if let Some(tx) = self.ready.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
 
         let mut stream = sub.into_stream();
 

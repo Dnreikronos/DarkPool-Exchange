@@ -228,14 +228,18 @@ async fn settles_batch_end_to_end() {
         .await
         .unwrap();
 
-    // Spawn watcher
+    // Spawn watcher and await its subscribe_logs handshake before submitting.
     let (sink, batch_rx) = BatchCollector::new();
     let cancel = CancellationToken::new();
-    let watcher = Watcher::new(ws_provider, pool_addr, sink, cancel.clone());
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let watcher = Watcher::new(ws_provider, pool_addr, sink, cancel.clone())
+        .with_ready_signal(ready_tx);
     let watcher_handle = tokio::spawn(async move { watcher.run().await });
 
-    // Brief warm-up so subscribe_logs is live before submit
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    tokio::time::timeout(Duration::from_secs(5), ready_rx)
+        .await
+        .expect("watcher subscribe_logs timeout")
+        .expect("watcher dropped ready signal");
 
     // Submit a batch via EthSubmitter
     let config = EthSubmitterConfig {
