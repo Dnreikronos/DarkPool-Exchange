@@ -113,3 +113,39 @@ export function TokenETH(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function TradeGlyph(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...BASE} {...props}>
+      {/* two horizontal arrows opposing — the swap motion */}
+      <path d="M2 5 L14 5" />
+      <path d="M11 2 L14 5 L11 8" />
+      <path d="M14 11 L2 11" />
+      <path d="M5 8 L2 11 L5 14" />
+    </svg>
+  )
+}
+
+export function PortfolioGlyph(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...BASE} {...props}>
+      {/* folio with a tab and inner rules */}
+      <path d="M2 5 L6 5 L7 7 L14 7 L14 13 L2 13 Z" />
+      <path d="M5 10 L12 10" />
+      <path d="M5 12 L10 12" />
+    </svg>
+  )
+}
+
+export function DocsGlyph(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...BASE} {...props}>
+      {/* two stacked pages */}
+      <path d="M5 2 L13 2 L13 12 L5 12 Z" />
+      <path d="M3 4 L11 4 L11 14 L3 14 Z" />
+      <path d="M5 7 L9 7" />
+      <path d="M5 10 L8 10" />
+    </svg>
+  )
+}
+
