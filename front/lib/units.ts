@@ -23,13 +23,8 @@ export const WIRE_MAX_DP = 8
 export const WIRE_MAX_SCALED = 2n ** 60n
 
 const SCALE_FACTOR = new Decimal(10).pow(WIRE_MAX_DP)
-const WIRE_MAX_RAW = new Decimal(WIRE_MAX_SCALED.toString()).div(SCALE_FACTOR)
-
-// Force fixed-point string output across the full protocol range
-// (~1e-8 up to ~1.15e10). The decimal.js defaults switch to scientific
-// notation at 1e-7 and 1e21; widening both bounds keeps `toString()`
-// canonical for every value units.ts will ever emit.
-Decimal.set({ toExpNeg: -9, toExpPos: 30 })
+const WIRE_MAX_SCALED_DEC = new Decimal(WIRE_MAX_SCALED.toString())
+const WIRE_MAX_RAW_DEC = WIRE_MAX_SCALED_DEC.div(SCALE_FACTOR)
 
 export function toDecimal(value: DecimalInput): Decimal {
   if (value instanceof Decimal) return value
@@ -61,9 +56,9 @@ function assertWireBounds(d: Decimal, field: 'size' | 'price'): void {
   }
   // Mirror crates/dp-zk/src/encoding.rs's 2^60 ceiling so we reject values
   // that would later fail proof generation.
-  if (d.times(SCALE_FACTOR).gte(WIRE_MAX_SCALED.toString())) {
+  if (d.times(SCALE_FACTOR).gte(WIRE_MAX_SCALED_DEC)) {
     throw new RangeError(
-      `units: ${field} exceeds protocol max ${WIRE_MAX_RAW.toString()} (got ${d})`
+      `units: ${field} exceeds protocol max ${WIRE_MAX_RAW_DEC.toString()} (got ${d})`
     )
   }
 }
