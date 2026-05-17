@@ -170,15 +170,15 @@ pub fn prove_from_bytes(
             ),
         ));
     }
-    let pk = dp_zk::keys::read_pk(keys_dir)
-        .map_err(|e| ProveError::new(3, format!("read pk: {e}")))?;
+    let pk =
+        dp_zk::keys::read_pk(keys_dir).map_err(|e| ProveError::new(3, format!("read pk: {e}")))?;
 
     let circuit = dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, batch_size)
         .map_err(|e| ProveError::new(4, format!("build circuit: {e}")))?;
 
     let mut rng = StdRng::from_entropy();
-    let proof =
-        dp_zk::prove(&pk, circuit, &mut rng).map_err(|e| ProveError::new(4, format!("prove: {e}")))?;
+    let proof = dp_zk::prove(&pk, circuit, &mut rng)
+        .map_err(|e| ProveError::new(4, format!("prove: {e}")))?;
 
     Ok(proof.0)
 }
@@ -383,7 +383,11 @@ mod tests {
             "proving_key_sha256": "0".repeat(64),
             "verifying_key_sha256": "0".repeat(64),
         });
-        std::fs::write(dir.join("keys_metadata.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("keys_metadata.json"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
