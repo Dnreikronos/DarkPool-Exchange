@@ -538,6 +538,14 @@ duration 0.5–0.8s, stagger 0.07–0.10s. Ambient loops are always linear.
 - **Don't** use `secondary` (#5A5A72) for text the user must read to
   complete a task. It fails WCAG AA for normal text (~3:1 against the
   canvas). Use `primary` (#FFFFFF) for any text on the critical path.
-- **Don't** use icons. DarkPool has no icon library; identity comes from
-  typographic ornaments (numeric step nodes, bracketed tags,
-  box-drawing characters `█ ░ ─` for redaction and skeletons).
+- **Do** use icons when they earn their place — but only icons that
+  match the brutalist terminal aesthetic: monochrome, 1px stroke, sharp
+  corners (no rounded line caps), aligned to the same pixel grid as
+  1px borders, drawn for function not decoration. Pair with the
+  typographic ornaments below; don't replace them when the ornament
+  already reads. Typographic primitives (numeric step nodes, bracketed
+  tags, box-drawing characters `█ ░ ─`) remain the dominant identity
+  layer — icons are an accent, not a foundation. No multi-color icons,
+  no filled silhouettes, no skeuomorphic logos (wallet/chain brand
+  icons are an exception and may render in their native form when
+  shown in a wallet picker).
