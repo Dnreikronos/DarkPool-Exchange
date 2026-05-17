@@ -38,3 +38,6 @@ ark-std = { workspace = true, features = ["std", "getrandom"] }
 ark-groth16 = { workspace = true, features = ["std"] }
 ark-serialize = { workspace = true, features = ["std"] }
 ark-snark = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

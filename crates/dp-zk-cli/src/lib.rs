@@ -1,7 +1,7 @@
 //! Helpers shared by the dp-zk-cli + dp-zk-keygen binaries.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ark_std::rand::rngs::StdRng;
@@ -105,8 +105,74 @@ pub fn build_witness(input: AggregatorInput) -> Result<ParsedInput, String> {
     })
 }
 
-/// Stdin JSON → stdout proof bytes. Shared body of the dp-zk-cli +
-/// dp-aggregator binaries.
+/// Failure surface for [`prove_from_bytes`]: the exit code the caller should
+/// propagate and the human-readable message to log on stderr.
+#[derive(Debug)]
+pub struct ProveError {
+    pub exit_code: u8,
+    pub message: String,
+}
+
+impl ProveError {
+    fn new(exit_code: u8, message: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Pure stdin-JSON → proof-bytes pipeline used by [`run_prover`]. Split out
+/// so error paths (bad input, missing/incompatible keys, prover failure)
+/// can be exercised without trampling real stdin/stdout.
+///
+/// Exit codes embedded in [`ProveError`]:
+/// - 2: JSON parse failure or invalid witness.
+/// - 3: keys missing / version mismatch / batch_size mismatch.
+/// - 4: circuit build or prover failure.
+pub fn prove_from_bytes(
+    input_bytes: &[u8],
+    batch_size: usize,
+    keys_dir: &Path,
+) -> Result<Vec<u8>, ProveError> {
+    let input: AggregatorInput = serde_json::from_slice(input_bytes)
+        .map_err(|e| ProveError::new(2, format!("parse input: {e}")))?;
+    let ParsedInput {
+        witness,
+        prices,
+        sizes,
+        ..
+    } = build_witness(input).map_err(|e| ProveError::new(2, e))?;
+
+    let meta = dp_zk::keys::read_metadata(keys_dir)
+        .map_err(|e| ProveError::new(3, format!("read metadata: {e}")))?;
+    meta.check_compatible()
+        .map_err(|e| ProveError::new(3, e.to_string()))?;
+    if meta.batch_size as usize != batch_size {
+        return Err(ProveError::new(
+            3,
+            format!(
+                "batch_size mismatch: keys={}, requested={}",
+                meta.batch_size, batch_size
+            ),
+        ));
+    }
+    let pk = dp_zk::keys::read_pk(keys_dir)
+        .map_err(|e| ProveError::new(3, format!("read pk: {e}")))?;
+
+    let circuit = dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, batch_size)
+        .map_err(|e| ProveError::new(4, format!("build circuit: {e}")))?;
+
+    let mut rng = StdRng::from_entropy();
+    let proof =
+        dp_zk::prove(&pk, circuit, &mut rng).map_err(|e| ProveError::new(4, format!("prove: {e}")))?;
+
+    Ok(proof.0)
+}
+
+/// Stdin JSON → stdout proof bytes. Thin I/O wrapper over [`prove_from_bytes`];
+/// the only logic still in-band is reading stdin, resolving the keys dir, and
+/// writing the proof bytes back.
 ///
 /// Exit codes:
 /// - 0: proof written to stdout.
@@ -119,78 +185,20 @@ pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
         eprintln!("read stdin: {e}");
         return ExitCode::from(2);
     }
-    let input: AggregatorInput = match serde_json::from_slice(&buf) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("parse input: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    let ParsedInput {
-        witness,
-        prices,
-        sizes,
-        ..
-    } = match build_witness(input) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-
     let dir = resolve_keys_dir(keys_dir);
-    let meta = match dp_zk::keys::read_metadata(&dir) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("read metadata: {e}");
-            return ExitCode::from(3);
-        }
-    };
-    if let Err(e) = meta.check_compatible() {
-        eprintln!("{e}");
-        return ExitCode::from(3);
-    }
-    if meta.batch_size as usize != batch_size {
-        eprintln!(
-            "batch_size mismatch: keys={}, requested={}",
-            meta.batch_size, batch_size
-        );
-        return ExitCode::from(3);
-    }
-    let pk = match dp_zk::keys::read_pk(&dir) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("read pk: {e}");
-            return ExitCode::from(3);
-        }
-    };
-
-    let circuit =
-        match dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, batch_size) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("build circuit: {e}");
+    match prove_from_bytes(&buf, batch_size, &dir) {
+        Ok(bytes) => {
+            if let Err(e) = std::io::stdout().write_all(&bytes) {
+                eprintln!("write stdout: {e}");
                 return ExitCode::from(4);
             }
-        };
-
-    let mut rng = StdRng::from_entropy();
-    let proof = match dp_zk::prove(&pk, circuit, &mut rng) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("prove: {e}");
-            return ExitCode::from(4);
+            ExitCode::SUCCESS
         }
-    };
-
-    if let Err(e) = std::io::stdout().write_all(&proof.0) {
-        eprintln!("write stdout: {e}");
-        return ExitCode::from(4);
+        Err(ProveError { exit_code, message }) => {
+            eprintln!("{message}");
+            ExitCode::from(exit_code)
+        }
     }
-
-    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
@@ -311,5 +319,87 @@ mod tests {
         std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
         let p = resolve_keys_dir(None);
         assert!(p.to_str().unwrap().contains("dp-zk/keys"));
+    }
+
+    fn valid_input_bytes() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "batch_id": uuid::Uuid::new_v4().to_string(),
+            "matches": [{
+                "auction_id": uuid::Uuid::new_v4().to_string(),
+                "bid_order_id": uuid::Uuid::new_v4().to_string(),
+                "ask_order_id": uuid::Uuid::new_v4().to_string(),
+                "price": "100",
+                "size": "10",
+            }],
+            "private_witness": serde_json::to_value(vec![dummy_match_witness()]).unwrap(),
+        }))
+        .unwrap()
+    }
+
+    fn write_metadata(dir: &Path, circuit_version: &str, batch_size: u32) {
+        let meta = serde_json::json!({
+            "circuit_version": circuit_version,
+            "batch_size": batch_size,
+            "proving_key_sha256": "0".repeat(64),
+            "verifying_key_sha256": "0".repeat(64),
+        });
+        std::fs::write(dir.join("keys_metadata.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn prove_from_bytes_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = prove_from_bytes(b"not json", 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("parse input"));
+    }
+
+    #[test]
+    fn prove_from_bytes_invalid_witness_returns_code_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "batch_id": "not-a-uuid",
+            "matches": [],
+            "private_witness": null,
+        }))
+        .unwrap();
+        let err = prove_from_bytes(&bytes, 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 2);
+    }
+
+    #[test]
+    fn prove_from_bytes_missing_keys_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("read metadata"));
+    }
+
+    #[test]
+    fn prove_from_bytes_version_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), "from-the-stone-age", 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+    }
+
+    #[test]
+    fn prove_from_bytes_batch_size_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 4, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("batch_size mismatch"));
+    }
+
+    #[test]
+    fn prove_from_bytes_missing_pk_after_meta_ok() {
+        // metadata file present, batch_size and version both compatible, but
+        // proving_key.bin is absent — exercises the read_pk error branch.
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("read pk"));
     }
 }
