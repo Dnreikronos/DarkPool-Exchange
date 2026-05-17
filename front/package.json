@@ -9,9 +9,11 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "sdk:gen": "cd lib/sdk && buf generate"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
     "@gsap/react": "^2.1.2",
     "gsap": "^3.14.2",
     "next": "14.2.35",
@@ -19,6 +21,8 @@
     "react-dom": "^18"
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.69.0",
+    "@bufbuild/protoc-gen-es": "^2.12.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
