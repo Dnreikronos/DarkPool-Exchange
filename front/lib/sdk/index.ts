@@ -82,3 +82,40 @@ export {
 // Friendly alias: the proto names the orderbook payload
 // `GetOrderBookResponse`, but consumers think of it as the order book itself.
 export type { GetOrderBookResponse as OrderBook } from './proto/darkpool/v1/darkpool_pb.js'
+
+// ─── F1.2 mocks (#69) ────────────────────────────────────────────────────
+//
+// Re-exports the Phase 1 simulated backend: typed faker factories, the
+// store-backed DarkPoolClient, and the runtime store handle. Phase 2
+// (#90+) replaces these by flipping `useMocks=false` in createDarkPoolClient
+// — no callsite changes required.
+
+export {
+  DEFAULT_MID,
+  DEFAULT_PAIR,
+  PRICE_DP,
+  SIZE_DP,
+  createFactoryContext,
+  midFromBook,
+  mockAuctionSummary,
+  mockBalances,
+  mockFill,
+  mockOrderBook,
+  mockOrderInfo,
+  mockPriceLevel,
+  scaleWireSize,
+  StoreMockClient,
+  withMockPayload,
+  type Balances,
+  type FactoryContext,
+  type FactoryContextOptions,
+  type Fill,
+  type MockAuctionSummaryOptions,
+  type MockBalancesOptions,
+  type MockFillOptions,
+  type MockOrderBookOptions,
+  type MockOrderInfoOptions,
+  type MockOrderPayload,
+  type MockPriceLevelOptions,
+  type StoreMockClientOptions,
+} from './mocks/index.js'
