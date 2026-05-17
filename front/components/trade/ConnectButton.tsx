@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { WalletIcon } from '@/app/app/_shell/icons'
 import { Button } from '@/components/ui/button'
 import type { Address } from '@/lib/wallet'
 import { useWallet } from '@/lib/wallet'
@@ -22,20 +23,14 @@ export function ConnectButton() {
 
   if (isConnected && address) {
     return (
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          onClick={disconnect}
-          aria-label={`Disconnect wallet ${address}`}
-        >
-          <span
-            aria-hidden="true"
-            className="mr-3 inline-block h-[6px] w-[6px] bg-brand-accent"
-            style={{ borderRadius: 0 }}
-          />
-          {truncateAddress(address)}
-        </Button>
-      </div>
+      <Button
+        variant="ghost"
+        onClick={disconnect}
+        aria-label={`Disconnect wallet ${address}`}
+      >
+        <WalletIcon className="mr-3 text-brand-fg" />
+        {truncateAddress(address)}
+      </Button>
     )
   }
 
@@ -47,11 +42,7 @@ export function ConnectButton() {
         aria-haspopup="dialog"
         aria-expanded={pickerOpen}
       >
-        <span
-          aria-hidden="true"
-          className="mr-3 inline-block h-[6px] w-[6px] bg-brand-muted"
-          style={{ borderRadius: 0 }}
-        />
+        <WalletIcon className="mr-3 text-brand-muted" />
         CONNECT
       </Button>
       {pickerOpen && (

@@ -1,12 +1,20 @@
 'use client'
 
-import { type ReactNode } from 'react'
+import { type ComponentType, type ReactNode, type SVGProps } from 'react'
+import {
+  ChartGlyph,
+  EntryGlyph,
+  OrderbookGlyph,
+  TapeGlyph,
+} from '@/app/app/_shell/icons'
 import {
   Sheet,
   SheetContent,
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+
+type Glyph = ComponentType<SVGProps<SVGSVGElement>>
 
 export function Shell() {
   return (
@@ -85,16 +93,18 @@ function MobileOrderEntryDock() {
 
 function Panel({
   label,
+  icon: Icon,
   empty,
   children,
 }: {
   label: string
+  icon: Glyph
   empty?: string
   children?: ReactNode
 }) {
   return (
     <div className="flex h-full min-h-[200px] flex-col">
-      <PanelHeader label={label} />
+      <PanelHeader label={label} icon={Icon} />
       <div className="flex flex-1 items-center justify-center p-page-x-mobile">
         {children ?? <EmptyState label={empty ?? 'AWAITING DATA'} />}
       </div>
@@ -102,11 +112,12 @@ function Panel({
   )
 }
 
-function PanelHeader({ label }: { label: string }) {
+function PanelHeader({ label, icon: Icon }: { label: string; icon: Glyph }) {
   return (
-    <div className="flex h-9 items-center justify-between border-b border-brand-border bg-brand-surface px-4">
+    <div className="flex h-9 items-center gap-3 border-b border-brand-border px-4">
+      <Icon className="text-brand-muted" />
       <span className="font-mono text-label-md uppercase text-brand-muted">
-        [ {label} ]
+        {label}
       </span>
     </div>
   )
@@ -124,17 +135,41 @@ function EmptyState({ label }: { label: string }) {
 }
 
 function OrderbookPanel() {
-  return <Panel label="ORDERBOOK · ETH / USDC" empty="NO DATA · F1.6" />
+  return (
+    <Panel
+      label="ORDERBOOK · ETH / USDC"
+      icon={OrderbookGlyph}
+      empty="NO DATA · F1.6"
+    />
+  )
 }
 
 function ChartPanel() {
-  return <Panel label="MARKET · ETH / USDC" empty="CHART · F1.8" />
+  return (
+    <Panel
+      label="MARKET · ETH / USDC"
+      icon={ChartGlyph}
+      empty="CHART · F1.8"
+    />
+  )
 }
 
 function OrderEntryPanel() {
-  return <Panel label="ORDER ENTRY" empty="AWAITING WALLET · F1.9" />
+  return (
+    <Panel
+      label="ORDER ENTRY"
+      icon={EntryGlyph}
+      empty="AWAITING WALLET · F1.9"
+    />
+  )
 }
 
 function TapePanel() {
-  return <Panel label="AUCTION TAPE" empty="NO AUCTIONS YET · F1.7" />
+  return (
+    <Panel
+      label="AUCTION TAPE"
+      icon={TapeGlyph}
+      empty="NO AUCTIONS YET · F1.7"
+    />
+  )
 }

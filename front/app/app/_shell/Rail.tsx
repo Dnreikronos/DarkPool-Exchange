@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { CommandPrompt } from './CommandPrompt'
 
 type RailItemDef = {
   href: string
@@ -22,7 +23,7 @@ export function Rail() {
   return (
     <nav
       aria-label="Primary"
-      className="hidden lg:flex fixed left-0 top-24 bottom-0 z-30 w-56 flex-col border-r border-brand-border bg-brand-bg"
+      className="hidden lg:flex fixed left-0 top-16 bottom-0 z-30 w-56 flex-col border-r border-brand-border bg-brand-bg"
     >
       <StatusZone label="OPERATOR" value="IDLE" />
 
@@ -41,6 +42,7 @@ export function Rail() {
       </ul>
 
       <div className="mt-auto">
+        <CommandPrompt />
         <StatusZone label="BATCH ──" value="IDLE" border="t" />
       </div>
     </nav>
@@ -100,14 +102,14 @@ function RailItem({
 
   const labelClass = 'flex-1 font-mono text-label-lg uppercase'
 
-  const suffixClass = active
+  const kbdClass = active
     ? 'font-mono text-label-md text-brand-muted'
     : 'font-mono text-label-md text-brand-muted opacity-0 transition-opacity group-hover:opacity-100'
 
   const suffix = item.external ? (
     <ExternalGlyph aria-hidden="true" className="text-brand-muted" />
   ) : item.kbd ? (
-    <kbd className={suffixClass}>{item.kbd}</kbd>
+    <kbd className={kbdClass}>{item.kbd}</kbd>
   ) : null
 
   if (item.external) {
