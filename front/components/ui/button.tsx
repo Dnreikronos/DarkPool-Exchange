@@ -22,10 +22,15 @@ const buttonVariants = cva(
           'hover:shadow-accent-glow',
           'disabled:bg-brand-border disabled:text-brand-muted disabled:shadow-none'
         ),
+        // Engraved double-1px: an outer border + an inset shadow that
+        // reads as a hairline 1px inside the outer edge. Hover lifts the
+        // hairline; press inverts it.
         ghost: cn(
-          'bg-transparent text-brand-muted border border-brand-border2',
-          'hover:text-brand-fg hover:border-brand-muted',
-          'disabled:text-brand-muted disabled:border-brand-border disabled:hover:border-brand-border disabled:hover:text-brand-muted'
+          'bg-transparent text-brand-muted border border-brand-border',
+          'shadow-[inset_0_0_0_1px_#0C0C12]',
+          'hover:text-brand-fg hover:border-brand-muted hover:shadow-[inset_0_0_0_1px_#1C1C26]',
+          'active:shadow-[inset_0_0_0_1px_#2E2E3E]',
+          'disabled:text-brand-muted disabled:border-brand-border disabled:hover:border-brand-border disabled:hover:text-brand-muted disabled:hover:shadow-[inset_0_0_0_1px_#0C0C12]'
         ),
       },
       size: {

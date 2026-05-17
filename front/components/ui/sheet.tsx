@@ -72,13 +72,25 @@ const SheetContent = React.forwardRef<
       <SheetPrimitive.Close
         aria-label="Close"
         className={cn(
-          'absolute right-4 top-4 font-mono text-[11px] uppercase tracking-[0.15em] font-medium',
-          'text-brand-muted hover:text-brand-fg transition-colors',
-          'focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent',
+          'absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center',
+          'text-brand-muted hover:bg-brand-bg hover:text-brand-fg transition-colors',
+          'focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent',
           'disabled:pointer-events-none'
         )}
       >
-        [ X ]
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1"
+          strokeLinecap="square"
+          aria-hidden="true"
+        >
+          <path d="M4 4 L12 12" />
+          <path d="M12 4 L4 12" />
+        </svg>
       </SheetPrimitive.Close>
     </SheetPrimitive.Content>
   </SheetPortal>
