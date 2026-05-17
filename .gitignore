@@ -13,6 +13,7 @@ target/
 .env.*
 .env*.local
 !.env.example
+!front/.env.local.example
 
 # os
 .DS_Store
