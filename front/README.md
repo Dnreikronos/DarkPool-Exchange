@@ -33,11 +33,34 @@ PR via the `Frontend` job in `.github/workflows/ci.yml`.
 
 ## Environment variables
 
-The trading app reads its runtime config from `front/lib/config.ts`,
-which is established by [F0.6 (#67)](https://github.com/Dnreikronos/DarkPool-Exchange/issues/67).
-Until that lands no env vars are required.
+The trading app reads its runtime config from
+[`front/lib/config.ts`](./lib/config.ts), which validates `process.env`
+with [zod](https://zod.dev) at module load. **If a required variable
+is missing or malformed the app refuses to boot** (loud error in the
+dev overlay / 500 in production) — there is no silent fallback.
 
-Document each new variable here as it gets introduced.
+Copy [`.env.local.example`](./.env.local.example) to `.env.local` and
+edit the values. `.env.local` is git-ignored.
+
+| Variable                              | Required when                          | Notes                                                            |
+| ------------------------------------- | -------------------------------------- | ---------------------------------------------------------------- |
+| `NEXT_PUBLIC_USE_MOCKS`               | always                                 | `true` / `false`. Phase 1 default is `true`.                     |
+| `NEXT_PUBLIC_DARKPOOL_API_URL`        | always                                 | Base URL of `dp-api`. Dev proxies `/api/v1/*` here.              |
+| `NEXT_PUBLIC_DARKPOOL_API_KEY`        | always                                 | Sent as `x-api-key` header by the SDK.                           |
+| `NEXT_PUBLIC_CHAIN_ID`                | always                                 | Positive integer. Anvil default `31337`.                         |
+| `NEXT_PUBLIC_OPERATOR_PUBKEY_URL`     | always                                 | ECIES pubkey endpoint (lands with C1, #81).                      |
+| `NEXT_PUBLIC_DARKPOOL_ADDRESS`        | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
+| `NEXT_PUBLIC_VERIFIER_PROXY_ADDRESS`  | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
+| `NEXT_PUBLIC_USDC_ADDRESS`            | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
+| `NEXT_PUBLIC_WETH_ADDRESS`            | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
+
+### Dev proxy
+
+`next.config.mjs` rewrites `/api/v1/:path*` →
+`${NEXT_PUBLIC_DARKPOOL_API_URL}/v1/:path*` **only in `npm run dev`**.
+This dodges CORS until [C2 (#82)](https://github.com/Dnreikronos/DarkPool-Exchange/issues/82)
+lands real CORS on the REST router. Production builds don't rewrite —
+the SDK is expected to call the backend directly.
 
 ## Structure
 
