@@ -134,6 +134,13 @@ jobs:
           cache: npm
           cache-dependency-path: front/package-lock.json
       - run: npm ci
+      - name: Verify SDK is regenerated from proto
+        # Fails if front/lib/sdk/proto/ drifts from
+        # crates/dp-api/proto/darkpool/v1/darkpool.proto. Run
+        # `npm run sdk:gen` locally to refresh.
+        run: |
+          npm run sdk:gen
+          git diff --exit-code -- lib/sdk/proto
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
