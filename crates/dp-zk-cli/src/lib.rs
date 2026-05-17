@@ -183,25 +183,25 @@ pub fn prove_from_bytes(
     Ok(proof.0)
 }
 
-/// Stdin JSON → stdout proof bytes. Thin I/O wrapper over [`prove_from_bytes`];
-/// the only logic still in-band is reading stdin, resolving the keys dir, and
-/// writing the proof bytes back.
-///
-/// Exit codes:
-/// - 0: proof written to stdout.
-/// - 2: stdin read failure, missing private_witness, or invalid input.
-/// - 3: keys missing / version mismatch.
-/// - 4: circuit build, prover, or stdout write failure.
-pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
+/// Generic-IO core of [`run_prover`]: reads JSON from `stdin`, dispatches to
+/// [`prove_from_bytes`], writes the resulting proof bytes to `stdout`, and
+/// maps every failure to an exit code via [`ProveError`]. Exposed so tests
+/// can drive the wrapper end-to-end with in-memory cursors instead of the
+/// real process streams.
+pub fn run_prover_io<R: Read, W: Write>(
+    mut stdin: R,
+    mut stdout: W,
+    batch_size: usize,
+    keys_dir: &Path,
+) -> ExitCode {
     let mut buf = Vec::new();
-    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+    if let Err(e) = stdin.read_to_end(&mut buf) {
         eprintln!("read stdin: {e}");
         return ExitCode::from(2);
     }
-    let dir = resolve_keys_dir(keys_dir);
-    match prove_from_bytes(&buf, batch_size, &dir) {
+    match prove_from_bytes(&buf, batch_size, keys_dir) {
         Ok(bytes) => {
-            if let Err(e) = std::io::stdout().write_all(&bytes) {
+            if let Err(e) = stdout.write_all(&bytes) {
                 eprintln!("write stdout: {e}");
                 return ExitCode::from(4);
             }
@@ -212,6 +212,24 @@ pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
             ExitCode::from(exit_code)
         }
     }
+}
+
+/// Stdin JSON → stdout proof bytes. Thin process-IO wrapper over
+/// [`run_prover_io`].
+///
+/// Exit codes:
+/// - 0: proof written to stdout.
+/// - 2: stdin read failure, missing private_witness, or invalid input.
+/// - 3: keys missing / version mismatch.
+/// - 4: circuit build, prover, or stdout write failure.
+pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
+    let dir = resolve_keys_dir(keys_dir);
+    run_prover_io(
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+        batch_size,
+        &dir,
+    )
 }
 
 /// Parse [`ProverArgs`] under a per-binary program name/about string, then
@@ -412,6 +430,66 @@ mod tests {
         let err = prove_from_bytes(&valid_input_bytes(), 4, dir.path()).unwrap_err();
         assert_eq!(err.exit_code, 3);
         assert!(err.message.contains("batch_size mismatch"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_uses_env_var_when_flag_absent() {
+        std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "/env/keys");
+        let p = resolve_keys_dir(None);
+        std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
+        assert_eq!(p, PathBuf::from("/env/keys"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_ignores_empty_env_var() {
+        std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "");
+        let p = resolve_keys_dir(None);
+        std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
+        assert!(p.to_str().unwrap().contains("dp-zk/keys"));
+    }
+
+    #[test]
+    fn run_prover_io_bad_json_returns_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let stdin = std::io::Cursor::new(b"not json".to_vec());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(2));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_missing_keys_returns_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let stdin = std::io::Cursor::new(valid_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(3));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_batch_mismatch_returns_3() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let stdin = std::io::Cursor::new(valid_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 4, dir.path());
+        assert_eq!(code, ExitCode::from(3));
+    }
+
+    #[test]
+    fn run_prover_io_stdin_read_error_returns_2() {
+        struct Boom;
+        impl std::io::Read for Boom {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "boom"))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(Boom, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(2));
     }
 
     #[test]
