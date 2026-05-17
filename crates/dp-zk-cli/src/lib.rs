@@ -1,11 +1,28 @@
 //! Helpers shared by the dp-zk-cli + dp-zk-keygen binaries.
 
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
+use ark_std::rand::rngs::StdRng;
+use ark_std::rand::SeedableRng;
+use clap::Parser;
 use dp_zk::witness::BatchWitness;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use uuid::Uuid;
+
+/// CLI flags shared by every prover entrypoint (`dp-zk-cli`, `dp-aggregator`).
+#[derive(Parser, Debug)]
+pub struct ProverArgs {
+    /// Directory containing proving_key.bin / verifying_key.bin /
+    /// keys_metadata.json.
+    #[arg(long, env = "DARKPOOL_ZK_PROVING_KEY")]
+    pub proving_key: Option<PathBuf>,
+    /// Override the circuit batch size. Must equal the keygen-time value.
+    #[arg(long, env = "DARKPOOL_ZK_BATCH_SIZE", default_value = "8")]
+    pub batch_size: usize,
+}
 
 /// Wire-format input matching `SubprocessAggregator`'s extended schema.
 #[derive(Debug, Deserialize)]
@@ -100,6 +117,105 @@ pub fn build_witness(input: AggregatorInput) -> Result<ParsedInput, String> {
         sizes,
     })
 }
+
+/// Failure surface for [`prove_from_bytes`]: the exit code the caller should
+/// propagate and the human-readable message to log on stderr.
+#[derive(Debug)]
+pub struct ProveError {
+    pub exit_code: u8,
+    pub message: String,
+}
+
+impl ProveError {
+    fn new(exit_code: u8, message: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Pure stdin-JSON → proof-bytes pipeline used by [`run_prover`]. Split out
+/// so error paths (bad input, missing/incompatible keys, prover failure)
+/// can be exercised without trampling real stdin/stdout.
+///
+/// Exit codes embedded in [`ProveError`]:
+/// - 2: JSON parse failure or invalid witness.
+/// - 3: keys missing / version mismatch / batch_size mismatch.
+/// - 4: circuit build or prover failure.
+pub fn prove_from_bytes(
+    input_bytes: &[u8],
+    batch_size: usize,
+    keys_dir: &Path,
+) -> Result<Vec<u8>, ProveError> {
+    let input: AggregatorInput = serde_json::from_slice(input_bytes)
+        .map_err(|e| ProveError::new(2, format!("parse input: {e}")))?;
+    let ParsedInput {
+        witness,
+        prices,
+        sizes,
+        ..
+    } = build_witness(input).map_err(|e| ProveError::new(2, e))?;
+
+    let meta = dp_zk::keys::read_metadata(keys_dir)
+        .map_err(|e| ProveError::new(3, format!("read metadata: {e}")))?;
+    meta.check_compatible()
+        .map_err(|e| ProveError::new(3, e.to_string()))?;
+    if meta.batch_size as usize != batch_size {
+        return Err(ProveError::new(
+            3,
+            format!(
+                "batch_size mismatch: keys={}, requested={}",
+                meta.batch_size, batch_size
+            ),
+        ));
+    }
+    let pk =
+        dp_zk::keys::read_pk(keys_dir).map_err(|e| ProveError::new(3, format!("read pk: {e}")))?;
+
+    let circuit = dp_zk::BatchProofCircuit::from_witness(&witness, &prices, &sizes, batch_size)
+        .map_err(|e| ProveError::new(4, format!("build circuit: {e}")))?;
+
+    let mut rng = StdRng::from_entropy();
+    let proof = dp_zk::prove(&pk, circuit, &mut rng)
+        .map_err(|e| ProveError::new(4, format!("prove: {e}")))?;
+
+    Ok(proof.0)
+}
+
+/// Generic-IO core of [`run_prover`]: reads JSON from `stdin`, dispatches to
+/// [`prove_from_bytes`], writes the resulting proof bytes to `stdout`, and
+/// maps every failure to an exit code via [`ProveError`]. Exposed so tests
+/// can drive the wrapper end-to-end with in-memory cursors instead of the
+/// real process streams.
+pub fn run_prover_io<R: Read, W: Write>(
+    mut stdin: R,
+    mut stdout: W,
+    batch_size: usize,
+    keys_dir: &Path,
+) -> ExitCode {
+    let mut buf = Vec::new();
+    if let Err(e) = stdin.read_to_end(&mut buf) {
+        eprintln!("read stdin: {e}");
+        return ExitCode::from(2);
+    }
+    match prove_from_bytes(&buf, batch_size, keys_dir) {
+        Ok(bytes) => {
+            if let Err(e) = stdout.write_all(&bytes) {
+                eprintln!("write stdout: {e}");
+                return ExitCode::from(4);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(ProveError { exit_code, message }) => {
+            eprintln!("{message}");
+            ExitCode::from(exit_code)
+        }
+    }
+}
+
+pub mod cli;
+pub use cli::{run_prover, run_prover_cli};
 
 #[cfg(test)]
 mod tests {
@@ -214,10 +330,265 @@ mod tests {
         assert_eq!(p, PathBuf::from("/custom/path"));
     }
 
+    /// Serializes the env-var tests below. cargo runs tests in parallel and
+    /// `set_var`/`remove_var` are global, so without this guard one test's
+    /// teardown races another's setup.
+    fn env_var_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     #[test]
     fn resolve_keys_dir_falls_back_to_manifest() {
+        let _g = env_var_lock();
         std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
         let p = resolve_keys_dir(None);
         assert!(p.to_str().unwrap().contains("dp-zk/keys"));
+    }
+
+    fn valid_input_bytes() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "batch_id": uuid::Uuid::new_v4().to_string(),
+            "matches": [{
+                "auction_id": uuid::Uuid::new_v4().to_string(),
+                "bid_order_id": uuid::Uuid::new_v4().to_string(),
+                "ask_order_id": uuid::Uuid::new_v4().to_string(),
+                "price": "100",
+                "size": "10",
+            }],
+            "private_witness": serde_json::to_value(vec![dummy_match_witness()]).unwrap(),
+        }))
+        .unwrap()
+    }
+
+    fn write_metadata(dir: &Path, circuit_version: &str, batch_size: u32) {
+        let meta = serde_json::json!({
+            "circuit_version": circuit_version,
+            "batch_size": batch_size,
+            "proving_key_sha256": "0".repeat(64),
+            "verifying_key_sha256": "0".repeat(64),
+        });
+        std::fs::write(
+            dir.join("keys_metadata.json"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn prove_from_bytes_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = prove_from_bytes(b"not json", 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 2);
+        assert!(err.message.contains("parse input"));
+    }
+
+    #[test]
+    fn prove_from_bytes_invalid_witness_returns_code_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "batch_id": "not-a-uuid",
+            "matches": [],
+            "private_witness": null,
+        }))
+        .unwrap();
+        let err = prove_from_bytes(&bytes, 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 2);
+    }
+
+    #[test]
+    fn prove_from_bytes_missing_keys_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("read metadata"));
+    }
+
+    #[test]
+    fn prove_from_bytes_version_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), "from-the-stone-age", 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+    }
+
+    #[test]
+    fn prove_from_bytes_batch_size_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 4, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("batch_size mismatch"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_uses_env_var_when_flag_absent() {
+        let _g = env_var_lock();
+        std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "/env/keys");
+        let p = resolve_keys_dir(None);
+        std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
+        assert_eq!(p, PathBuf::from("/env/keys"));
+    }
+
+    #[test]
+    fn resolve_keys_dir_ignores_empty_env_var() {
+        let _g = env_var_lock();
+        std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "");
+        let p = resolve_keys_dir(None);
+        std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
+        assert!(p.to_str().unwrap().contains("dp-zk/keys"));
+    }
+
+    #[test]
+    fn run_prover_io_bad_json_returns_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let stdin = std::io::Cursor::new(b"not json".to_vec());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(2));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_missing_keys_returns_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let stdin = std::io::Cursor::new(valid_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(3));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_batch_mismatch_returns_3() {
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let stdin = std::io::Cursor::new(valid_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 4, dir.path());
+        assert_eq!(code, ExitCode::from(3));
+    }
+
+    #[test]
+    fn run_prover_io_stdin_read_error_returns_2() {
+        struct Boom;
+        impl std::io::Read for Boom {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(Boom, &mut stdout, 8, dir.path());
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn prove_from_bytes_missing_pk_after_meta_ok() {
+        // metadata file present, batch_size and version both compatible, but
+        // proving_key.bin is absent — exercises the read_pk error branch.
+        let dir = tempfile::tempdir().unwrap();
+        write_metadata(dir.path(), dp_zk::CIRCUIT_VERSION, 8);
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 3);
+        assert!(err.message.contains("read pk"));
+    }
+
+    /// Shared batch_size=1 keys dir, set up once per test process. setup() is
+    /// the expensive step (~30s in debug); caching keeps the happy-path tests
+    /// under a few seconds total.
+    fn shared_keys_dir() -> &'static Path {
+        use std::sync::OnceLock;
+        static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+        DIR.get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut rng = StdRng::seed_from_u64(7);
+            let (pk, vk) = dp_zk::circuit::setup(1, &mut rng).expect("setup");
+            dp_zk::keys::write_keys_to_dir(dir.path(), &pk, &vk, 1).expect("write keys");
+            dir
+        })
+        .path()
+    }
+
+    /// Build a circuit-satisfying single-match input matched to
+    /// [`shared_keys_dir`]'s batch_size=1 keys.
+    fn valid_match_input_bytes() -> Vec<u8> {
+        use dp_zk::pedersen::derive_trader_id_bytes;
+
+        let bid_key = "bid_key";
+        let ask_key = "ask_key";
+        let bid_match = MatchWitness {
+            bid: OrderLegWitness {
+                trader_id: hex::encode(derive_trader_id_bytes(bid_key.as_bytes())),
+                salt: "22".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(105),
+                order_size: Decimal::from(10),
+                side: 0,
+                commitment_key: bid_key.into(),
+            },
+            ask: OrderLegWitness {
+                trader_id: hex::encode(derive_trader_id_bytes(ask_key.as_bytes())),
+                salt: "44".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(95),
+                order_size: Decimal::from(10),
+                side: 1,
+                commitment_key: ask_key.into(),
+            },
+        };
+        let auction_id = uuid::Uuid::new_v4().to_string();
+        serde_json::to_vec(&serde_json::json!({
+            "batch_id": uuid::Uuid::new_v4().to_string(),
+            "matches": [{
+                "auction_id": auction_id,
+                "bid_order_id": uuid::Uuid::new_v4().to_string(),
+                "ask_order_id": uuid::Uuid::new_v4().to_string(),
+                "price": "100",
+                "size": "10",
+            }],
+            "private_witness": serde_json::to_value(vec![bid_match]).unwrap(),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn prove_from_bytes_happy_path() {
+        // Full end-to-end: real keys + circuit-satisfying witness → proof bytes.
+        // Covers the post-read_pk branches of prove_from_bytes that the
+        // error-path tests can't reach.
+        let proof =
+            prove_from_bytes(&valid_match_input_bytes(), 1, shared_keys_dir()).expect("prove");
+        assert!(!proof.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_happy_path_writes_proof_to_stdout() {
+        let stdin = std::io::Cursor::new(valid_match_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 1, shared_keys_dir());
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(!stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_stdout_write_error_returns_4() {
+        // Force the write_all error branch by handing run_prover_io a sink
+        // that errors on the first byte. Pair it with a valid prove pipeline
+        // so we actually reach the write step.
+        struct BoomSink;
+        impl std::io::Write for BoomSink {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let stdin = std::io::Cursor::new(valid_match_input_bytes());
+        let code = run_prover_io(stdin, BoomSink, 1, shared_keys_dir());
+        assert_eq!(code, ExitCode::from(4));
     }
 }

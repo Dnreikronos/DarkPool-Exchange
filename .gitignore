@@ -12,6 +12,7 @@ target/
 .env
 .env.*
 .env*.local
+!.env.example
 !front/.env.local.example
 
 # os
@@ -45,6 +46,9 @@ coverage/
 .yarn/install-state.gz
 
 # rust
+
+# forge broadcast artifacts (run-latest.json etc., regenerated each deploy)
+contracts/broadcast/
 
 # notes
 gotchas.md

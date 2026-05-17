@@ -85,7 +85,9 @@ jobs:
       - name: Run tests with coverage
         # `--include-ignored` runs anvil_e2e (covers EthSubmitter::submit and
         # Watcher::run, which have no provider-mock alternative) and pg_store
-        # (which uses the postgres service above).
+        # (which uses the postgres service above). Skip the dp-zk perf bench,
+        # which has a 30s wall-clock budget tuned for release-mode local hardware
+        # and runs for hours in debug-mode tarpaulin on a GitHub runner.
         run: |
           cargo tarpaulin --workspace \
             --engine llvm \
@@ -93,7 +95,7 @@ jobs:
             --skip-clean \
             --out xml \
             --output-dir coverage \
-            -- --include-ignored
+            -- --include-ignored --skip prove_batch_within_budget
       - name: Convert coverage to generic format
         run: |
           python3 -c "
