@@ -65,7 +65,7 @@ test-full: test test-contracts
 
 # Coverage via tarpaulin (provisions postgres internally — see CI script)
 coverage:
-    cargo tarpaulin --workspace --include-ignored --out Html --output-dir target/tarpaulin
+    cargo tarpaulin --workspace --skip prove_batch_within_budget --include-ignored --out Html --output-dir target/tarpaulin
 
 # ---------------------------------------------------------------------------
 # Lint / format / check
