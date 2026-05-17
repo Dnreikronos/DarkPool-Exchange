@@ -5,11 +5,7 @@ import { ArbitrumHex } from './_shell/icons'
 import { PairSelector } from './_shell/PairSelector'
 import { Rail } from './_shell/Rail'
 
-export default function AppLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative min-h-screen bg-brand-bg text-brand-fg">
       {/* Scope-out the landing's global crosshair cursor inside /app
@@ -65,9 +61,7 @@ function NetworkIndicator() {
       className="flex h-10 items-center gap-2 px-2"
     >
       <ArbitrumHex className="text-brand-muted" />
-      <span className="font-mono text-label-lg uppercase text-brand-muted">
-        ARBITRUM · 42161
-      </span>
+      <span className="font-mono text-label-lg uppercase text-brand-muted">ARBITRUM · 42161</span>
     </div>
   )
 }

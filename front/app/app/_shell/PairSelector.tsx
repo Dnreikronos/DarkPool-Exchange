@@ -7,9 +7,7 @@ export function PairSelector() {
   return (
     <details
       className="relative"
-      onToggle={(event) =>
-        setOpen((event.currentTarget as HTMLDetailsElement).open)
-      }
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
     >
       <summary
         aria-label="Trading pair selector"

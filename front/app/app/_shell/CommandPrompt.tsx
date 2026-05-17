@@ -35,9 +35,8 @@ export function CommandPrompt() {
       <DialogContent className="max-w-md">
         <DialogTitle className="mb-2">COMMAND PALETTE</DialogTitle>
         <DialogDescription>
-          Real Cmd-K behavior (jump-to-section, place-order shortcuts,
-          wallet actions) lands in a follow-up issue. The shortcut is
-          wired so the affordance is honest.
+          Real Cmd-K behavior (jump-to-section, place-order shortcuts, wallet actions) lands in a
+          follow-up issue. The shortcut is wired so the affordance is honest.
         </DialogDescription>
         <div className="mt-6 font-mono text-label-md uppercase text-brand-muted/70">
           [ TRACKED · TODO ]

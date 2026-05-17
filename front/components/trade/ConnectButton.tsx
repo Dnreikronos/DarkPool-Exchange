@@ -3,11 +3,7 @@
 import { useCallback, useState } from 'react'
 import { WalletIcon } from '@/app/app/_shell/icons'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { Address } from '@/lib/wallet'
 import { useWallet } from '@/lib/wallet'
 
@@ -62,11 +58,7 @@ export function ConnectButton() {
           <ul className="flex flex-col gap-2">
             {MOCK_PROVIDERS.map((provider) => (
               <li key={provider}>
-                <Button
-                  variant="ghost"
-                  onClick={handlePick}
-                  className="w-full justify-start"
-                >
+                <Button variant="ghost" onClick={handlePick} className="w-full justify-start">
                   {provider}
                 </Button>
               </li>

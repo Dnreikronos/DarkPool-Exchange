@@ -1,18 +1,8 @@
 'use client'
 
 import { type ComponentType, type ReactNode, type SVGProps } from 'react'
-import {
-  ChartGlyph,
-  EntryGlyph,
-  OrderbookGlyph,
-  TapeGlyph,
-} from '@/app/app/_shell/icons'
-import {
-  Sheet,
-  SheetContent,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet'
+import { ChartGlyph, EntryGlyph, OrderbookGlyph, TapeGlyph } from '@/app/app/_shell/icons'
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 
 type Glyph = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -29,10 +19,7 @@ export function Shell() {
 function DesktopLayout() {
   return (
     <div className="hidden lg:grid lg:grid-cols-[1fr_2fr_1fr] lg:min-h-[calc(100vh-4rem)]">
-      <section
-        aria-label="Order book"
-        className="border-r border-brand-border"
-      >
+      <section aria-label="Order book" className="border-r border-brand-border">
         <OrderbookPanel />
       </section>
       <section
@@ -57,10 +44,7 @@ function MobileLayout() {
       <section aria-label="Order book" className="border-b border-brand-border">
         <OrderbookPanel />
       </section>
-      <section
-        aria-label="Market chart"
-        className="border-b border-brand-border"
-      >
+      <section aria-label="Market chart" className="border-b border-brand-border">
         <ChartPanel />
       </section>
       <section aria-label="Auction tape">
@@ -116,60 +100,31 @@ function PanelHeader({ label, icon: Icon }: { label: string; icon: Glyph }) {
   return (
     <div className="flex h-9 items-center gap-3 border-b border-brand-border px-4">
       <Icon className="text-brand-muted" />
-      <span className="font-mono text-label-md uppercase text-brand-muted">
-        {label}
-      </span>
+      <span className="font-mono text-label-md uppercase text-brand-muted">{label}</span>
     </div>
   )
 }
 
 function EmptyState({ label }: { label: string }) {
   return (
-    <p
-      role="status"
-      className="font-mono text-label-md uppercase text-brand-muted"
-    >
+    <p role="status" className="font-mono text-label-md uppercase text-brand-muted">
       [ {label} ]
     </p>
   )
 }
 
 function OrderbookPanel() {
-  return (
-    <Panel
-      label="ORDERBOOK · ETH / USDC"
-      icon={OrderbookGlyph}
-      empty="NO DATA · F1.6"
-    />
-  )
+  return <Panel label="ORDERBOOK · ETH / USDC" icon={OrderbookGlyph} empty="NO DATA · F1.6" />
 }
 
 function ChartPanel() {
-  return (
-    <Panel
-      label="MARKET · ETH / USDC"
-      icon={ChartGlyph}
-      empty="CHART · F1.8"
-    />
-  )
+  return <Panel label="MARKET · ETH / USDC" icon={ChartGlyph} empty="CHART · F1.8" />
 }
 
 function OrderEntryPanel() {
-  return (
-    <Panel
-      label="ORDER ENTRY"
-      icon={EntryGlyph}
-      empty="AWAITING WALLET · F1.9"
-    />
-  )
+  return <Panel label="ORDER ENTRY" icon={EntryGlyph} empty="AWAITING WALLET · F1.9" />
 }
 
 function TapePanel() {
-  return (
-    <Panel
-      label="AUCTION TAPE"
-      icon={TapeGlyph}
-      empty="NO AUCTIONS YET · F1.7"
-    />
-  )
+  return <Panel label="AUCTION TAPE" icon={TapeGlyph} empty="NO AUCTIONS YET · F1.7" />
 }

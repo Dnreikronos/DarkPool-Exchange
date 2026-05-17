@@ -2,10 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  type ComponentType,
-  type SVGProps,
-} from 'react'
+import { type ComponentType, type SVGProps } from 'react'
 import { CommandPrompt } from './CommandPrompt'
 import { DocsGlyph, PortfolioGlyph, TradeGlyph } from './icons'
 
@@ -40,15 +37,12 @@ export function Rail() {
       <StatusZone label="OPERATOR" value="IDLE" />
 
       <div className="px-4 pt-6 pb-3">
-        <h2 className="font-mono text-label-md uppercase text-brand-muted">
-          NAVIGATE
-        </h2>
+        <h2 className="font-mono text-label-md uppercase text-brand-muted">NAVIGATE</h2>
       </div>
       <ul className="flex flex-col gap-px">
         {RAIL_ITEMS.map((item) => {
           const active =
-            !item.external &&
-            (pathname === item.href || pathname?.startsWith(`${item.href}/`))
+            !item.external && (pathname === item.href || pathname?.startsWith(`${item.href}/`))
           return <RailItem key={item.href} item={item} active={active} />
         })}
       </ul>
@@ -75,9 +69,7 @@ function StatusZone({
     <div
       className={`flex h-9 items-center justify-between ${borderClass} border-brand-border px-4`}
     >
-      <span className="font-mono text-label-md uppercase text-brand-muted">
-        {label}
-      </span>
+      <span className="font-mono text-label-md uppercase text-brand-muted">{label}</span>
       <span className="flex items-center gap-2 font-mono text-label-md uppercase text-brand-muted">
         <span
           aria-hidden="true"
@@ -90,13 +82,7 @@ function StatusZone({
   )
 }
 
-function RailItem({
-  item,
-  active,
-}: {
-  item: RailItemDef
-  active: boolean
-}) {
+function RailItem({ item, active }: { item: RailItemDef; active: boolean }) {
   const rowClass = [
     'group relative flex items-center gap-3 px-4 py-3 transition-colors duration-150',
     'focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent',
@@ -107,9 +93,7 @@ function RailItem({
 
   const iconClass = [
     'flex-none transition-colors duration-150',
-    active
-      ? 'text-brand-accent'
-      : 'text-brand-muted group-hover:text-brand-fg',
+    active ? 'text-brand-accent' : 'text-brand-muted group-hover:text-brand-fg',
   ].join(' ')
 
   const labelClass = 'flex-1 font-mono text-label-lg uppercase'
@@ -129,12 +113,7 @@ function RailItem({
   if (item.external) {
     return (
       <li>
-        <a
-          href={item.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={rowClass}
-        >
+        <a href={item.href} target="_blank" rel="noopener noreferrer" className={rowClass}>
           <Icon aria-hidden="true" className={iconClass} />
           <span className={labelClass}>{item.label}</span>
           {suffix}
@@ -145,11 +124,7 @@ function RailItem({
 
   return (
     <li>
-      <Link
-        href={item.href}
-        aria-current={active ? 'page' : undefined}
-        className={rowClass}
-      >
+      <Link href={item.href} aria-current={active ? 'page' : undefined} className={rowClass}>
         <Icon aria-hidden="true" className={iconClass} />
         <span className={labelClass}>{item.label}</span>
         {suffix}
