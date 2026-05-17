@@ -330,8 +330,17 @@ mod tests {
         assert_eq!(p, PathBuf::from("/custom/path"));
     }
 
+    /// Serializes the env-var tests below. cargo runs tests in parallel and
+    /// `set_var`/`remove_var` are global, so without this guard one test's
+    /// teardown races another's setup.
+    fn env_var_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     #[test]
     fn resolve_keys_dir_falls_back_to_manifest() {
+        let _g = env_var_lock();
         std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
         let p = resolve_keys_dir(None);
         assert!(p.to_str().unwrap().contains("dp-zk/keys"));
@@ -414,6 +423,7 @@ mod tests {
 
     #[test]
     fn resolve_keys_dir_uses_env_var_when_flag_absent() {
+        let _g = env_var_lock();
         std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "/env/keys");
         let p = resolve_keys_dir(None);
         std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
@@ -422,6 +432,7 @@ mod tests {
 
     #[test]
     fn resolve_keys_dir_ignores_empty_env_var() {
+        let _g = env_var_lock();
         std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "");
         let p = resolve_keys_dir(None);
         std::env::remove_var("DARKPOOL_ZK_PROVING_KEY");
