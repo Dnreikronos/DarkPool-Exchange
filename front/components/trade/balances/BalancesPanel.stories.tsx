@@ -37,8 +37,10 @@ export const Connected = () => {
 }
 
 export const InTwoColumnDock = () => {
-  // The panel is designed to sit in a left-rail dock above order entry,
-  // approximately ~280px wide. This story previews that constraint.
+  // Preview at a narrow ~280px width — useful for confirming the column
+  // tags don't wrap when the panel docks into a sidebar. The actual
+  // mounting location inside the trade shell is decided in a follow-up
+  // PR, not this one.
   useWalletInitialState(true)
   return (
     <div className="w-[280px]">

@@ -9,31 +9,31 @@ import { displayDecimalsFor } from './format-balance'
 
 const TOKEN_ROWS: readonly TokenSymbol[] = ['WETH', 'USDC']
 
-const COLUMN_LABELS: ReadonlyArray<{ tag: string; key: 'wallet' | 'darkpool' }> = [
-  { tag: '[ WALLET ]', key: 'wallet' },
-  { tag: '[ DARKPOOL ]', key: 'darkpool' },
-]
+const COLUMN_TAGS = ['[ WALLET ]', '[ DARKPOOL ]'] as const
 
 export function BalancesPanel() {
   const { isConnected } = useWallet()
   const wallet = useWalletBalances()
   const internal = useInternalBalances()
+  const headerId = React.useId()
 
   return (
     <section
-      aria-label="Balances"
+      aria-labelledby={headerId}
       className="flex h-full flex-col border border-brand-border bg-brand-surface"
     >
-      <Header />
+      <Header id={headerId} />
       {isConnected ? <BalancesGrid wallet={wallet} internal={internal} /> : <Disconnected />}
     </section>
   )
 }
 
-function Header() {
+function Header({ id }: { id: string }) {
   return (
     <header className="flex h-9 items-center border-b border-brand-border px-4">
-      <span className="font-mono text-label-md uppercase text-brand-muted">[ BALANCES ]</span>
+      <span id={id} className="font-mono text-label-md uppercase text-brand-muted">
+        [ BALANCES ]
+      </span>
     </header>
   )
 }
@@ -42,7 +42,7 @@ function Disconnected() {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       <p role="status" className="font-mono text-label-md uppercase text-brand-muted">
-        [ CONNECT WALLET TO VIEW BALANCES ]
+        [ CONNECT WALLET ]
       </p>
     </div>
   )
@@ -73,7 +73,7 @@ function ColumnHeaderRow() {
   return (
     <div className="grid grid-cols-[44px_1fr_1fr] items-center gap-x-3 border-b border-brand-border px-3 py-2">
       <span aria-hidden className="font-mono text-label-md uppercase text-brand-muted" />
-      {COLUMN_LABELS.map(({ tag }) => (
+      {COLUMN_TAGS.map((tag) => (
         <span
           key={tag}
           className="whitespace-nowrap text-right font-mono text-label-md uppercase text-brand-muted"
@@ -95,10 +95,7 @@ function TokenRow({ symbol, walletAmount, internalAmount }: TokenRowProps) {
   const dp = displayDecimalsFor(symbol)
   return (
     <div className="grid grid-cols-[44px_1fr_1fr] items-baseline gap-x-3 border-b border-brand-border px-3 py-3 last:border-b-0">
-      <span
-        aria-label={symbol}
-        className="font-mono text-label-lg uppercase tracking-label text-brand-fg"
-      >
+      <span className="font-mono text-label-lg uppercase tracking-label text-brand-fg">
         {symbol}
       </span>
       <NumericText
