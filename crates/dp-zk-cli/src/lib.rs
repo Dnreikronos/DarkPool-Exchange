@@ -482,4 +482,102 @@ mod tests {
         assert_eq!(err.exit_code, 3);
         assert!(err.message.contains("read pk"));
     }
+
+    /// Shared batch_size=1 keys dir, set up once per test process. setup() is
+    /// the expensive step (~30s in debug); caching keeps the happy-path tests
+    /// under a few seconds total.
+    fn shared_keys_dir() -> &'static Path {
+        use std::sync::OnceLock;
+        static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+        DIR.get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut rng = StdRng::seed_from_u64(7);
+            let (pk, vk) = dp_zk::circuit::setup(1, &mut rng).expect("setup");
+            dp_zk::keys::write_keys_to_dir(dir.path(), &pk, &vk, 1).expect("write keys");
+            dir
+        })
+        .path()
+    }
+
+    /// Build a circuit-satisfying single-match input matched to
+    /// [`shared_keys_dir`]'s batch_size=1 keys.
+    fn valid_match_input_bytes() -> Vec<u8> {
+        use dp_zk::pedersen::derive_trader_id_bytes;
+
+        let bid_key = "bid_key";
+        let ask_key = "ask_key";
+        let bid_match = MatchWitness {
+            bid: OrderLegWitness {
+                trader_id: hex::encode(derive_trader_id_bytes(bid_key.as_bytes())),
+                salt: "22".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(105),
+                order_size: Decimal::from(10),
+                side: 0,
+                commitment_key: bid_key.into(),
+            },
+            ask: OrderLegWitness {
+                trader_id: hex::encode(derive_trader_id_bytes(ask_key.as_bytes())),
+                salt: "44".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(95),
+                order_size: Decimal::from(10),
+                side: 1,
+                commitment_key: ask_key.into(),
+            },
+        };
+        let auction_id = uuid::Uuid::new_v4().to_string();
+        serde_json::to_vec(&serde_json::json!({
+            "batch_id": uuid::Uuid::new_v4().to_string(),
+            "matches": [{
+                "auction_id": auction_id,
+                "bid_order_id": uuid::Uuid::new_v4().to_string(),
+                "ask_order_id": uuid::Uuid::new_v4().to_string(),
+                "price": "100",
+                "size": "10",
+            }],
+            "private_witness": serde_json::to_value(vec![bid_match]).unwrap(),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn prove_from_bytes_happy_path() {
+        // Full end-to-end: real keys + circuit-satisfying witness → proof bytes.
+        // Covers the post-read_pk branches of prove_from_bytes that the
+        // error-path tests can't reach.
+        let proof =
+            prove_from_bytes(&valid_match_input_bytes(), 1, shared_keys_dir()).expect("prove");
+        assert!(!proof.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_happy_path_writes_proof_to_stdout() {
+        let stdin = std::io::Cursor::new(valid_match_input_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let code = run_prover_io(stdin, &mut stdout, 1, shared_keys_dir());
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(!stdout.is_empty());
+    }
+
+    #[test]
+    fn run_prover_io_stdout_write_error_returns_4() {
+        // Force the write_all error branch by handing run_prover_io a sink
+        // that errors on the first byte. Pair it with a valid prove pipeline
+        // so we actually reach the write step.
+        struct BoomSink;
+        impl std::io::Write for BoomSink {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let stdin = std::io::Cursor::new(valid_match_input_bytes());
+        let code = run_prover_io(stdin, BoomSink, 1, shared_keys_dir());
+        assert_eq!(code, ExitCode::from(4));
+    }
 }
