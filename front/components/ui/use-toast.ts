@@ -1,11 +1,27 @@
 'use client'
 
 // Adapted from the shadcn/ui `use-toast` hook (Sonner-inspired reducer-backed store).
+//
+// Lifecycle is dismiss-driven, not add-driven:
+//   1. `toast({...})` → ADD_TOAST → toast renders with `open: true`.
+//   2. Radix `<Toast.Root>` runs its own `duration` timer (default 5000ms,
+//      see DEFAULT_TOAST_DURATION below). When it fires, Radix calls
+//      `onOpenChange(false)`, which `toast()` wires to `dismiss()`.
+//   3. DISMISS_TOAST flips `open: false` AND schedules REMOVE_TOAST via
+//      `addToRemoveQueue` after TOAST_REMOVE_DELAY.
+//   4. REMOVE_TOAST drops the toast from state.
+//
+// Implication for sticky toasts (`<Toast duration={Infinity}>`): step 2
+// never fires, so the toast remains in state until the caller invokes
+// `dismiss(id)` manually. ADD_TOAST does not auto-schedule removal on
+// purpose — adding a timer here would force-remove sticky toasts.
 import * as React from 'react'
 
 import type { ToastActionElement, ToastProps } from './toast'
 
 const TOAST_LIMIT = 3
+// Grace period between `open: false` and dropping the toast from state.
+// Lets exit animations play before the node unmounts.
 const TOAST_REMOVE_DELAY = 5000
 
 type ToasterToast = ToastProps & {
