@@ -29,7 +29,7 @@ export function CommandPrompt() {
       <DialogTrigger
         ref={triggerRef}
         aria-label="Open command palette"
-        className="group flex h-9 w-full items-center justify-between border-y border-brand-border px-page-x-mobile sm:px-page-x-tablet lg:px-page-x-desktop transition-colors duration-150 hover:bg-brand-surface focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
+        className="group flex h-8 w-full items-center justify-between border-t border-brand-border px-page-x-mobile sm:px-page-x-tablet lg:px-page-x-desktop transition-colors duration-150 hover:bg-brand-surface focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
       >
         <span className="flex items-center gap-3 font-mono text-label-md uppercase text-brand-muted group-hover:text-brand-fg">
           <span aria-hidden="true" className="text-brand-fg">

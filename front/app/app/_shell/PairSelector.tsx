@@ -13,17 +13,13 @@ export function PairSelector() {
     >
       <summary
         aria-label="Trading pair selector"
-        className="flex h-10 cursor-pointer select-none list-none items-center border border-brand-border2 px-4 font-mono text-label-lg uppercase text-brand-fg transition-colors duration-150 hover:border-brand-muted focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent [&::-webkit-details-marker]:hidden"
+        className="flex h-10 cursor-pointer select-none list-none items-center gap-2 px-3 font-mono text-label-lg uppercase text-brand-fg transition-colors duration-150 hover:bg-brand-surface focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent [&::-webkit-details-marker]:hidden"
       >
-        <span>[ ETH / USDC ]</span>
-        <span
+        <span>ETH / USDC</span>
+        <Chevron
           aria-hidden="true"
-          className={`ml-3 font-mono text-label-md text-brand-muted transition-transform duration-150 ${
-            open ? 'rotate-180' : ''
-          }`}
-        >
-          ▾
-        </span>
+          className={`text-brand-muted transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+        />
       </summary>
       <div
         role="listbox"
@@ -35,12 +31,29 @@ export function PairSelector() {
           aria-selected="true"
           className="font-mono text-label-lg uppercase text-brand-fg"
         >
-          [ ETH / USDC ]
+          ETH / USDC
         </div>
         <div className="mt-2 font-mono text-label-md uppercase text-brand-muted/70">
           MULTI-PAIR · POST-MVP
         </div>
       </div>
     </details>
+  )
+}
+
+function Chevron(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+      {...props}
+    >
+      <path d="M3 6 L8 11 L13 6" />
+    </svg>
   )
 }

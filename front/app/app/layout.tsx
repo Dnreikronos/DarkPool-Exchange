@@ -62,7 +62,7 @@ function NetworkIndicator() {
   return (
     <div
       aria-label="Network: Arbitrum, chain 42161, status offline"
-      className="flex h-10 items-center gap-2 border border-brand-border2 px-3"
+      className="flex h-10 items-center gap-2 px-2"
     >
       <span
         aria-hidden="true"
@@ -70,7 +70,7 @@ function NetworkIndicator() {
         style={{ borderRadius: 0 }}
       />
       <span className="font-mono text-label-lg uppercase text-brand-muted">
-        [ ARBITRUM · 42161 ]
+        ARBITRUM · 42161
       </span>
     </div>
   )
