@@ -19,7 +19,8 @@ export default function AppLayout({
       <style
         dangerouslySetInnerHTML={{
           __html:
-            'body,body *{cursor:default !important}' +
+            'body{cursor:default !important}' +
+            'body *{cursor:inherit !important}' +
             'body a[href],body button,body summary,body [role=button],body [role=link],body [role=option],body [role=tab]{cursor:pointer !important}' +
             'body button[disabled],body [aria-disabled=true]{cursor:not-allowed !important}' +
             'body input,body textarea,body [contenteditable=true]{cursor:text !important}',
