@@ -13,10 +13,17 @@ different GitHub issue from the trading-app MVP epic
    file-scope rules per issue, the git-worktree recipe, and the PR
    conventions. Working without reading it will collide with another
    agent's work.
-2. **If your issue is UI work, also read `docs/DESIGN-INSPIRATIONS.md`.**
-   It defines the north star (Hyperliquid + Renegade + Linear), the
-   palette / typography / motion principles, the per-feature
-   references, and what we are explicitly *not* trying to look like.
+2. **If your issue is UI work, read `DESIGN.md` (root) first, then
+   `docs/DESIGN-INSPIRATIONS.md`.** `DESIGN.md` is the canonical design
+   system — brutalist trading-terminal aesthetic, lime accent (`#D4FF00`)
+   used **at most once per view**, Bebas Neue + IBM Plex Mono, zero
+   border radius, no semantic colors (no green/red), no icons, GSAP as
+   the motion stack. `DESIGN-INSPIRATIONS.md` is the complement:
+   per-feature UX references (Hyperliquid, Renegade, CoW, Phantom for
+   patterns — not for visual identity), trading-specific tensions
+   resolved (bid/ask without hue, accent budget per surface), tone of
+   copy, and per-panel first-pass decisions all expressed in
+   `DESIGN.md` tokens.
 3. **Confirm which issue you are working on.** If unsure, ask the user.
    Then read the issue body with `gh issue view <N>` for the full
    acceptance criteria.
