@@ -6,10 +6,23 @@ use std::process::ExitCode;
 
 use ark_std::rand::rngs::StdRng;
 use ark_std::rand::SeedableRng;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use dp_zk::witness::BatchWitness;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use uuid::Uuid;
+
+/// CLI flags shared by every prover entrypoint (`dp-zk-cli`, `dp-aggregator`).
+#[derive(Parser, Debug)]
+pub struct ProverArgs {
+    /// Directory containing proving_key.bin / verifying_key.bin /
+    /// keys_metadata.json.
+    #[arg(long, env = "DARKPOOL_ZK_PROVING_KEY")]
+    pub proving_key: Option<PathBuf>,
+    /// Override the circuit batch size. Must equal the keygen-time value.
+    #[arg(long, env = "DARKPOOL_ZK_BATCH_SIZE", default_value = "8")]
+    pub batch_size: usize,
+}
 
 /// Wire-format input matching `SubprocessAggregator`'s extended schema.
 #[derive(Debug, Deserialize)]
@@ -199,6 +212,15 @@ pub fn run_prover(batch_size: usize, keys_dir: Option<PathBuf>) -> ExitCode {
             ExitCode::from(exit_code)
         }
     }
+}
+
+/// Parse [`ProverArgs`] under a per-binary program name/about string, then
+/// dispatch to [`run_prover`]. The shared entrypoint for the `dp-zk-cli` and
+/// `dp-aggregator` binaries.
+pub fn run_prover_cli(name: &'static str, about: &'static str) -> ExitCode {
+    let cmd = ProverArgs::command().name(name).about(about);
+    let args = ProverArgs::from_arg_matches(&cmd.get_matches()).unwrap_or_else(|e| e.exit());
+    run_prover(args.batch_size, args.proving_key)
 }
 
 #[cfg(test)]
