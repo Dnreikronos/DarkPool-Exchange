@@ -487,7 +487,7 @@ mod tests {
         struct Boom;
         impl std::io::Read for Boom {
             fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(std::io::ErrorKind::Other, "boom"))
+                Err(std::io::Error::other("boom"))
             }
         }
         let dir = tempfile::tempdir().unwrap();
