@@ -140,6 +140,12 @@ in the repo root for the longer story.
 - **Never run destructive git commands** (`reset --hard`, `push --force`,
   `branch -D`, `worktree remove --force`) without an explicit user
   request.
+- **Never add Claude as a co-author on commits.** Do not append
+  `Co-Authored-By: Claude ...` (or any variant) trailers to commit
+  messages. Do not add "Generated with Claude Code" footers. Commits
+  must be authored solely by the human user. This applies to every
+  commit, in every worktree, with no exceptions — even if a default
+  template or skill suggests otherwise.
 - **Numeric wire fields are strings.** `price`, `size`, `clearingPrice`,
   `matchedVolume` come from the API as decimal strings. Never coerce
   to JS `number`. Math via `decimal.js`. On-chain amounts via viem
