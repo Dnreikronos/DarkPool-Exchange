@@ -8,6 +8,7 @@ import {
   GetOrderRequestSchema,
   PlaceOrderRequestSchema,
   Side,
+  StreamAuctionsRequestSchema,
 } from './proto/darkpool/v1/darkpool_pb.js'
 import {
   DARK_POOL_ERROR_CODES,
@@ -328,6 +329,61 @@ describe('MockClient', () => {
       create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 10 })
     )
     expect(hist.auctions).toEqual([])
+  })
+
+  it('streamAuctions returns immediately when no signal is provided (no leaked generator)', async () => {
+    const mock = new MockClient()
+    const iter = mock.streamAuctions(create(StreamAuctionsRequestSchema, { pair: 'ETH/USDC' }))
+    // If the generator awaited an unresolved promise this would hang the
+    // test runner; the 50 ms race guards against regressions.
+    const events: unknown[] = []
+    const drained = (async () => {
+      for await (const ev of iter) events.push(ev)
+      return 'done' as const
+    })()
+    const result = await Promise.race([
+      drained,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 50)),
+    ])
+    expect(result).toBe('done')
+    expect(events).toEqual([])
+  })
+
+  it('streamAuctions blocks until the AbortSignal fires, then terminates cleanly', async () => {
+    const mock = new MockClient()
+    const controller = new AbortController()
+    const iter = mock.streamAuctions(create(StreamAuctionsRequestSchema, { pair: 'ETH/USDC' }), {
+      signal: controller.signal,
+    })
+    let resolved = false
+    const drained = (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ev of iter) {
+        // unreachable
+      }
+      resolved = true
+    })()
+
+    // Yield twice so the generator can settle on the await.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+
+    controller.abort()
+    await drained
+    expect(resolved).toBe(true)
+  })
+
+  it('streamAuctions terminates immediately when given an already-aborted signal', async () => {
+    const mock = new MockClient()
+    const controller = new AbortController()
+    controller.abort()
+    const iter = mock.streamAuctions(create(StreamAuctionsRequestSchema, { pair: 'ETH/USDC' }), {
+      signal: controller.signal,
+    })
+    const events: unknown[] = []
+    for await (const ev of iter) events.push(ev)
+    expect(events).toEqual([])
   })
 })
 

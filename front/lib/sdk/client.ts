@@ -373,12 +373,15 @@ export class MockClient implements DarkPoolClient {
     opts?: StreamOptions
   ): AsyncIterable<AuctionEvent> {
     void req
-    // Block until the caller aborts, yielding nothing. F1.2 (#69) replaces
-    // this with timer-driven synthetic events sourced from the mock store.
+    // F1.2 (#69) replaces this with timer-driven synthetic events sourced
+    // from the mock store. Until then: with a signal, block until aborted
+    // so consumers can mirror the real stream's lifecycle; without one,
+    // return immediately — otherwise the generator would await an
+    // unresolved promise and iterator.return() couldn't free it (the
+    // queued return completion only runs when the current await settles).
     const signal = opts?.signal
-    if (signal?.aborted) return
+    if (!signal || signal.aborted) return
     await new Promise<void>((resolve) => {
-      if (!signal) return // never resolves; caller must call return() on the iterator
       signal.addEventListener('abort', () => resolve(), { once: true })
     })
   }
