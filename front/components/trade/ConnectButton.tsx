@@ -66,6 +66,7 @@ function PickerModal({ onPick, onClose }: PickerModalProps) {
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<Element | null>(null)
+  const pointerDownOnBackdropRef = useRef(false)
 
   useEffect(() => {
     openerRef.current = document.activeElement
@@ -106,9 +107,22 @@ function PickerModal({ onPick, onClose }: PickerModalProps) {
     }
   }
 
+  const handleBackdropPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    pointerDownOnBackdropRef.current = event.target === event.currentTarget
+  }
+
+  const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const startedOnBackdrop = pointerDownOnBackdropRef.current
+    pointerDownOnBackdropRef.current = false
+    if (startedOnBackdrop && event.target === event.currentTarget) {
+      onClose()
+    }
+  }
+
   return (
     <div
-      onMouseDown={onClose}
+      onPointerDown={handleBackdropPointerDown}
+      onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
       className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(6,6,10,0.85)] p-6"
     >
@@ -117,7 +131,6 @@ function PickerModal({ onPick, onClose }: PickerModalProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onMouseDown={(event) => event.stopPropagation()}
         className="w-full max-w-sm bg-brand-surface p-8"
       >
         <h2
