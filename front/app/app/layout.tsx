@@ -34,7 +34,7 @@ export default function AppLayout({
 
 function Banner() {
   return (
-    <header className="fixed inset-x-0 top-0 z-40 flex h-16 items-center justify-between border-b border-brand-border bg-brand-bg/90 px-page-x-mobile backdrop-blur-sm sm:px-page-x-tablet lg:px-page-x-desktop">
+    <header className="fixed inset-x-0 top-0 z-40 flex h-16 items-center justify-between border-b border-brand-border bg-brand-bg/90 px-4 backdrop-blur-sm lg:px-6">
       <div className="flex items-center gap-8">
         <Link
           href="/app/trade"
