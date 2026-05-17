@@ -178,10 +178,16 @@ export function createMockStore(opts: CreateMockStoreOptions = {}): StoreApi<Moc
         pair: ctx.pair,
         timestampUnix: BigInt(ctx.now()),
       })
-      const fill = consumeOpenOrder(ctx, get().openOrders, auction)
+      const openOrders = get().openOrders
+      const fill = consumeOpenOrder(ctx, openOrders, auction)
+      const filledOrder = fill ? (openOrders.find((o) => o.id === fill.orderId) ?? null) : null
       set((s) => ({
         recentAuctions: [auction, ...s.recentAuctions].slice(0, RECENT_AUCTIONS_CAP),
         openOrders: fill ? s.openOrders.filter((o) => o.id !== fill.orderId) : s.openOrders,
+        // A fill clears the trader's liquidity from the book in lockstep with
+        // openOrders — otherwise the orderbook drifts away from the truth and
+        // panels that cross-reference the two (e.g. #73) see phantom depth.
+        orderbook: filledOrder ? removeOrderFromBook(s.orderbook, filledOrder) : s.orderbook,
         fillHistory: fill ? [fill, ...s.fillHistory].slice(0, FILL_HISTORY_CAP) : s.fillHistory,
       }))
       return auction

@@ -109,10 +109,6 @@ export class StoreMockClient implements DarkPoolClient {
   async placeOrder(req: PlaceOrderRequest): Promise<PlaceOrderResponse> {
     const payload = readMockPayload(req)
     if (!payload) {
-      // No payload attached → fall back to a synthetic order driven by the
-      // commitment bytes. Lets the existing client.test.ts assertions
-      // (which place orders without a payload) keep passing if a panel
-      // forgets to use `withMockPayload`.
       throw new DarkPoolError(
         DARK_POOL_ERROR_CODES.INVALID_ARGUMENT,
         'StoreMockClient.placeOrder requires mock payload metadata; ' +

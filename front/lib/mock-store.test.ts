@@ -159,6 +159,47 @@ describe('runAuction', () => {
     expect(store.getState().openOrders.some((o) => o.id === placed.id)).toBe(true)
     expect(store.getState().fillHistory).toEqual([])
   })
+
+  it('refunds the consumed order back out of the orderbook level', () => {
+    const store = freshStore()
+    // Pick an off-grid price so the order owns its level entirely.
+    const placed = store.getState().placeOrder({
+      side: Side.BUY,
+      price: '9999.50',
+      size: '0.75',
+    })
+    const levelBefore = store.getState().orderbook.bids.find((l) => l.price === '9999.5')
+    expect(levelBefore).toBeDefined()
+    expect(levelBefore!.totalSize).toBe('0.75')
+    store.getState().runAuction()
+    const s = store.getState()
+    expect(s.openOrders.some((o) => o.id === placed.id)).toBe(false)
+    // Level had a single order; refund drains it entirely.
+    expect(s.orderbook.bids.find((l) => l.price === '9999.5')).toBeUndefined()
+  })
+
+  it('only refunds the filled order, not other orders at the same price', () => {
+    const store = freshStore()
+    const a = store.getState().placeOrder({ side: Side.BUY, price: '9998', size: '0.4' })
+    const b = store.getState().placeOrder({ side: Side.BUY, price: '9998', size: '0.6' })
+    const levelBefore = store.getState().orderbook.bids.find((l) => l.price === '9998')!
+    expect(levelBefore.orderCount).toBeGreaterThanOrEqual(2)
+    const totalBefore = new Decimal(levelBefore.totalSize)
+    store.getState().runAuction()
+    const s = store.getState()
+    // Exactly one of a/b was consumed.
+    const remainingIds = s.openOrders.map((o) => o.id)
+    const consumed = remainingIds.includes(a.id) ? b : a
+    const surviving = consumed === a ? b : a
+    expect(remainingIds).toContain(surviving.id)
+    expect(remainingIds).not.toContain(consumed.id)
+    const levelAfter = s.orderbook.bids.find((l) => l.price === '9998')!
+    expect(levelAfter).toBeDefined()
+    expect(levelAfter.orderCount).toBe(levelBefore.orderCount - 1)
+    expect(
+      new Decimal(levelAfter.totalSize).equals(totalBefore.minus(consumed.remainingSize))
+    ).toBe(true)
+  })
 })
 
 describe('start / stop tick loop', () => {
