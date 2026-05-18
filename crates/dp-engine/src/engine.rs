@@ -184,7 +184,7 @@ impl Engine {
     /// [`Store::append`] call so the in-memory registry and the persisted
     /// event log stay atomically consistent (otherwise a concurrent admin
     /// op could insert a duplicate entry between the existence check and
-    /// the append). With [`PgStore`] this means the engine state lock is
+    /// the append). With a Postgres-backed store this means the engine state lock is
     /// held for one DB round-trip per admin call; trader-path placement,
     /// cancels, orderbook reads, and the auction tick will block briefly.
     /// Admin operations are infrequent so the trade-off favours simplicity
