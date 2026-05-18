@@ -141,13 +141,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     let auth_core = AuthCore::new(cfg.api_keys());
-    let admin_auth_core = AuthCore::new(cfg.operator_api_keys());
-    if cfg.operator_api_keys().is_empty() {
+    let operator_keys = cfg.operator_api_keys();
+    if operator_keys.is_empty() {
         warn!(
             "DARKPOOL_OPERATOR_API_KEYS is empty — admin endpoints will accept \
              unauthenticated requests. Set the env var before exposing the server."
         );
     }
+    let admin_auth_core = AuthCore::new(operator_keys);
     let rl_core = RateLimitCore::new(cfg.rate_limit, cfg.rate_burst, cfg.rate_stale_after);
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
