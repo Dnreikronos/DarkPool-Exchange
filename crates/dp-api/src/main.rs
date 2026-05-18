@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use dp_aggregator::SubprocessAggregator;
+use dp_api::admin::AdminApiHandler;
 use dp_api::auth::{AuthCore, AuthLayer};
 use dp_api::config::Config;
 use dp_api::handler::ApiHandler;
@@ -11,8 +12,11 @@ use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
 use dp_api::rest;
 use dp_crypto::EciesDecrypter;
-use dp_engine::Engine;
+use dp_engine::{Engine, PairConfig, PairStatus};
 use dp_event::{FileStore, MemStore, PgStore, Store};
+use rust_decimal::Decimal;
+use serde::Deserialize;
+use std::str::FromStr;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -115,6 +119,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     engine.recover().await?;
 
+    // Seed the pair registry on first boot when no pairs were replayed.
+    // After this point new pairs come exclusively via the admin API.
+    if engine.list_pairs().is_empty() {
+        if let Some(seed) = cfg.pair_seed_json_str() {
+            seed_pairs_from_json(&engine, seed)?;
+        } else {
+            warn!(
+                "pair registry empty and no DARKPOOL_PAIR_SEED_JSON provided; \
+                 all PlaceOrder requests will fail until an operator registers a pair"
+            );
+        }
+    }
+
     let cancel = CancellationToken::new();
 
     let engine_tick = engine.clone();
@@ -124,6 +141,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     let auth_core = AuthCore::new(cfg.api_keys());
+    let admin_auth_core = AuthCore::new(cfg.operator_api_keys());
+    if cfg.operator_api_keys().is_empty() {
+        warn!(
+            "DARKPOOL_OPERATOR_API_KEYS is empty — admin endpoints will accept \
+             unauthenticated requests. Set the env var before exposing the server."
+        );
+    }
     let rl_core = RateLimitCore::new(cfg.rate_limit, cfg.rate_burst, cfg.rate_stale_after);
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
@@ -131,12 +155,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ratelimit = RateLimitLayer::from_core(rl_core.clone());
 
     let handler = ApiHandler::new(engine.clone());
+    let admin_handler = AdminApiHandler::new(engine.clone());
     let shared = Arc::new(handler.clone());
+    let shared_admin = Arc::new(admin_handler.clone());
 
     let grpc_cancel = cancel.clone();
     let grpc_addr = cfg.grpc_addr;
     let grpc_auth = auth.clone();
     let grpc_rl = ratelimit.clone();
+    // The admin service is intentionally NOT mounted on the gRPC port:
+    // the gRPC listener authenticates with the trader API key set, which
+    // would let any trader call RegisterPair/SuspendPair/DelistPair if the
+    // admin service were attached here. Admin RPCs ride on the REST
+    // `/v1/admin/*` paths only (gated by the separate operator key set in
+    // [`rest::router_with_admin`]). Restoring gRPC admin will require a
+    // dedicated listener on its own port with the operator AuthLayer.
     let grpc_handle = tokio::spawn(async move {
         info!(addr = %grpc_addr, "gRPC server listening");
         Server::builder()
@@ -148,7 +181,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
     });
 
-    let rest_app = rest::router_with_middleware(shared, auth_core, rl_core);
+    let rest_app =
+        rest::router_with_admin(shared, shared_admin, auth_core, admin_auth_core, rl_core);
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
     let rest_handle = tokio::spawn(async move {
@@ -216,6 +250,66 @@ fn validate_zk_key_dir(dir: &str) -> Result<(), Box<dyn std::error::Error + Send
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct PairSeedEntry {
+    pair: String,
+    #[serde(alias = "baseToken")]
+    base_token: String,
+    #[serde(alias = "quoteToken")]
+    quote_token: String,
+    #[serde(default, alias = "minOrderSize")]
+    min_order_size: String,
+    #[serde(default, alias = "tickSize")]
+    tick_size: String,
+    #[serde(default, alias = "auctionIntervalMs")]
+    auction_interval_ms: Option<u64>,
+}
+
+/// Apply the `DARKPOOL_PAIR_SEED_JSON` seed. Each entry becomes a
+/// `PairRegistered` event so the seed survives subsequent restarts via
+/// replay (the seed env var is consulted only on first boot).
+fn seed_pairs_from_json(
+    engine: &Engine,
+    seed: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let entries: Vec<PairSeedEntry> = serde_json::from_str(seed)
+        .map_err(|e| format!("DARKPOOL_PAIR_SEED_JSON parse error: {e}"))?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+    for e in entries {
+        let base = alloy_primitives::Address::from_str(e.base_token.trim())
+            .map_err(|err| format!("pair seed {}: bad base_token: {err}", e.pair))?;
+        let quote = alloy_primitives::Address::from_str(e.quote_token.trim())
+            .map_err(|err| format!("pair seed {}: bad quote_token: {err}", e.pair))?;
+        let min = if e.min_order_size.is_empty() {
+            Decimal::ZERO
+        } else {
+            Decimal::from_str(e.min_order_size.trim())
+                .map_err(|err| format!("pair seed {}: bad min_order_size: {err}", e.pair))?
+        };
+        let tick = if e.tick_size.is_empty() {
+            Decimal::ZERO
+        } else {
+            Decimal::from_str(e.tick_size.trim())
+                .map_err(|err| format!("pair seed {}: bad tick_size: {err}", e.pair))?
+        };
+        let cfg = PairConfig {
+            base_token: base,
+            quote_token: quote,
+            min_order_size: min,
+            tick_size: tick,
+            auction_interval: e.auction_interval_ms.map(Duration::from_millis),
+            status: PairStatus::Active,
+        };
+        let canonical = engine
+            .register_pair_with_event(&e.pair, cfg)
+            .map_err(|err| format!("pair seed {}: {err}", e.pair))?;
+        info!(pair = %canonical, "seeded pair");
+    }
+    Ok(())
+}
+
 /// Strip the `user:password@` userinfo from a DB connection URL so it can be
 /// logged without leaking credentials. Falls back to the original string when
 /// the URL doesn't follow the `scheme://userinfo@host` shape.
@@ -271,5 +365,127 @@ mod tests {
             std::fs::write(dir.path().join(f), b"x").unwrap();
         }
         assert!(validate_zk_key_dir(dir.path().to_str().unwrap()).is_ok());
+    }
+
+    use super::seed_pairs_from_json;
+    use dp_engine::Engine;
+    use dp_event::MemStore;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn fresh_engine() -> Engine {
+        let store = Arc::new(MemStore::new());
+        Engine::new(store, Duration::from_secs(1))
+    }
+
+    #[test]
+    fn seed_pairs_from_json_empty_array_is_noop() {
+        let engine = fresh_engine();
+        seed_pairs_from_json(&engine, "[]").unwrap();
+        assert!(engine.list_pairs().is_empty());
+    }
+
+    #[test]
+    fn seed_pairs_from_json_invalid_json_errors() {
+        let engine = fresh_engine();
+        let err = seed_pairs_from_json(&engine, "not json").unwrap_err();
+        assert!(err.to_string().contains("parse error"));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_registers_pair_with_defaults() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "0x0000000000000000000000000000000000000001",
+            "quoteToken": "0x0000000000000000000000000000000000000002"
+        }]"#;
+        seed_pairs_from_json(&engine, seed).unwrap();
+        let pairs = engine.list_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "ETH/USDC");
+        assert_eq!(pairs[0].1.min_order_size, rust_decimal::Decimal::ZERO);
+        assert_eq!(pairs[0].1.tick_size, rust_decimal::Decimal::ZERO);
+    }
+
+    #[test]
+    fn seed_pairs_from_json_registers_pair_with_all_fields() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "0x0000000000000000000000000000000000000001",
+            "quoteToken": "0x0000000000000000000000000000000000000002",
+            "minOrderSize": "0.01",
+            "tickSize": "0.05",
+            "auctionIntervalMs": 7000
+        }]"#;
+        seed_pairs_from_json(&engine, seed).unwrap();
+        let pairs = engine.list_pairs();
+        assert_eq!(pairs.len(), 1);
+        let (_, cfg) = &pairs[0];
+        assert_eq!(cfg.min_order_size, "0.01".parse().unwrap());
+        assert_eq!(cfg.tick_size, "0.05".parse().unwrap());
+        assert_eq!(cfg.auction_interval, Some(Duration::from_millis(7000)));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_bad_base_token_errors() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "garbage",
+            "quoteToken": "0x0000000000000000000000000000000000000002"
+        }]"#;
+        let err = seed_pairs_from_json(&engine, seed).unwrap_err();
+        assert!(err.to_string().contains("bad base_token"));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_bad_quote_token_errors() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "0x0000000000000000000000000000000000000001",
+            "quoteToken": "garbage"
+        }]"#;
+        let err = seed_pairs_from_json(&engine, seed).unwrap_err();
+        assert!(err.to_string().contains("bad quote_token"));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_bad_min_order_size_errors() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "0x0000000000000000000000000000000000000001",
+            "quoteToken": "0x0000000000000000000000000000000000000002",
+            "minOrderSize": "not-a-number"
+        }]"#;
+        let err = seed_pairs_from_json(&engine, seed).unwrap_err();
+        assert!(err.to_string().contains("bad min_order_size"));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_bad_tick_size_errors() {
+        let engine = fresh_engine();
+        let seed = r#"[{
+            "pair": "ETH/USDC",
+            "baseToken": "0x0000000000000000000000000000000000000001",
+            "quoteToken": "0x0000000000000000000000000000000000000002",
+            "tickSize": "abc"
+        }]"#;
+        let err = seed_pairs_from_json(&engine, seed).unwrap_err();
+        assert!(err.to_string().contains("bad tick_size"));
+    }
+
+    #[test]
+    fn seed_pairs_from_json_duplicate_pair_errors() {
+        let engine = fresh_engine();
+        let seed = r#"[
+            {"pair":"ETH/USDC","baseToken":"0x0000000000000000000000000000000000000001","quoteToken":"0x0000000000000000000000000000000000000002"},
+            {"pair":"ETH/USDC","baseToken":"0x0000000000000000000000000000000000000001","quoteToken":"0x0000000000000000000000000000000000000002"}
+        ]"#;
+        let err = seed_pairs_from_json(&engine, seed).unwrap_err();
+        assert!(err.to_string().contains("pair seed ETH/USDC"));
     }
 }

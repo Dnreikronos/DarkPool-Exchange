@@ -40,6 +40,44 @@ service DarkPoolService {
   }
 
   rpc StreamAuctions(StreamAuctionsRequest) returns (stream AuctionEvent) {}
+
+  // Public discovery surface: lists active pairs only.
+  rpc ListPairs(ListPairsRequest) returns (ListPairsResponse) {
+    option (google.api.http) = {
+      get: "/v1/pairs"
+    };
+  }
+}
+
+// Operator-only administration. Gated by a separate API-key set
+// (DARKPOOL_OPERATOR_API_KEYS) so trader credentials cannot mutate the
+// pair registry.
+service DarkPoolAdminService {
+  rpc RegisterPair(RegisterPairRequest) returns (RegisterPairResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/pairs"
+      body: "*"
+    };
+  }
+
+  rpc SuspendPair(SuspendPairRequest) returns (SuspendPairResponse) {
+    option (google.api.http) = {
+      patch: "/v1/admin/pairs/{pair}/suspend"
+      body: "*"
+    };
+  }
+
+  rpc DelistPair(DelistPairRequest) returns (DelistPairResponse) {
+    option (google.api.http) = {
+      delete: "/v1/admin/pairs/{pair}"
+    };
+  }
+
+  rpc ListPairsAdmin(ListPairsAdminRequest) returns (ListPairsAdminResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/pairs"
+    };
+  }
 }
 
 // --- Place Order ---
@@ -147,4 +185,62 @@ message OrderInfo {
   string commitment_key = 7;
   int64 submitted_at_unix = 8;
   int64 expires_at_unix = 9;
+}
+
+// --- Pair registry ---
+
+enum PairStatus {
+  PAIR_STATUS_UNSPECIFIED = 0;
+  PAIR_STATUS_ACTIVE = 1;
+  PAIR_STATUS_SUSPENDED = 2;
+  PAIR_STATUS_DELISTED = 3;
+}
+
+message PairInfo {
+  string pair = 1;
+  string base_token = 2;
+  string quote_token = 3;
+  string min_order_size = 4;
+  string tick_size = 5;
+  optional uint32 auction_interval_ms = 6;
+  PairStatus status = 7;
+}
+
+message ListPairsRequest {}
+
+message ListPairsResponse {
+  repeated PairInfo pairs = 1;
+}
+
+message ListPairsAdminRequest {}
+
+message ListPairsAdminResponse {
+  repeated PairInfo pairs = 1;
+}
+
+message RegisterPairRequest {
+  string pair = 1;
+  string base_token = 2;
+  string quote_token = 3;
+  string min_order_size = 4;
+  string tick_size = 5;
+  optional uint32 auction_interval_ms = 6;
+}
+
+message RegisterPairResponse {
+  PairInfo pair = 1;
+}
+
+message SuspendPairRequest {
+  string pair = 1;
+}
+
+message SuspendPairResponse {}
+
+message DelistPairRequest {
+  string pair = 1;
+}
+
+message DelistPairResponse {
+  uint32 cancelled_orders = 1;
 }

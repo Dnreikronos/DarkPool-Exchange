@@ -21,6 +21,20 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_API_KEYS", default_value = "")]
     api_keys_raw: String,
 
+    /// Comma-separated set of API keys with operator-admin scope. These
+    /// keys are checked on `/v1/admin/*` paths instead of the public
+    /// `DARKPOOL_API_KEYS`. Empty disables admin authentication entirely
+    /// — fine for dev, never set this empty in production.
+    #[arg(long, env = "DARKPOOL_OPERATOR_API_KEYS", default_value = "")]
+    operator_api_keys_raw: String,
+
+    /// JSON document seeding the pair registry on first boot. Only
+    /// applied when the event log is empty (otherwise pairs are replayed
+    /// from `PairRegistered` events). Format:
+    /// `[{"pair":"ETH/USDC","baseToken":"0x...","quoteToken":"0x...","minOrderSize":"0.01","tickSize":"0.01"}]`.
+    #[arg(long, env = "DARKPOOL_PAIR_SEED_JSON", default_value = "")]
+    pub pair_seed_json: String,
+
     #[arg(long, env = "DARKPOOL_RATE_LIMIT", default_value = "10")]
     pub rate_limit: f64,
 
@@ -79,6 +93,18 @@ impl Config {
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .collect()
+    }
+
+    pub fn operator_api_keys(&self) -> Vec<String> {
+        self.operator_api_keys_raw
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
+    pub fn pair_seed_json_str(&self) -> Option<&str> {
+        opt(&self.pair_seed_json)
     }
 
     pub fn event_db_url(&self) -> Option<&str> {

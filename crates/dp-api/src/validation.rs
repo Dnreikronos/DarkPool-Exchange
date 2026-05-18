@@ -1,3 +1,5 @@
+use dp_engine::{Engine, PairStatus};
+use dp_types::{DarkPoolError, Pair};
 use tonic::Status;
 
 use crate::pb::PlaceOrderRequest;
@@ -45,4 +47,47 @@ pub fn validate_place_order(req: &PlaceOrderRequest) -> Result<(), Status> {
         return Err(Status::invalid_argument(MSG_CIPHERTEXT_TOO_LARGE));
     }
     Ok(())
+}
+
+/// Canonicalise the input pair; on parse failure surface an
+/// `invalid_argument` status with the standard messages.
+fn canonicalise_pair(pair: &str) -> Result<Pair, Status> {
+    Pair::parse(pair).map_err(|e| match e {
+        DarkPoolError::PairRequired => Status::invalid_argument(MSG_PAIR_REQUIRED),
+        other => Status::invalid_argument(other.to_string()),
+    })
+}
+
+/// Reject reads for pairs the operator has not registered (or has
+/// delisted). PlaceOrder cannot use this — the pair lives inside the
+/// encrypted payload — so the engine enforces the equivalent check after
+/// decryption (see `Engine::place_encrypted_order`).
+///
+/// Returns the canonicalised [`Pair`] so handlers feed the registry key
+/// (upper-case, trimmed) into downstream engine lookups instead of the raw
+/// user input — otherwise `eth/usdc` would 404 against an `ETH/USDC` entry.
+pub fn validate_pair_known(engine: &Engine, pair: &str) -> Result<Pair, Status> {
+    let canonical = canonicalise_pair(pair)?;
+    match engine.pair_status(canonical.as_str()) {
+        Some(PairStatus::Active) | Some(PairStatus::Suspended) => Ok(canonical),
+        Some(PairStatus::Delisted) | None => Err(Status::not_found(format!(
+            "pair {} is not registered",
+            canonical.as_str()
+        ))),
+    }
+}
+
+/// Like [`validate_pair_known`] but also accepts `Delisted`. The auction
+/// log is append-only and retains records past a delist, so historical
+/// reads must continue to work — delisting is forward-looking (blocks new
+/// orders + new auctions), not retroactive. Unknown pairs still 404.
+pub fn validate_pair_for_history(engine: &Engine, pair: &str) -> Result<Pair, Status> {
+    let canonical = canonicalise_pair(pair)?;
+    match engine.pair_status(canonical.as_str()) {
+        Some(_) => Ok(canonical),
+        None => Err(Status::not_found(format!(
+            "pair {} is not registered",
+            canonical.as_str()
+        ))),
+    }
 }
