@@ -24,7 +24,7 @@ function mkAuction(opts: Partial<{
   })
 }
 
-const noop = (_id: string): void => undefined
+const noop = (): void => undefined
 
 export const SingleRow = () => (
   <ol className="w-[320px] border border-brand-border bg-brand-bg">
