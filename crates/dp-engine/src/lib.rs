@@ -14,7 +14,7 @@ mod tests;
 
 pub use engine::Engine;
 pub use error::EngineError;
-pub use state::{PairConfig, PendingBatch};
+pub use state::{PairConfig, PairStatus, PendingBatch};
 pub use subscribe::AuctionNotification;
 
 pub const DEFAULT_AUCTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);

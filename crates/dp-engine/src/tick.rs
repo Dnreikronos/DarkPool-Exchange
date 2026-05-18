@@ -125,35 +125,21 @@ impl Engine {
         p: &PendingAggregation,
         state: &crate::state::EngineState,
     ) -> Result<Vec<SettlementMatch>, crate::error::EngineError> {
-        let mut out = Vec::with_capacity(p.matches.len());
-        for m in &p.matches {
-            let bid_order = p.orders.get(&m.bid.order_id).ok_or(
-                crate::error::EngineError::WitnessOrderMissing {
-                    order_id: m.bid.order_id,
-                },
-            )?;
-            let ask_order = p.orders.get(&m.ask.order_id).ok_or(
-                crate::error::EngineError::WitnessOrderMissing {
-                    order_id: m.ask.order_id,
-                },
-            )?;
-            let pair_cfg = state.pair_tokens.get(&bid_order.pair).ok_or_else(|| {
-                crate::error::EngineError::PairNotConfigured {
-                    pair: bid_order.pair.clone(),
-                }
-            })?;
-            out.push(SettlementMatch {
-                bid_order_id: m.bid.order_id,
-                ask_order_id: m.ask.order_id,
-                bid_trader: bid_order.trader,
-                ask_trader: ask_order.trader,
-                base_token: pair_cfg.base_token,
-                quote_token: pair_cfg.quote_token,
-                price: m.price,
-                size: m.size,
-            });
-        }
-        Ok(out)
+        p.matches
+            .iter()
+            .map(|m| {
+                crate::state::try_build_settlement_row(m, &p.orders, &state.pair_tokens).map_err(
+                    |e| match e {
+                        crate::state::SettlementResolveErr::OrderMissing(order_id) => {
+                            crate::error::EngineError::WitnessOrderMissing { order_id }
+                        }
+                        crate::state::SettlementResolveErr::PairMissing(pair) => {
+                            crate::error::EngineError::PairNotConfigured { pair }
+                        }
+                    },
+                )
+            })
+            .collect()
     }
 
     fn tick_under_lock(
@@ -184,20 +170,21 @@ impl Engine {
         let mut notifications: Vec<AuctionNotification> = Vec::new();
         let mut pending: Vec<PendingAggregation> = Vec::new();
 
-        let pairs: Vec<String> = state.pairs.iter().cloned().collect();
+        // Sort by pair so AuctionExecuted / OrderMatched events emitted in
+        // a single tick land in a deterministic order. HashMap iteration is
+        // randomised per-process, which would otherwise leak into the event
+        // log and into the stream subscribers — replays would visibly
+        // re-order events that should be identical run-to-run.
+        let mut pairs: Vec<String> = state
+            .pair_tokens
+            .iter()
+            .filter(|(_, cfg)| cfg.status.is_active())
+            .map(|(p, _)| p.clone())
+            .collect();
+        pairs.sort();
         for pair in pairs {
-            let bids: Vec<_> = state
-                .book
-                .bids()
-                .into_iter()
-                .filter(|o| o.pair == pair)
-                .collect();
-            let asks: Vec<_> = state
-                .book
-                .asks()
-                .into_iter()
-                .filter(|o| o.pair == pair)
-                .collect();
+            let bids: Vec<_> = state.book.bids(&pair);
+            let asks: Vec<_> = state.book.asks(&pair);
 
             let auction_id = Uuid::new_v4();
             let result = match dp_auction::run(auction_id, &pair, &bids, &asks) {
@@ -300,5 +287,143 @@ impl Engine {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use alloy_primitives::Address;
+    use chrono::Utc;
+    use dp_event::MemStore;
+    use dp_types::{Fill, Order, Side};
+    use rust_decimal::Decimal;
+
+    use super::*;
+    use crate::state::{EngineState, PairConfig};
+    use crate::Engine;
+
+    fn order_in_book(id: Uuid, pair: &str) -> Order {
+        Order {
+            id,
+            trader: Address::ZERO,
+            pair: pair.to_string(),
+            side: Side::Buy,
+            price: Decimal::ONE,
+            size: Decimal::ONE,
+            remaining_size: Decimal::ONE,
+            commitment_key: "k".into(),
+            encrypted_payload: Vec::new(),
+            submitted_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::seconds(60),
+        }
+    }
+
+    fn pending_with(
+        bid_id: Uuid,
+        ask_id: Uuid,
+        orders: HashMap<Uuid, Order>,
+    ) -> PendingAggregation {
+        PendingAggregation {
+            batch_id: Uuid::new_v4(),
+            auction_id: Uuid::new_v4(),
+            matches: vec![dp_auction::Match {
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::ONE,
+                },
+                ask: Fill {
+                    order_id: ask_id,
+                    size: Decimal::ONE,
+                },
+                price: Decimal::ONE,
+                size: Decimal::ONE,
+            }],
+            orders,
+            auction_at: Utc::now(),
+        }
+    }
+
+    fn fresh_engine() -> Engine {
+        let store = Arc::new(MemStore::new());
+        Engine::new(store, Duration::from_millis(50))
+    }
+
+    #[test]
+    fn build_settlement_matches_returns_witness_missing_for_missing_bid() {
+        let engine = fresh_engine();
+        let state = EngineState::new();
+        let bid_id = Uuid::new_v4();
+        let ask_id = Uuid::new_v4();
+        let mut orders = HashMap::new();
+        orders.insert(ask_id, order_in_book(ask_id, "ETH/USDC"));
+        let p = pending_with(bid_id, ask_id, orders);
+        let err = engine.build_settlement_matches(&p, &state).unwrap_err();
+        match err {
+            crate::error::EngineError::WitnessOrderMissing { order_id } => {
+                assert_eq!(order_id, bid_id);
+            }
+            other => panic!("expected WitnessOrderMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_settlement_matches_returns_witness_missing_for_missing_ask() {
+        let engine = fresh_engine();
+        let state = EngineState::new();
+        let bid_id = Uuid::new_v4();
+        let ask_id = Uuid::new_v4();
+        let mut orders = HashMap::new();
+        orders.insert(bid_id, order_in_book(bid_id, "ETH/USDC"));
+        let p = pending_with(bid_id, ask_id, orders);
+        let err = engine.build_settlement_matches(&p, &state).unwrap_err();
+        match err {
+            crate::error::EngineError::WitnessOrderMissing { order_id } => {
+                assert_eq!(order_id, ask_id);
+            }
+            other => panic!("expected WitnessOrderMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_settlement_matches_returns_pair_not_configured() {
+        let engine = fresh_engine();
+        let state = EngineState::new();
+        let bid_id = Uuid::new_v4();
+        let ask_id = Uuid::new_v4();
+        let mut orders = HashMap::new();
+        orders.insert(bid_id, order_in_book(bid_id, "UNKNOWN/PAIR"));
+        orders.insert(ask_id, order_in_book(ask_id, "UNKNOWN/PAIR"));
+        let p = pending_with(bid_id, ask_id, orders);
+        let err = engine.build_settlement_matches(&p, &state).unwrap_err();
+        match err {
+            crate::error::EngineError::PairNotConfigured { pair } => {
+                assert_eq!(pair, "UNKNOWN/PAIR");
+            }
+            other => panic!("expected PairNotConfigured, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_settlement_matches_builds_row_for_registered_pair() {
+        let engine = fresh_engine();
+        let mut state = EngineState::new();
+        let base = Address::repeat_byte(0xAA);
+        let quote = Address::repeat_byte(0xBB);
+        state
+            .pair_tokens
+            .insert("ETH/USDC".into(), PairConfig::new(base, quote));
+        let bid_id = Uuid::new_v4();
+        let ask_id = Uuid::new_v4();
+        let mut orders = HashMap::new();
+        orders.insert(bid_id, order_in_book(bid_id, "ETH/USDC"));
+        orders.insert(ask_id, order_in_book(ask_id, "ETH/USDC"));
+        let p = pending_with(bid_id, ask_id, orders);
+        let rows = engine.build_settlement_matches(&p, &state).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].base_token, base);
+        assert_eq!(rows[0].quote_token, quote);
     }
 }

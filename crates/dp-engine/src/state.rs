@@ -1,18 +1,103 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, U256};
 use dp_auction::Match;
 use dp_book::OrderBook;
 use dp_settlement::SettlementMatch;
+use dp_types::Order;
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{DEFAULT_MAX_BACKOFF, DEFAULT_MIN_BACKOFF, DEFAULT_ORDER_TTL, DEFAULT_SUBMIT_TIMEOUT};
+
+/// Why resolving a settlement row from a match + snapshots failed.
+/// Recovery treats either case as "skip the row" (orphan log entries);
+/// the live tick path treats either as an internal invariant violation
+/// and converts to `EngineError::WitnessOrderMissing` / `PairNotConfigured`.
+pub(crate) enum SettlementResolveErr {
+    OrderMissing(Uuid),
+    PairMissing(String),
+}
+
+/// Build one settlement row from a match by resolving trader / pair
+/// metadata in the supplied snapshots. Centralising the lookup keeps the
+/// recovery and live-tick paths in lockstep (they previously diverged —
+/// recovery used `book.find_order` and missed full-fill orders).
+pub(crate) fn try_build_settlement_row(
+    m: &Match,
+    orders: &HashMap<Uuid, Order>,
+    pairs: &HashMap<String, PairConfig>,
+) -> Result<SettlementMatch, SettlementResolveErr> {
+    let bid = orders
+        .get(&m.bid.order_id)
+        .ok_or(SettlementResolveErr::OrderMissing(m.bid.order_id))?;
+    let ask = orders
+        .get(&m.ask.order_id)
+        .ok_or(SettlementResolveErr::OrderMissing(m.ask.order_id))?;
+    let cfg = pairs
+        .get(&bid.pair)
+        .ok_or_else(|| SettlementResolveErr::PairMissing(bid.pair.clone()))?;
+    Ok(SettlementMatch {
+        bid_order_id: m.bid.order_id,
+        ask_order_id: m.ask.order_id,
+        bid_trader: bid.trader,
+        ask_trader: ask.trader,
+        base_token: cfg.base_token,
+        quote_token: cfg.quote_token,
+        price: m.price,
+        size: m.size,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairStatus {
+    Active,
+    Suspended,
+    Delisted,
+}
+
+impl PairStatus {
+    pub fn is_active(&self) -> bool {
+        matches!(self, PairStatus::Active)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PairConfig {
     pub base_token: Address,
     pub quote_token: Address,
+    pub min_order_size: Decimal,
+    pub tick_size: Decimal,
+    /// Reserved for future per-pair tick cadence overrides. The auction
+    /// loop currently uses the engine-wide interval — this field is
+    /// captured and replayed today so a later patch can honour it without
+    /// a schema change.
+    pub auction_interval: Option<Duration>,
+    pub status: PairStatus,
+}
+
+impl PairConfig {
+    /// Construct a config with permissive matching parameters (zero
+    /// min_order_size, zero tick_size = no tick check) and `Active`
+    /// status. Useful for tests and the in-memory dev seed; production
+    /// configs should set explicit guards via the admin API.
+    pub fn new(base_token: Address, quote_token: Address) -> Self {
+        Self {
+            base_token,
+            quote_token,
+            min_order_size: Decimal::ZERO,
+            tick_size: Decimal::ZERO,
+            auction_interval: None,
+            status: PairStatus::Active,
+        }
+    }
+}
+
+impl Default for PairConfig {
+    fn default() -> Self {
+        Self::new(Address::ZERO, Address::ZERO)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -40,7 +125,10 @@ pub(crate) struct AuctionExecutedRecord {
 
 pub(crate) struct EngineState {
     pub book: OrderBook,
-    pub pairs: HashSet<String>,
+    /// Authoritative pair registry. A pair is "known" iff it has an entry
+    /// here; status is read from the `PairConfig`. The registry survives
+    /// projection resets so it can be replayed from `PairRegistered` /
+    /// `PairSuspended` / `PairDelisted` events.
     pub pair_tokens: HashMap<String, PairConfig>,
     pub auction_log: Vec<AuctionExecutedRecord>,
     pub pending_batches: HashMap<Uuid, PendingBatch>,
@@ -55,7 +143,6 @@ impl EngineState {
     pub fn new() -> Self {
         Self {
             book: OrderBook::new(),
-            pairs: HashSet::new(),
             pair_tokens: HashMap::new(),
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
@@ -69,9 +156,13 @@ impl EngineState {
 
     pub fn reset_projection(&mut self) {
         self.book = OrderBook::new();
-        self.pairs.clear();
+        self.pair_tokens.clear();
         self.auction_log.clear();
         self.pending_batches.clear();
+    }
+
+    pub fn pair_config(&self, pair: &str) -> Option<&PairConfig> {
+        self.pair_tokens.get(pair)
     }
 }
 
@@ -122,5 +213,12 @@ mod tests {
         let min = Duration::from_secs(1);
         let max = Duration::from_secs(60);
         assert_eq!(compute_backoff(min, max, 100), max);
+    }
+
+    #[test]
+    fn pair_status_predicates() {
+        assert!(PairStatus::Active.is_active());
+        assert!(!PairStatus::Suspended.is_active());
+        assert!(!PairStatus::Delisted.is_active());
     }
 }
