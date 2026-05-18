@@ -30,6 +30,9 @@ mod tests {
         assert_eq!(EventType::BatchSubmitted as u8, 6);
         assert_eq!(EventType::BatchConfirmed as u8, 7);
         assert_eq!(EventType::BatchSettled as u8, 8);
+        assert_eq!(EventType::PairRegistered as u8, 9);
+        assert_eq!(EventType::PairSuspended as u8, 10);
+        assert_eq!(EventType::PairDelisted as u8, 11);
     }
 
     #[test]
