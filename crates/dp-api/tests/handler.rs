@@ -27,6 +27,7 @@ static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn new_handler() -> ApiHandler {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store, Duration::from_secs(1));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
     ApiHandler::new(engine)
 }
 
@@ -357,7 +358,54 @@ async fn get_auction_history_with_auction() {
     assert!(a.match_count >= 1);
 }
 
+/// Regression: history reads must succeed past a delist because the
+/// auction log retains records. Delisting is forward-looking — it stops
+/// new orders + auctions but does not redact what already happened.
+#[tokio::test]
+async fn get_auction_history_succeeds_for_delisted_pair() {
+    let h = new_handler();
+    place_test_order(&h, "ETH/USDC", Side::Buy, "1850", "5").await;
+    place_test_order(&h, "ETH/USDC", Side::Sell, "1800", "5").await;
+    h.engine.run_auction_tick().await;
+    h.engine
+        .delist_pair("ETH/USDC")
+        .expect("delist after auction");
+    let resp = h
+        .get_auction_history(Request::new(GetAuctionHistoryRequest {
+            pair: "ETH/USDC".into(),
+            limit: 0,
+        }))
+        .await
+        .expect("history readable post-delist")
+        .into_inner();
+    assert_eq!(resp.auctions.len(), 1);
+}
+
 // ---------- StreamAuctions ----------
+
+// ---------- ListPairs ----------
+
+#[tokio::test]
+async fn list_pairs_returns_only_active() {
+    let h = new_handler();
+    h.engine
+        .register_pair_without_event("BTC/USDC".into(), dp_engine::PairConfig::default());
+    let cfg = dp_engine::PairConfig {
+        status: dp_engine::PairStatus::Suspended,
+        ..Default::default()
+    };
+    h.engine
+        .register_pair_without_event("DOGE/USDC".into(), cfg);
+    let resp = h
+        .list_pairs(Request::new(pb::ListPairsRequest::default()))
+        .await
+        .unwrap()
+        .into_inner();
+    let names: Vec<&str> = resp.pairs.iter().map(|p| p.pair.as_str()).collect();
+    assert!(names.contains(&"ETH/USDC"));
+    assert!(names.contains(&"BTC/USDC"));
+    assert!(!names.contains(&"DOGE/USDC"));
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_auctions_receives_event() {
@@ -392,6 +440,8 @@ async fn stream_auctions_receives_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_auctions_filters_by_pair() {
     let h = new_handler();
+    h.engine
+        .register_pair_without_event("BTC/USDC".into(), dp_engine::PairConfig::default());
     let stream = h
         .stream_auctions(Request::new(StreamAuctionsRequest {
             pair: "ETH/USDC".into(),

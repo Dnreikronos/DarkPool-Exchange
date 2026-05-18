@@ -38,8 +38,34 @@ async fn orderbook_empty_pair_400() {
 }
 
 #[tokio::test]
-async fn orderbook_unknown_pair_returns_empty() {
+async fn orderbook_unknown_pair_returns_404() {
+    // Behaviour change vs. prior implementation: an unknown pair now hits
+    // the registry check before reaching the (empty) sub-book and returns
+    // 404. The previous code returned 200 with empty bids/asks because
+    // `OrderBook` had a single shared book and the filter just produced
+    // an empty slice. With per-pair books + registry validation that
+    // shape is gone.
     let app = new_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/orderbook?pair=ETH/USDC")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn orderbook_known_pair_returns_empty() {
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store, Duration::from_secs(1));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
+    let handler = ApiHandler::new(engine);
+    let app = rest::router(Arc::new(handler));
+
     let resp = app
         .oneshot(
             Request::builder()
@@ -105,4 +131,225 @@ async fn place_order_missing_fields_400() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------- REST happy paths ----------
+
+fn registered_app() -> (axum::Router, dp_engine::Engine) {
+    use std::sync::Arc as ArcSync;
+    let store = ArcSync::new(MemStore::new());
+    let engine = dp_engine::Engine::new(store, std::time::Duration::from_secs(1));
+    engine.set_decrypter(ArcSync::new(JsonDecrypter));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
+    let handler = dp_api::handler::ApiHandler::new(engine.clone());
+    let router = dp_api::rest::router(ArcSync::new(handler));
+    (router, engine)
+}
+
+struct JsonDecrypter;
+
+impl dp_crypto::Decrypter for JsonDecrypter {
+    fn decrypt<'a>(
+        &'a self,
+        ciphertext: &'a [u8],
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<dp_crypto::DecryptedOrder, dp_crypto::CryptoError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            async move { serde_json::from_slice(ciphertext).map_err(dp_crypto::CryptoError::from) },
+        )
+    }
+}
+
+fn encrypt_b64(order: &dp_crypto::DecryptedOrder) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    STANDARD.encode(serde_json::to_vec(order).unwrap())
+}
+
+#[tokio::test]
+async fn rest_place_get_cancel_round_trip() {
+    let (app, _engine) = registered_app();
+    let d = dp_crypto::DecryptedOrder {
+        trader: alloy_primitives::Address::ZERO,
+        pair: "ETH/USDC".into(),
+        side: dp_types::Side::Buy,
+        price: "1800".parse().unwrap(),
+        size: "1".parse().unwrap(),
+        commitment_key: "k1".into(),
+        ttl: 60_000_000_000,
+    };
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let body = serde_json::json!({
+        "commitment": STANDARD.encode([0u8; 32]),
+        "proof": STANDARD.encode(b"proof"),
+        "encryptedPayload": encrypt_b64(&d),
+    })
+    .to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/orders")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_to_json(resp.into_body()).await;
+    let id = json["order"]["id"].as_str().unwrap().to_string();
+    assert_eq!(json["order"]["pair"], "ETH/USDC");
+    assert_eq!(json["order"]["side"], "SIDE_BUY");
+
+    // GET it back
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/orders/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_to_json(resp.into_body()).await;
+    assert_eq!(json["order"]["id"], id);
+
+    // Cancel it
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/orders/{id}?reason=testing"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rest_orderbook_serializes_levels() {
+    let (app, _engine) = registered_app();
+    // Place a buy + sell via REST so the orderbook returns level rows
+    // (exercising PriceLevelJson::From + bids/asks serialization).
+    let make_body = |side: dp_types::Side, price: &str| {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        let d = dp_crypto::DecryptedOrder {
+            trader: alloy_primitives::Address::ZERO,
+            pair: "ETH/USDC".into(),
+            side,
+            price: price.parse().unwrap(),
+            size: "1".parse().unwrap(),
+            commitment_key: format!("k-{}-{}", side as u8, price),
+            ttl: 60_000_000_000,
+        };
+        serde_json::json!({
+            "commitment": STANDARD.encode([0u8; 32]),
+            "proof": STANDARD.encode(b"p"),
+            "encryptedPayload": encrypt_b64(&d),
+        })
+        .to_string()
+    };
+
+    for (side, price) in [
+        (dp_types::Side::Buy, "1800"),
+        (dp_types::Side::Sell, "1850"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/orders")
+                    .header("content-type", "application/json")
+                    .body(Body::from(make_body(side, price)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/orderbook?pair=ETH/USDC")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_to_json(resp.into_body()).await;
+    assert_eq!(json["bids"].as_array().unwrap().len(), 1);
+    assert_eq!(json["asks"].as_array().unwrap().len(), 1);
+    assert_eq!(json["bids"][0]["price"], "1800");
+}
+
+#[tokio::test]
+async fn rest_get_order_not_found_returns_404() {
+    let (app, _engine) = registered_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/orders/{}", uuid::Uuid::new_v4()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn router_with_middleware_enforces_api_key() {
+    use dp_api::auth::AuthCore;
+    use dp_api::ratelimit::RateLimitCore;
+    let store = std::sync::Arc::new(MemStore::new());
+    let engine = dp_engine::Engine::new(store, std::time::Duration::from_secs(1));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
+    let handler = dp_api::handler::ApiHandler::new(engine);
+    let auth = AuthCore::new(vec!["mw-key".to_string()]);
+    let rl = RateLimitCore::new(1_000.0, 1_000.0, std::time::Duration::from_secs(60));
+    let app = dp_api::rest::router_with_middleware(std::sync::Arc::new(handler), auth, rl);
+
+    // Missing api key → 401
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // With api key → 200
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairs")
+                .header("x-api-key", "mw-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }

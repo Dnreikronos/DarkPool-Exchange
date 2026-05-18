@@ -10,13 +10,18 @@ fn clear_env() {
         "DARKPOOL_HTTP_ADDR",
         "DARKPOOL_AUCTION_INTERVAL",
         "DARKPOOL_API_KEYS",
+        "DARKPOOL_OPERATOR_API_KEYS",
+        "DARKPOOL_PAIR_SEED_JSON",
         "DARKPOOL_RATE_LIMIT",
         "DARKPOOL_RATE_BURST",
         "DARKPOOL_RATE_STALE_AFTER",
         "DARKPOOL_EVENT_LOG",
+        "DARKPOOL_EVENT_DB",
         "DARKPOOL_OPERATOR_KEY",
         "DARKPOOL_AGGREGATOR_BIN",
         "DARKPOOL_AGGREGATOR_TIMEOUT",
+        "DARKPOOL_ZK_PROVING_KEY",
+        "DARKPOOL_ZK_BATCH_SIZE",
         "DARKPOOL_SUBMIT_TIMEOUT",
         "DARKPOOL_ETH_RPC",
         "DARKPOOL_CONTRACT_ADDR",
@@ -111,5 +116,59 @@ fn optional_accessors_return_values() {
     assert_eq!(cfg.event_log_path(), Some("/tmp/events.log"));
     assert_eq!(cfg.eth_rpc_url(), Some("http://localhost:8545"));
     assert_eq!(cfg.contract_address(), Some("0xabc"));
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn operator_api_keys_parsed_from_env() {
+    clear_env();
+    std::env::set_var("DARKPOOL_OPERATOR_API_KEYS", "op1, op2 , op3");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(cfg.operator_api_keys(), vec!["op1", "op2", "op3"]);
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn operator_api_keys_empty_by_default() {
+    clear_env();
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.operator_api_keys().is_empty());
+}
+
+#[test]
+#[serial]
+fn pair_seed_json_str_is_none_when_unset() {
+    clear_env();
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.pair_seed_json_str().is_none());
+}
+
+#[test]
+#[serial]
+fn pair_seed_json_str_returns_value() {
+    clear_env();
+    let seed = r#"[{"pair":"ETH/USDC","baseToken":"0x0","quoteToken":"0x0"}]"#;
+    std::env::set_var("DARKPOOL_PAIR_SEED_JSON", seed);
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(cfg.pair_seed_json_str(), Some(seed));
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn aggregator_bin_and_zk_proving_key_accessors() {
+    clear_env();
+    std::env::set_var("DARKPOOL_AGGREGATOR_BIN", "/usr/local/bin/dp-aggregator");
+    std::env::set_var("DARKPOOL_OPERATOR_KEY", "/etc/dp/operator.key");
+    std::env::set_var("DARKPOOL_ZK_PROVING_KEY", "/etc/dp/keys");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(
+        cfg.aggregator_bin_path(),
+        Some("/usr/local/bin/dp-aggregator")
+    );
+    assert_eq!(cfg.operator_key_path(), Some("/etc/dp/operator.key"));
+    assert_eq!(cfg.zk_proving_key_dir(), Some("/etc/dp/keys"));
     clear_env();
 }
