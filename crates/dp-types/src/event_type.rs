@@ -11,6 +11,9 @@ pub enum EventType {
     BatchSubmitted = 6,
     BatchConfirmed = 7,
     BatchSettled = 8,
+    PairRegistered = 9,
+    PairSuspended = 10,
+    PairDelisted = 11,
 }
 
 #[cfg(test)]
