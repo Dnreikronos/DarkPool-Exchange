@@ -4,23 +4,27 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
 use tower_http::limit::RequestBodyLimitLayer;
 
+use crate::admin::AdminApiHandler;
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
+use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
-    self, CancelOrderRequest, GetAuctionHistoryRequest, GetOrderBookRequest, GetOrderRequest,
-    PlaceOrderRequest,
+    self, CancelOrderRequest, DelistPairRequest, GetAuctionHistoryRequest, GetOrderBookRequest,
+    GetOrderRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
+    RegisterPairRequest, SuspendPairRequest,
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
 
 pub type SharedHandler = Arc<ApiHandler>;
+pub type SharedAdminHandler = Arc<AdminApiHandler>;
 
 // Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
 // Rejects oversized requests before JSON parse + base64 decode burn CPU.
@@ -37,6 +41,18 @@ pub fn router(handler: SharedHandler) -> Router {
         )
         .route("/v1/orderbook", get(rest_get_orderbook))
         .route("/v1/auctions", get(rest_get_auction_history))
+        .route("/v1/pairs", get(rest_list_pairs))
+        .with_state(handler)
+}
+
+pub fn admin_router(handler: SharedAdminHandler) -> Router {
+    Router::new()
+        .route(
+            "/v1/admin/pairs",
+            post(rest_register_pair).get(rest_list_pairs_admin),
+        )
+        .route("/v1/admin/pairs/:pair/suspend", patch(rest_suspend_pair))
+        .route("/v1/admin/pairs/:pair", delete(rest_delist_pair))
         .with_state(handler)
 }
 
@@ -48,6 +64,25 @@ pub fn router_with_middleware(
     router(handler)
         .layer(from_fn_with_state(ratelimit, ratelimit_axum_mw))
         .layer(from_fn_with_state(auth, auth_axum_mw))
+}
+
+/// Mount public + admin routes on the same listener. Public routes use
+/// the trader API keys (`AuthCore`); admin routes use the separate
+/// operator key set (`admin_auth`). The rate limiter is shared.
+pub fn router_with_admin(
+    handler: SharedHandler,
+    admin_handler: SharedAdminHandler,
+    auth: AuthCore,
+    admin_auth: AuthCore,
+    ratelimit: RateLimitCore,
+) -> Router {
+    let public = router(handler)
+        .layer(from_fn_with_state(ratelimit.clone(), ratelimit_axum_mw))
+        .layer(from_fn_with_state(auth, auth_axum_mw));
+    let admin = admin_router(admin_handler)
+        .layer(from_fn_with_state(ratelimit, ratelimit_axum_mw))
+        .layer(from_fn_with_state(admin_auth, auth_axum_mw));
+    public.merge(admin)
 }
 
 pub fn status_to_response(status: tonic::Status) -> Response {
@@ -176,6 +211,73 @@ struct AuctionHistoryRespJson {
     auctions: Vec<AuctionSummaryJson>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairInfoJson {
+    pair: String,
+    base_token: String,
+    quote_token: String,
+    min_order_size: String,
+    tick_size: String,
+    auction_interval_ms: Option<u32>,
+    status: String,
+}
+
+impl From<pb::PairInfo> for PairInfoJson {
+    fn from(p: pb::PairInfo) -> Self {
+        let status = match pb::PairStatus::try_from(p.status) {
+            Ok(pb::PairStatus::Active) => "PAIR_STATUS_ACTIVE",
+            Ok(pb::PairStatus::Suspended) => "PAIR_STATUS_SUSPENDED",
+            Ok(pb::PairStatus::Delisted) => "PAIR_STATUS_DELISTED",
+            _ => "PAIR_STATUS_UNSPECIFIED",
+        };
+        Self {
+            pair: p.pair,
+            base_token: p.base_token,
+            quote_token: p.quote_token,
+            min_order_size: p.min_order_size,
+            tick_size: p.tick_size,
+            auction_interval_ms: p.auction_interval_ms,
+            status: status.to_string(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListPairsJson {
+    pairs: Vec<PairInfoJson>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterPairJson {
+    pair: String,
+    base_token: String,
+    quote_token: String,
+    #[serde(default)]
+    min_order_size: String,
+    #[serde(default)]
+    tick_size: String,
+    #[serde(default)]
+    auction_interval_ms: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterPairRespJson {
+    pair: Option<PairInfoJson>,
+}
+
+#[derive(Serialize)]
+struct SuspendPairRespJson {}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DelistPairRespJson {
+    cancelled_orders: u32,
+}
+
 #[derive(Deserialize)]
 struct CancelQuery {
     #[serde(default)]
@@ -295,6 +397,66 @@ async fn rest_get_auction_history(
     }))
 }
 
+async fn rest_list_pairs(State(h): State<SharedHandler>) -> Result<Json<ListPairsJson>, ApiError> {
+    let resp = h
+        .list_pairs(Request::new(ListPairsRequest {}))
+        .await?
+        .into_inner();
+    Ok(Json(ListPairsJson {
+        pairs: resp.pairs.into_iter().map(Into::into).collect(),
+    }))
+}
+
+async fn rest_register_pair(
+    State(h): State<SharedAdminHandler>,
+    Json(body): Json<RegisterPairJson>,
+) -> Result<Json<RegisterPairRespJson>, ApiError> {
+    let req = RegisterPairRequest {
+        pair: body.pair,
+        base_token: body.base_token,
+        quote_token: body.quote_token,
+        min_order_size: body.min_order_size,
+        tick_size: body.tick_size,
+        auction_interval_ms: body.auction_interval_ms,
+    };
+    let resp = h.register_pair(Request::new(req)).await?.into_inner();
+    Ok(Json(RegisterPairRespJson {
+        pair: resp.pair.map(Into::into),
+    }))
+}
+
+async fn rest_suspend_pair(
+    State(h): State<SharedAdminHandler>,
+    Path(pair): Path<String>,
+) -> Result<Json<SuspendPairRespJson>, ApiError> {
+    let req = SuspendPairRequest { pair };
+    h.suspend_pair(Request::new(req)).await?;
+    Ok(Json(SuspendPairRespJson {}))
+}
+
+async fn rest_delist_pair(
+    State(h): State<SharedAdminHandler>,
+    Path(pair): Path<String>,
+) -> Result<Json<DelistPairRespJson>, ApiError> {
+    let req = DelistPairRequest { pair };
+    let resp = h.delist_pair(Request::new(req)).await?.into_inner();
+    Ok(Json(DelistPairRespJson {
+        cancelled_orders: resp.cancelled_orders,
+    }))
+}
+
+async fn rest_list_pairs_admin(
+    State(h): State<SharedAdminHandler>,
+) -> Result<Json<ListPairsJson>, ApiError> {
+    let resp = h
+        .list_pairs_admin(Request::new(ListPairsAdminRequest {}))
+        .await?
+        .into_inner();
+    Ok(Json(ListPairsJson {
+        pairs: resp.pairs.into_iter().map(Into::into).collect(),
+    }))
+}
+
 // ---------- base64 codec for JSON ----------
 
 mod base64_bytes {
@@ -400,6 +562,119 @@ mod tests {
         let json = serde_json::json!("!!!invalid!!!");
         let result: Result<Vec<u8>, _> = base64_bytes::deserialize(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn api_error_maps_failed_precondition_to_400() {
+        let err = ApiError(tonic::Status::failed_precondition("nope"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn api_error_maps_out_of_range_to_400() {
+        let err = ApiError(tonic::Status::out_of_range("range"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn api_error_maps_already_exists_to_409() {
+        let err = ApiError(tonic::Status::already_exists("dup"));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn price_level_json_conversion() {
+        let lvl = pb::PriceLevel {
+            price: "100.5".into(),
+            total_size: "10".into(),
+            order_count: 3,
+        };
+        let json: PriceLevelJson = lvl.into();
+        assert_eq!(json.price, "100.5");
+        assert_eq!(json.total_size, "10");
+        assert_eq!(json.order_count, 3);
+    }
+
+    #[test]
+    fn auction_summary_json_conversion() {
+        let a = pb::AuctionSummary {
+            auction_id: "id".into(),
+            pair: "ETH/USDC".into(),
+            clearing_price: "2000".into(),
+            matched_volume: "1.5".into(),
+            match_count: 2,
+            timestamp_unix: 1700000000,
+        };
+        let json: AuctionSummaryJson = a.into();
+        assert_eq!(json.auction_id, "id");
+        assert_eq!(json.pair, "ETH/USDC");
+        assert_eq!(json.clearing_price, "2000");
+        assert_eq!(json.match_count, 2);
+        assert_eq!(json.timestamp_unix, "1700000000");
+    }
+
+    #[test]
+    fn pair_info_json_status_active() {
+        let p = pb::PairInfo {
+            pair: "ETH/USDC".into(),
+            base_token: "0x1".into(),
+            quote_token: "0x2".into(),
+            min_order_size: "0.01".into(),
+            tick_size: "0.01".into(),
+            auction_interval_ms: None,
+            status: pb::PairStatus::Active as i32,
+        };
+        let json: PairInfoJson = p.into();
+        assert_eq!(json.status, "PAIR_STATUS_ACTIVE");
+    }
+
+    #[test]
+    fn pair_info_json_status_suspended() {
+        let p = pb::PairInfo {
+            pair: "ETH/USDC".into(),
+            base_token: "0x1".into(),
+            quote_token: "0x2".into(),
+            min_order_size: "0.01".into(),
+            tick_size: "0.01".into(),
+            auction_interval_ms: Some(5000),
+            status: pb::PairStatus::Suspended as i32,
+        };
+        let json: PairInfoJson = p.into();
+        assert_eq!(json.status, "PAIR_STATUS_SUSPENDED");
+        assert_eq!(json.auction_interval_ms, Some(5000));
+    }
+
+    #[test]
+    fn pair_info_json_status_delisted() {
+        let p = pb::PairInfo {
+            pair: "ETH/USDC".into(),
+            base_token: "0x1".into(),
+            quote_token: "0x2".into(),
+            min_order_size: "0.01".into(),
+            tick_size: "0.01".into(),
+            auction_interval_ms: None,
+            status: pb::PairStatus::Delisted as i32,
+        };
+        let json: PairInfoJson = p.into();
+        assert_eq!(json.status, "PAIR_STATUS_DELISTED");
+    }
+
+    #[test]
+    fn pair_info_json_status_unspecified_falls_back() {
+        let p = pb::PairInfo {
+            pair: "ETH/USDC".into(),
+            base_token: "0x1".into(),
+            quote_token: "0x2".into(),
+            min_order_size: "0.01".into(),
+            tick_size: "0.01".into(),
+            auction_interval_ms: None,
+            status: 99,
+        };
+        let json: PairInfoJson = p.into();
+        assert_eq!(json.status, "PAIR_STATUS_UNSPECIFIED");
     }
 
     #[test]

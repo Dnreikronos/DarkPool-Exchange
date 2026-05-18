@@ -58,13 +58,7 @@ async fn engine_subprocess_zk_pipeline() {
 
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
-    engine.register_pair(
-        "BTC-USD".into(),
-        dp_engine::PairConfig {
-            base_token: alloy_primitives::Address::ZERO,
-            quote_token: alloy_primitives::Address::ZERO,
-        },
-    );
+    engine.register_pair_without_event("BTC-USD".into(), dp_engine::PairConfig::default());
     let agg = SubprocessAggregator::new(&cli_bin(), Some(Duration::from_secs(60)))
         .unwrap()
         .with_env("DARKPOOL_ZK_PROVING_KEY", keys_dir().to_string_lossy())

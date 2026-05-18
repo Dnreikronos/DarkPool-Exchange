@@ -19,13 +19,7 @@ use crate::Engine;
 fn make_engine() -> (Engine, Arc<MemStore>) {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
-    engine.register_pair(
-        "BTC-USD".into(),
-        crate::state::PairConfig {
-            base_token: Address::ZERO,
-            quote_token: Address::ZERO,
-        },
-    );
+    engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
     (engine, store)
 }
 
@@ -34,13 +28,7 @@ fn dec(n: i64) -> Decimal {
 }
 
 fn register_btc_usd(engine: &Engine) {
-    engine.register_pair(
-        "BTC-USD".into(),
-        crate::state::PairConfig {
-            base_token: Address::ZERO,
-            quote_token: Address::ZERO,
-        },
-    );
+    engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
 }
 
 // --- engine_test.go ports ---
@@ -344,6 +332,38 @@ async fn place_encrypted_order_bad_ciphertext() {
     assert!(r.is_err());
 }
 
+/// Regression: admin registers via `Pair::parse` (canonical upper-case),
+/// but traders may send any casing. The trader path must canonicalise
+/// before the registry lookup — otherwise `eth/usdc` 404s against an
+/// `ETH/USDC` entry.
+#[tokio::test]
+async fn place_encrypted_order_canonicalises_lowercase_pair() {
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store, Duration::from_millis(50));
+    engine
+        .register_pair_with_event("ETH/USDC", crate::state::PairConfig::default())
+        .unwrap();
+
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "eth/usdc".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+    let order = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .await
+        .expect("lowercase pair canonicalises and matches registry");
+
+    assert_eq!(order.pair, "ETH/USDC");
+    let (bids, _) = engine.get_order_book("ETH/USDC");
+    assert_eq!(bids.len(), 1);
+}
+
 #[tokio::test]
 async fn event_store_contains_no_plaintext() {
     let store = Arc::new(MemStore::new());
@@ -354,6 +374,7 @@ async fn event_store_contains_no_plaintext() {
 
     let pair = "SUPER-SECRET-PAIR";
     let commitment_key = "SUPER-SECRET-KEY";
+    engine.register_pair_without_event(pair.into(), crate::state::PairConfig::default());
     let d = DecryptedOrder {
         trader: Address::ZERO,
         pair: pair.into(),
@@ -548,8 +569,16 @@ async fn batch_lifecycle_noop_submitter() {
     assert_eq!(engine.pending_batch_count(), 0);
 }
 
+/// A recovered `BatchSubmitted`-but-not-`BatchConfirmed` batch is
+/// *poisoned*: the witness secrets that produced its public_inputs were
+/// wiped on restart, so resubmit must refuse to send those zero pubs
+/// on-chain (Groth16 would reject; gas wasted; silent failure-loop).
+///
+/// FUTURE: when `BatchSubmitted` persists `public_inputs`, recovery can
+/// reconstruct the full submit payload and this test should flip to
+/// asserting a successful resubmit.
 #[tokio::test]
-async fn batch_lifecycle_crash_between_submit_and_confirm() {
+async fn batch_lifecycle_recovered_batch_is_poisoned_until_pubs_persist() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     register_btc_usd(&engine);
@@ -583,7 +612,6 @@ async fn batch_lifecycle_crash_between_submit_and_confirm() {
     engine.run_auction_tick().await;
     assert_eq!(engine.pending_batch_count(), 1);
 
-    // Fix submitter and recover -> retry should succeed.
     let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
     register_btc_usd(&engine2);
     let ok = Arc::new(StubSubmitter::new());
@@ -593,8 +621,14 @@ async fn batch_lifecycle_crash_between_submit_and_confirm() {
     assert_eq!(engine2.pending_batch_count(), 1);
 
     engine2.resubmit_pending().await;
-    assert_eq!(engine2.pending_batch_count(), 0);
-    assert!(ok.calls() >= 1);
+    // Batch must remain pending: the guard refuses to submit a zero-pubs
+    // recovered batch, and the submitter must NEVER be called for it.
+    assert_eq!(engine2.pending_batch_count(), 1);
+    assert_eq!(
+        ok.calls(),
+        0,
+        "submitter must not be invoked for a poisoned recovered batch"
+    );
 }
 
 #[tokio::test]
@@ -697,7 +731,12 @@ async fn batch_lifecycle_recover_from_file_store() {
     engine2.recover().await.unwrap();
     assert_eq!(engine2.pending_batch_count(), 1);
     engine2.resubmit_pending().await;
-    assert_eq!(engine2.pending_batch_count(), 0);
+    // FUTURE: once `BatchSubmitted` persists `public_inputs`, the
+    // recovered batch can actually resubmit and `pending_batch_count`
+    // should drop to 0. Today the poison guard refuses to submit a
+    // zero-pubs batch — see `batch_lifecycle_recovered_batch_is_poisoned_until_pubs_persist`.
+    assert_eq!(engine2.pending_batch_count(), 1);
+    assert_eq!(ok.calls(), 0);
 }
 
 #[tokio::test]
@@ -786,9 +825,26 @@ async fn batch_lifecycle_proof_persisted_and_reused_on_resubmit() {
     engine2.set_submitter(ok.clone() as Arc<dyn Submitter>);
     engine2.set_retry_backoff(Duration::ZERO, Duration::ZERO);
     engine2.recover().await.unwrap();
+    // Verify the persisted proof bytes survived recovery via the
+    // in-memory `PendingBatch` — direct state inspection avoids needing
+    // an actual submit (the poison guard would block it on zero pubs).
+    let recovered_proof = {
+        let state = engine2.inner.state.lock();
+        state
+            .pending_batches
+            .values()
+            .next()
+            .expect("recovered pending batch")
+            .proof
+            .clone()
+    };
+    assert_eq!(
+        recovered_proof, agg_proof,
+        "BatchSubmitted event must preserve the original aggregator proof"
+    );
     engine2.resubmit_pending().await;
-    let resubmit_proof = ok.last_proof.lock().clone();
-    assert_eq!(resubmit_proof, agg_proof);
+    // Poison guard fires; submitter is never called.
+    assert_eq!(ok.calls(), 0);
 }
 
 #[tokio::test]
@@ -909,13 +965,7 @@ async fn full_pipeline_encrypted_order_to_settlement() {
 
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
-    engine.register_pair(
-        "ETH-USD".into(),
-        crate::state::PairConfig {
-            base_token: Address::ZERO,
-            quote_token: Address::ZERO,
-        },
-    );
+    engine.register_pair_without_event("ETH-USD".into(), crate::state::PairConfig::default());
     engine.set_decrypter(decrypter);
     engine.set_aggregator(aggregator.clone());
     engine.set_submitter(submitter);

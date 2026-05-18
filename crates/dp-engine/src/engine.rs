@@ -165,10 +165,178 @@ impl Engine {
         state.max_backoff = max;
     }
 
-    pub fn register_pair(&self, pair: String, config: crate::state::PairConfig) {
+    /// Insert a pair into the in-memory registry WITHOUT emitting a
+    /// `PairRegistered` event. Production code MUST use
+    /// [`Engine::register_pair_with_event`] so the registry can be
+    /// replayed on restart; this helper exists for tests and integration
+    /// fixtures that don't care about the event log. The explicit name
+    /// keeps the footgun out of code-review blind spots.
+    pub fn register_pair_without_event(&self, pair: String, config: crate::state::PairConfig) {
         let mut state = self.inner.state.lock();
-        state.pairs.insert(pair.clone());
         state.pair_tokens.insert(pair, config);
+    }
+
+    /// Register a pair AND persist a `PairRegistered` event. Returns an
+    /// error if the pair is already registered or the name fails
+    /// [`dp_types::Pair`] canonicalisation. Use this from admin API paths.
+    ///
+    /// **Blocking note.** The state mutex is held across the
+    /// [`Store::append`] call so the in-memory registry and the persisted
+    /// event log stay atomically consistent (otherwise a concurrent admin
+    /// op could insert a duplicate entry between the existence check and
+    /// the append). With a Postgres-backed store this means the engine state lock is
+    /// held for one DB round-trip per admin call; trader-path placement,
+    /// cancels, orderbook reads, and the auction tick will block briefly.
+    /// Admin operations are infrequent so the trade-off favours simplicity
+    /// over a reservation-based lock-drop dance.
+    pub fn register_pair_with_event(
+        &self,
+        pair: &str,
+        config: crate::state::PairConfig,
+    ) -> Result<dp_types::Pair, EngineError> {
+        let canonical = dp_types::Pair::parse(pair)?;
+        let key = canonical.as_str().to_string();
+        let mut events = [Event {
+            seq: 0,
+            event_type: EventType::PairRegistered,
+            timestamp: Utc::now(),
+            data: EventData::PairRegistered {
+                pair: key.clone(),
+                base_token: format!("{:#x}", config.base_token),
+                quote_token: format!("{:#x}", config.quote_token),
+                min_order_size: config.min_order_size,
+                tick_size: config.tick_size,
+                auction_interval_ms: config.auction_interval.map(|d| d.as_millis() as u64),
+            },
+        }];
+
+        let mut state = self.inner.state.lock();
+        if state.pair_tokens.contains_key(&key) {
+            return Err(EngineError::Validation(
+                DarkPoolError::PairAlreadyRegistered(key),
+            ));
+        }
+        self.inner.store.append(&mut events)?;
+        state.pair_tokens.insert(key, config);
+        Ok(canonical)
+    }
+
+    /// Flip a pair's status to `Suspended`. Suspended pairs still appear
+    /// in the registry — open orders stay in the book and can be cancelled
+    /// but no new orders are accepted and the auction tick skips them.
+    ///
+    /// Same blocking note as [`Engine::register_pair_with_event`]: the
+    /// state mutex is held across the `Store::append` call.
+    pub fn suspend_pair(&self, pair: &str) -> Result<(), EngineError> {
+        let canonical = dp_types::Pair::parse(pair)?;
+        let key = canonical.as_str().to_string();
+        let mut events = [Event {
+            seq: 0,
+            event_type: EventType::PairSuspended,
+            timestamp: Utc::now(),
+            data: EventData::PairSuspended { pair: key.clone() },
+        }];
+        let mut state = self.inner.state.lock();
+        let cfg = state
+            .pair_tokens
+            .get_mut(&key)
+            .ok_or_else(|| DarkPoolError::PairNotRegistered(key.clone()))?;
+        match cfg.status {
+            // Suspend is idempotent: skip the event write so a retried
+            // admin call doesn't accumulate duplicate `PairSuspended`
+            // entries in the log.
+            crate::state::PairStatus::Suspended => return Ok(()),
+            // Delisted is terminal — cannot demote back to Suspended.
+            crate::state::PairStatus::Delisted => {
+                return Err(EngineError::Validation(
+                    DarkPoolError::CannotSuspendDelistedPair(key),
+                ));
+            }
+            crate::state::PairStatus::Active => {}
+        }
+        self.inner.store.append(&mut events)?;
+        cfg.status = crate::state::PairStatus::Suspended;
+        Ok(())
+    }
+
+    /// Terminal-state a pair as `Delisted`. Cancels any open orders for
+    /// the pair (synchronously emits `OrderCancelled` events) and writes
+    /// a `PairDelisted` event. The pair remains in the registry so the
+    /// historical record survives replay; trader funds in escrow are
+    /// untouched (cancel-without-refund — withdrawal flow handles it).
+    ///
+    /// Same blocking note as [`Engine::register_pair_with_event`]: the
+    /// state mutex is held across the `Store::append` call. Holding the
+    /// lock is load-bearing here — otherwise a trader could place a new
+    /// order between the open-orders snapshot and the status flip and
+    /// survive the delist.
+    pub fn delist_pair(&self, pair: &str) -> Result<usize, EngineError> {
+        let canonical = dp_types::Pair::parse(pair)?;
+        let key = canonical.as_str().to_string();
+        let now = Utc::now();
+
+        let mut state = self.inner.state.lock();
+        match state.pair_tokens.get(&key).map(|c| c.status) {
+            None => {
+                return Err(EngineError::Validation(DarkPoolError::PairNotRegistered(
+                    key,
+                )));
+            }
+            // Delist is idempotent on the terminal state: skip the event
+            // write so retried admin calls don't accumulate duplicate
+            // `PairDelisted` entries. Zero orders are cancelled because
+            // the previous delist already cancelled them.
+            Some(crate::state::PairStatus::Delisted) => return Ok(0),
+            Some(_) => {}
+        }
+
+        // Collect open orders before we start emitting events. We only
+        // need the ids — `book.order_ids_for` avoids cloning every full
+        // Order (large `encrypted_payload`s) that `bids()` / `asks()`
+        // would, which matters when a delisted pair has many open
+        // orders.
+        let open_ids = state.book.order_ids_for(&key);
+
+        let mut events: Vec<Event> = Vec::with_capacity(open_ids.len() + 1);
+        for id in &open_ids {
+            events.push(Event {
+                seq: 0,
+                event_type: EventType::OrderCancelled,
+                timestamp: now,
+                data: EventData::OrderCancelled {
+                    order_id: *id,
+                    reason: "pair delisted".to_string(),
+                },
+            });
+        }
+        events.push(Event {
+            seq: 0,
+            event_type: EventType::PairDelisted,
+            timestamp: now,
+            data: EventData::PairDelisted { pair: key.clone() },
+        });
+
+        self.inner.store.append(&mut events)?;
+        for evt in &events {
+            state.book.apply(evt);
+        }
+        if let Some(cfg) = state.pair_tokens.get_mut(&key) {
+            cfg.status = crate::state::PairStatus::Delisted;
+        }
+        drop(state);
+        for id in &open_ids {
+            self.drop_secret(*id);
+        }
+        Ok(open_ids.len())
+    }
+
+    pub fn list_pairs(&self) -> Vec<(String, crate::state::PairConfig)> {
+        let state = self.inner.state.lock();
+        state
+            .pair_tokens
+            .iter()
+            .map(|(p, c)| (p.clone(), c.clone()))
+            .collect()
     }
 
     pub fn auction_interval(&self) -> Duration {
@@ -198,6 +366,11 @@ impl Engine {
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
+        // Canonicalise the trader-supplied pair so registry lookups and the
+        // resulting book entry match the upper-case key the admin path stores
+        // (e.g. `eth/usdc` → `ETH/USDC`).
+        let canonical_pair = dp_types::Pair::parse(&decrypted.pair)?;
+        let pair_key = canonical_pair.into_string();
         if !decrypted.price.is_sign_positive() || decrypted.price.is_zero() {
             return Err(EngineError::Validation(DarkPoolError::PriceMustBePositive));
         }
@@ -208,6 +381,44 @@ impl Engine {
             return Err(EngineError::Validation(
                 DarkPoolError::CommitmentKeyRequired,
             ));
+        }
+
+        // Pair-registry defense-in-depth. The API layer cannot inspect the
+        // encrypted PlaceOrder payload, so the engine is the only point at
+        // which an unknown/suspended pair, sub-minimum size, or off-tick
+        // price can be rejected.
+        {
+            let state = self.inner.state.lock();
+            let cfg = state.pair_config(&pair_key).ok_or_else(|| {
+                EngineError::Validation(DarkPoolError::PairNotRegistered(pair_key.clone()))
+            })?;
+            match cfg.status {
+                crate::state::PairStatus::Active => {}
+                crate::state::PairStatus::Suspended | crate::state::PairStatus::Delisted => {
+                    return Err(EngineError::Validation(DarkPoolError::PairNotAccepting(
+                        pair_key.clone(),
+                    )));
+                }
+            }
+            if cfg.min_order_size > Decimal::ZERO && decrypted.size < cfg.min_order_size {
+                return Err(EngineError::Validation(
+                    DarkPoolError::OrderSizeBelowMinimum {
+                        pair: pair_key.clone(),
+                        min: cfg.min_order_size.to_string(),
+                    },
+                ));
+            }
+            if cfg.tick_size > Decimal::ZERO {
+                let rem = decrypted.price % cfg.tick_size;
+                if !rem.is_zero() {
+                    return Err(EngineError::Validation(
+                        DarkPoolError::OrderPriceNotOnTick {
+                            pair: pair_key.clone(),
+                            tick: cfg.tick_size.to_string(),
+                        },
+                    ));
+                }
+            }
         }
 
         let default_ttl = self.inner.state.lock().default_ttl;
@@ -224,7 +435,7 @@ impl Engine {
         let order = Order {
             id: Uuid::new_v4(),
             trader: decrypted.trader,
-            pair: decrypted.pair.clone(),
+            pair: pair_key,
             side: decrypted.side,
             price: decrypted.price,
             size: decrypted.size,
@@ -340,12 +551,11 @@ impl Engine {
             },
         }];
 
-        let mut state = self.inner.state.lock();
+        let state = self.inner.state.lock();
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         state.book.apply(evt);
-        state.book.insert_order(order.clone());
-        state.pairs.insert(order.pair);
+        state.book.insert_order(order);
         Ok(())
     }
 
@@ -376,19 +586,11 @@ impl Engine {
 
     pub fn get_order_book(&self, pair: &str) -> (Vec<Order>, Vec<Order>) {
         let state = self.inner.state.lock();
-        let bids: Vec<Order> = state
-            .book
-            .bids()
-            .into_iter()
-            .filter(|o| o.pair == pair)
-            .collect();
-        let asks: Vec<Order> = state
-            .book
-            .asks()
-            .into_iter()
-            .filter(|o| o.pair == pair)
-            .collect();
-        (bids, asks)
+        (state.book.bids(pair), state.book.asks(pair))
+    }
+
+    pub fn pair_status(&self, pair: &str) -> Option<crate::state::PairStatus> {
+        self.inner.state.lock().pair_config(pair).map(|c| c.status)
     }
 
     pub fn active_order_count(&self) -> usize {

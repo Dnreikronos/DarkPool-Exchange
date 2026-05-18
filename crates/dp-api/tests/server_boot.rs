@@ -25,6 +25,7 @@ use tonic::transport::{Channel, Server};
 fn new_handler() -> ApiHandler {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store, Duration::from_secs(1));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
     ApiHandler::new(engine)
 }
 

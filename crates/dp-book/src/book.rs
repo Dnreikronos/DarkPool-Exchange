@@ -7,9 +7,20 @@ use parking_lot::RwLock;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
-struct Inner {
+#[derive(Default)]
+struct PerPairBook {
     bids: HashMap<Uuid, Order>,
     asks: HashMap<Uuid, Order>,
+}
+
+impl PerPairBook {
+    fn is_empty(&self) -> bool {
+        self.bids.is_empty() && self.asks.is_empty()
+    }
+}
+
+struct Inner {
+    books: HashMap<String, PerPairBook>,
     seq: u64,
 }
 
@@ -21,8 +32,7 @@ impl OrderBook {
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(Inner {
-                bids: HashMap::new(),
-                asks: HashMap::new(),
+                books: HashMap::new(),
                 seq: 0,
             }),
         }
@@ -49,15 +59,21 @@ impl OrderBook {
 
     pub fn insert_order(&self, order: Order) {
         let mut inner = self.inner.write();
+        let pair = order.pair.clone();
+        let book = inner.books.entry(pair).or_default();
         match order.side {
-            Side::Buy => inner.bids.insert(order.id, order),
-            Side::Sell => inner.asks.insert(order.id, order),
+            Side::Buy => book.bids.insert(order.id, order),
+            Side::Sell => book.asks.insert(order.id, order),
         };
     }
 
-    pub fn bids(&self) -> Vec<Order> {
+    /// Sorted bids for a single pair (price desc, then submission time asc).
+    pub fn bids(&self, pair: &str) -> Vec<Order> {
         let inner = self.inner.read();
-        let mut out: Vec<Order> = inner.bids.values().cloned().collect();
+        let Some(book) = inner.books.get(pair) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Order> = book.bids.values().cloned().collect();
         out.sort_by(|a, b| {
             b.price
                 .cmp(&a.price)
@@ -66,9 +82,13 @@ impl OrderBook {
         out
     }
 
-    pub fn asks(&self) -> Vec<Order> {
+    /// Sorted asks for a single pair (price asc, then submission time asc).
+    pub fn asks(&self, pair: &str) -> Vec<Order> {
         let inner = self.inner.read();
-        let mut out: Vec<Order> = inner.asks.values().cloned().collect();
+        let Some(book) = inner.books.get(pair) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Order> = book.asks.values().cloned().collect();
         out.sort_by(|a, b| {
             a.price
                 .cmp(&b.price)
@@ -77,19 +97,38 @@ impl OrderBook {
         out
     }
 
+    /// Snapshot of every active order across every sub-book. Used by the
+    /// expiry sweep and other cross-pair maintenance paths.
+    pub fn iter_all(&self) -> Vec<Order> {
+        let inner = self.inner.read();
+        let mut out = Vec::new();
+        for book in inner.books.values() {
+            out.extend(book.bids.values().cloned());
+            out.extend(book.asks.values().cloned());
+        }
+        out
+    }
+
+    pub fn pairs(&self) -> Vec<String> {
+        let inner = self.inner.read();
+        inner.books.keys().cloned().collect()
+    }
+
     pub fn collect_expired(&self, now: DateTime<Utc>) -> Vec<Event> {
         let inner = self.inner.read();
         let default_time = DateTime::<Utc>::default();
         let mut expired = Vec::new();
 
-        for order in inner.bids.values().chain(inner.asks.values()) {
-            if order.expires_at != default_time && order.expires_at <= now {
-                expired.push(Event {
-                    seq: 0,
-                    event_type: dp_types::EventType::OrderExpired,
-                    timestamp: DateTime::default(),
-                    data: EventData::OrderExpired { order_id: order.id },
-                });
+        for book in inner.books.values() {
+            for order in book.bids.values().chain(book.asks.values()) {
+                if order.expires_at != default_time && order.expires_at <= now {
+                    expired.push(Event {
+                        seq: 0,
+                        event_type: dp_types::EventType::OrderExpired,
+                        timestamp: DateTime::default(),
+                        data: EventData::OrderExpired { order_id: order.id },
+                    });
+                }
             }
         }
         expired
@@ -97,17 +136,54 @@ impl OrderBook {
 
     pub fn find_order(&self, id: Uuid) -> Option<Order> {
         let inner = self.inner.read();
-        inner.bids.get(&id).or_else(|| inner.asks.get(&id)).cloned()
+        for book in inner.books.values() {
+            if let Some(o) = book.bids.get(&id).or_else(|| book.asks.get(&id)) {
+                return Some(o.clone());
+            }
+        }
+        None
     }
 
     pub fn has_order(&self, id: Uuid) -> bool {
         let inner = self.inner.read();
-        inner.bids.contains_key(&id) || inner.asks.contains_key(&id)
+        inner
+            .books
+            .values()
+            .any(|b| b.bids.contains_key(&id) || b.asks.contains_key(&id))
     }
 
     pub fn active_order_count(&self) -> usize {
         let inner = self.inner.read();
-        inner.bids.len() + inner.asks.len()
+        inner
+            .books
+            .values()
+            .map(|b| b.bids.len() + b.asks.len())
+            .sum()
+    }
+
+    pub fn len_for(&self, pair: &str) -> usize {
+        let inner = self.inner.read();
+        inner
+            .books
+            .get(pair)
+            .map(|b| b.bids.len() + b.asks.len())
+            .unwrap_or(0)
+    }
+
+    /// IDs of every order on `pair`, bids then asks. Order within each
+    /// side is the underlying HashMap's iteration order, which is fine
+    /// for callers that just need the set (e.g. delist cancels). Avoids
+    /// the full-Order clone that `bids()` + `asks()` would do for a
+    /// caller that only needs the ids.
+    pub fn order_ids_for(&self, pair: &str) -> Vec<Uuid> {
+        let inner = self.inner.read();
+        let Some(book) = inner.books.get(pair) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(book.bids.len() + book.asks.len());
+        out.extend(book.bids.keys().copied());
+        out.extend(book.asks.keys().copied());
+        out
     }
 }
 
@@ -125,8 +201,7 @@ impl Inner {
         match &event.data {
             EventData::OrderPlaced { .. } => {}
             EventData::OrderCancelled { order_id, .. } | EventData::OrderExpired { order_id } => {
-                self.bids.remove(order_id);
-                self.asks.remove(order_id);
+                self.remove_order(*order_id);
             }
             EventData::OrderMatched { bid, ask, .. } => {
                 self.apply_fill(bid);
@@ -135,23 +210,54 @@ impl Inner {
             EventData::AuctionExecuted { .. }
             | EventData::BatchSubmitted { .. }
             | EventData::BatchConfirmed { .. }
-            | EventData::BatchSettled { .. } => {}
+            | EventData::BatchSettled { .. }
+            | EventData::PairRegistered { .. }
+            | EventData::PairSuspended { .. }
+            | EventData::PairDelisted { .. } => {}
+        }
+    }
+
+    fn remove_order(&mut self, order_id: Uuid) {
+        let mut emptied: Option<String> = None;
+        for (pair, book) in self.books.iter_mut() {
+            if book.bids.remove(&order_id).is_some() || book.asks.remove(&order_id).is_some() {
+                if book.is_empty() {
+                    emptied = Some(pair.clone());
+                }
+                break;
+            }
+        }
+        if let Some(p) = emptied {
+            self.books.remove(&p);
         }
     }
 
     fn apply_fill(&mut self, fill: &Fill) {
-        if let Some(order) = self.bids.get_mut(&fill.order_id) {
-            order.remaining_size -= fill.size;
-            if order.remaining_size <= Decimal::ZERO {
-                self.bids.remove(&fill.order_id);
+        let mut emptied: Option<String> = None;
+        for (pair, book) in self.books.iter_mut() {
+            if let Some(order) = book.bids.get_mut(&fill.order_id) {
+                order.remaining_size -= fill.size;
+                if order.remaining_size <= Decimal::ZERO {
+                    book.bids.remove(&fill.order_id);
+                    if book.is_empty() {
+                        emptied = Some(pair.clone());
+                    }
+                }
+                break;
             }
-            return;
+            if let Some(order) = book.asks.get_mut(&fill.order_id) {
+                order.remaining_size -= fill.size;
+                if order.remaining_size <= Decimal::ZERO {
+                    book.asks.remove(&fill.order_id);
+                    if book.is_empty() {
+                        emptied = Some(pair.clone());
+                    }
+                }
+                break;
+            }
         }
-        if let Some(order) = self.asks.get_mut(&fill.order_id) {
-            order.remaining_size -= fill.size;
-            if order.remaining_size <= Decimal::ZERO {
-                self.asks.remove(&fill.order_id);
-            }
+        if let Some(p) = emptied {
+            self.books.remove(&p);
         }
     }
 }
@@ -164,10 +270,14 @@ mod tests {
     use dp_types::EventType;
 
     fn make_order(side: Side, price: i64, size: i64) -> Order {
+        make_order_pair(side, price, size, "BTC-USD")
+    }
+
+    fn make_order_pair(side: Side, price: i64, size: i64, pair: &str) -> Order {
         Order {
             id: Uuid::new_v4(),
             trader: alloy_primitives::Address::ZERO,
-            pair: "BTC-USD".into(),
+            pair: pair.into(),
             side,
             price: Decimal::new(price, 0),
             size: Decimal::new(size, 0),
@@ -301,7 +411,7 @@ mod tests {
         book.insert_order(o2.clone());
         book.insert_order(o3.clone());
 
-        let bids = book.bids();
+        let bids = book.bids("BTC-USD");
         assert_eq!(bids[0].id, o3.id); // price 200, earlier
         assert_eq!(bids[1].id, o2.id); // price 200, later
         assert_eq!(bids[2].id, o1.id); // price 100
@@ -321,9 +431,82 @@ mod tests {
         book.insert_order(o2.clone());
         book.insert_order(o3.clone());
 
-        let asks = book.asks();
+        let asks = book.asks("BTC-USD");
         assert_eq!(asks[0].id, o2.id); // price 100, earlier
         assert_eq!(asks[1].id, o3.id); // price 100, later
         assert_eq!(asks[2].id, o1.id); // price 300
+    }
+
+    #[test]
+    fn pairs_are_isolated() {
+        let book = OrderBook::new();
+        let btc_bid = make_order_pair(Side::Buy, 50_000, 1, "BTC-USD");
+        let eth_bid = make_order_pair(Side::Buy, 3_000, 5, "ETH-USDC");
+        let eth_ask = make_order_pair(Side::Sell, 3_100, 2, "ETH-USDC");
+
+        book.insert_order(btc_bid.clone());
+        book.insert_order(eth_bid.clone());
+        book.insert_order(eth_ask.clone());
+
+        assert_eq!(book.active_order_count(), 3);
+        assert_eq!(book.len_for("BTC-USD"), 1);
+        assert_eq!(book.len_for("ETH-USDC"), 2);
+        assert_eq!(book.len_for("OTHER"), 0);
+
+        let btc_bids = book.bids("BTC-USD");
+        assert_eq!(btc_bids.len(), 1);
+        assert_eq!(btc_bids[0].id, btc_bid.id);
+
+        let eth_bids = book.bids("ETH-USDC");
+        assert_eq!(eth_bids.len(), 1);
+        assert_eq!(eth_bids[0].id, eth_bid.id);
+
+        let eth_asks = book.asks("ETH-USDC");
+        assert_eq!(eth_asks.len(), 1);
+        assert_eq!(eth_asks[0].id, eth_ask.id);
+
+        // Cross-pair: BTC has no asks at all.
+        assert!(book.asks("BTC-USD").is_empty());
+    }
+
+    #[test]
+    fn cancel_removes_only_from_owning_subbook() {
+        let book = OrderBook::new();
+        let btc = make_order_pair(Side::Buy, 50_000, 1, "BTC-USD");
+        let eth = make_order_pair(Side::Buy, 3_000, 5, "ETH-USDC");
+        let btc_id = btc.id;
+        let eth_id = eth.id;
+        book.insert_order(btc);
+        book.insert_order(eth);
+
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderCancelled,
+            timestamp: Utc::now(),
+            data: EventData::OrderCancelled {
+                order_id: btc_id,
+                reason: "user".into(),
+            },
+        });
+
+        assert!(!book.has_order(btc_id));
+        assert!(book.has_order(eth_id));
+        assert_eq!(book.len_for("BTC-USD"), 0);
+        assert_eq!(book.len_for("ETH-USDC"), 1);
+    }
+
+    #[test]
+    fn iter_all_unions_subbooks() {
+        let book = OrderBook::new();
+        let a = make_order_pair(Side::Buy, 100, 1, "AAA-USD");
+        let b = make_order_pair(Side::Sell, 200, 1, "BBB-USD");
+        book.insert_order(a.clone());
+        book.insert_order(b.clone());
+
+        let all = book.iter_all();
+        assert_eq!(all.len(), 2);
+        let ids: std::collections::HashSet<Uuid> = all.iter().map(|o| o.id).collect();
+        assert!(ids.contains(&a.id));
+        assert!(ids.contains(&b.id));
     }
 }

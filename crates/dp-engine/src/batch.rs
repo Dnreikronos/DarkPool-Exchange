@@ -115,6 +115,26 @@ impl Engine {
         };
 
         let (auction_id, settlement_matches, proof, public_inputs, timeout) = snapshot;
+
+        // Poison check: a recovered `BatchSubmitted` event loses its
+        // public_inputs (the witness secrets are wiped on restart), so
+        // recovery currently writes `[U256::ZERO; 6]` (see
+        // `recover.rs::EventData::BatchSubmitted`). Submitting those
+        // zeros on-chain would fail Groth16 verification and waste gas;
+        // worse, automatic retry would loop on the same failure. We
+        // leave `pb.submitting = true` so the existing short-circuit at
+        // the top of `submit_batch` blocks every subsequent retry until
+        // an operator intervenes.
+        if public_inputs.iter().all(|u| u.is_zero()) {
+            tracing::error!(
+                batch_id = %batch_id,
+                auction_id = %auction_id,
+                "refusing to submit batch with all-zero public_inputs — recovered \
+                 BatchSubmitted lost its witness; manual replay required"
+            );
+            return Err(EngineError::RecoveredBatchPublicInputsMissing { batch_id });
+        }
+
         let submitter = self.inner.submitter.read().clone();
 
         let params = SubmitBatchParams {

@@ -72,6 +72,23 @@ pub enum EventData {
         block_number: u64,
         tx_hash: String,
     },
+    PairRegistered {
+        pair: String,
+        base_token: String,
+        quote_token: String,
+        #[serde(with = "dp_types::decimal_bincode")]
+        min_order_size: Decimal,
+        #[serde(with = "dp_types::decimal_bincode")]
+        tick_size: Decimal,
+        #[serde(default)]
+        auction_interval_ms: Option<u64>,
+    },
+    PairSuspended {
+        pair: String,
+    },
+    PairDelisted {
+        pair: String,
+    },
 }
 
 impl EventData {
@@ -85,6 +102,140 @@ impl EventData {
             Self::BatchSubmitted { .. } => EventType::BatchSubmitted,
             Self::BatchConfirmed { .. } => EventType::BatchConfirmed,
             Self::BatchSettled { .. } => EventType::BatchSettled,
+            Self::PairRegistered { .. } => EventType::PairRegistered,
+            Self::PairSuspended { .. } => EventType::PairSuspended,
+            Self::PairDelisted { .. } => EventType::PairDelisted,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fill(id: u128) -> Fill {
+        Fill {
+            order_id: Uuid::from_u128(id),
+            size: Decimal::ONE,
+        }
+    }
+
+    #[test]
+    fn event_type_returns_matching_variant() {
+        let order_id = Uuid::from_u128(1);
+        let auction_id = Uuid::from_u128(2);
+        let batch_id = Uuid::from_u128(3);
+        let cases: Vec<(EventData, EventType)> = vec![
+            (
+                EventData::OrderPlaced {
+                    order_id,
+                    commitment: vec![1],
+                    proof: vec![2],
+                    ciphertext: vec![3],
+                    salt_nonce: vec![4],
+                },
+                EventType::OrderPlaced,
+            ),
+            (
+                EventData::OrderCancelled {
+                    order_id,
+                    reason: "user".into(),
+                },
+                EventType::OrderCancelled,
+            ),
+            (
+                EventData::OrderExpired { order_id },
+                EventType::OrderExpired,
+            ),
+            (
+                EventData::AuctionExecuted {
+                    auction_id,
+                    pair: "ETH/USDC".into(),
+                    clearing_price: Decimal::new(2000, 0),
+                    matched_volume: Decimal::ONE,
+                    match_count: 1,
+                    timestamp: Utc::now(),
+                },
+                EventType::AuctionExecuted,
+            ),
+            (
+                EventData::OrderMatched {
+                    auction_id,
+                    bid: fill(1),
+                    ask: fill(2),
+                    price: Decimal::new(2000, 0),
+                    size: Decimal::ONE,
+                },
+                EventType::OrderMatched,
+            ),
+            (
+                EventData::BatchSubmitted {
+                    batch_id,
+                    auction_id,
+                    tx_hash: "0xabc".into(),
+                    match_count: 1,
+                    proof: vec![],
+                },
+                EventType::BatchSubmitted,
+            ),
+            (
+                EventData::BatchConfirmed {
+                    batch_id,
+                    tx_hash: "0xabc".into(),
+                },
+                EventType::BatchConfirmed,
+            ),
+            (
+                EventData::BatchSettled {
+                    batch_id,
+                    block_number: 42,
+                    tx_hash: "0xabc".into(),
+                },
+                EventType::BatchSettled,
+            ),
+            (
+                EventData::PairRegistered {
+                    pair: "ETH/USDC".into(),
+                    base_token: "0x0".into(),
+                    quote_token: "0x1".into(),
+                    min_order_size: Decimal::new(1, 2),
+                    tick_size: Decimal::new(1, 2),
+                    auction_interval_ms: Some(5000),
+                },
+                EventType::PairRegistered,
+            ),
+            (
+                EventData::PairSuspended {
+                    pair: "ETH/USDC".into(),
+                },
+                EventType::PairSuspended,
+            ),
+            (
+                EventData::PairDelisted {
+                    pair: "ETH/USDC".into(),
+                },
+                EventType::PairDelisted,
+            ),
+        ];
+        for (data, expected) in cases {
+            assert_eq!(data.event_type(), expected);
+        }
+    }
+
+    #[test]
+    fn event_serde_roundtrip_preserves_event_type() {
+        let original = Event {
+            seq: 7,
+            event_type: EventType::OrderPlaced,
+            timestamp: Utc::now(),
+            data: EventData::OrderExpired {
+                order_id: Uuid::from_u128(99),
+            },
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.seq, original.seq);
+        assert_eq!(back.event_type, original.event_type);
+        assert_eq!(back.data.event_type(), EventType::OrderExpired);
     }
 }

@@ -32,6 +32,9 @@ pub enum EngineError {
     #[error("recover: commitment mismatch for order {order_id}")]
     RecoverCommitmentMismatch { order_id: uuid::Uuid },
 
+    #[error("recover: order {order_id} has salt_nonce of {len} bytes; expected 32")]
+    RecoverSaltNonceLen { order_id: uuid::Uuid, len: usize },
+
     #[error("recover: re-aggregate orphan auction {auction_id}: {source}")]
     RecoverReAggregate {
         auction_id: uuid::Uuid,
@@ -50,4 +53,10 @@ pub enum EngineError {
 
     #[error("pair not configured for settlement: {pair}")]
     PairNotConfigured { pair: String },
+
+    #[error(
+        "submit batch {batch_id}: public_inputs lost on recovery — Groth16 verification would fail; \
+         batch is poisoned and will not be retried automatically. Manual replay required."
+    )]
+    RecoveredBatchPublicInputsMissing { batch_id: uuid::Uuid },
 }
