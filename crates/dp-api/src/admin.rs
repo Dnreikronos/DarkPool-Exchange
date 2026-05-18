@@ -51,7 +51,12 @@ impl DarkPoolAdminService for AdminApiHandler {
         let base = parse_address(&req.base_token, "base_token")?;
         let quote = parse_address(&req.quote_token, "quote_token")?;
         let min_order_size = parse_decimal_nonneg(&req.min_order_size, "min_order_size")?;
+        // tick_size = 0 is the documented "no tick check" sentinel (see
+        // PairConfig in dp_engine::state), so non-negative is the right gate.
         let tick_size = parse_decimal_nonneg(&req.tick_size, "tick_size")?;
+        if matches!(req.auction_interval_ms, Some(0)) {
+            return Err(Status::invalid_argument("auction_interval_ms must be > 0"));
+        }
         let auction_interval = req
             .auction_interval_ms
             .map(|ms| std::time::Duration::from_millis(ms as u64));
