@@ -92,7 +92,8 @@ pub fn store_probe(store: Arc<dyn Store>) -> Probe {
 /// Aggregator binary still present + executable bit set as far as the
 /// filesystem can tell us. Boot-time validation already rejected a
 /// missing path; this probe catches operator mistakes after boot
-/// (volume unmounted, binary deleted).
+/// (volume unmounted, binary deleted, exec bit stripped by a misapplied
+/// `chmod`).
 pub fn aggregator_probe(path: Option<String>) -> Probe {
     Probe::new("aggregator_bin", move || match &path {
         None => Ok(()),
@@ -100,6 +101,16 @@ pub fn aggregator_probe(path: Option<String>) -> Probe {
             let m = std::fs::metadata(p).map_err(|e| format!("aggregator bin {p}: {e}"))?;
             if !m.is_file() {
                 return Err(format!("aggregator bin {p}: not a regular file"));
+            }
+            // Exec bit check matters: a non-executable binary would
+            // otherwise let `/readyz` report ready while the next
+            // auction tick fails at spawn time.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if m.permissions().mode() & 0o111 == 0 {
+                    return Err(format!("aggregator bin {p}: not executable"));
+                }
             }
             Ok(())
         }
@@ -147,5 +158,30 @@ mod tests {
         let probe = aggregator_probe(Some("/nonexistent/xyz".into()));
         let err = (probe.check)().unwrap_err();
         assert!(err.contains("aggregator bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aggregator_probe_executable_file_passes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("agg");
+        std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = aggregator_probe(Some(bin.to_str().unwrap().into()));
+        assert!((probe.check)().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aggregator_probe_non_executable_file_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("agg");
+        std::fs::write(&bin, b"x").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let probe = aggregator_probe(Some(bin.to_str().unwrap().into()));
+        let err = (probe.check)().unwrap_err();
+        assert!(err.contains("not executable"), "got: {err}");
     }
 }
