@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{MatchedPath, Path, Query, State};
 use axum::http::{header, HeaderValue, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
@@ -139,6 +139,15 @@ pub fn router_with_ops(
 /// header set by `SetRequestIdLayer` so log lines (and OTel spans) all
 /// carry the same correlation token.
 fn make_http_span(request: &AxumRequest<Body>) -> tracing::Span {
+    // Prefer the matched route template (e.g. `/v1/orders/:order_id`) so
+    // span/log telemetry does not explode in cardinality for ID-bearing
+    // paths. Fall back to the raw URI when no route matched (the ops
+    // sub-router and unknown paths).
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path());
     let req_id = request
         .headers()
         .get("x-request-id")
@@ -147,7 +156,7 @@ fn make_http_span(request: &AxumRequest<Body>) -> tracing::Span {
     tracing::info_span!(
         "http",
         method = %request.method(),
-        path = %request.uri().path(),
+        path = %path,
         request_id = req_id,
     )
 }
