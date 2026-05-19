@@ -7,6 +7,7 @@ use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider;
 use alloy_rpc_types::BlockNumberOrTag;
 use alloy_signer_local::PrivateKeySigner;
+use tracing::Instrument;
 
 use crate::abi::{DarkPool, SolMatch, MAX_MATCHES_PER_BATCH};
 use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
@@ -88,7 +89,14 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
         &'a self,
         params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
-        Box::pin(async move {
+        let span = tracing::info_span!(
+            "dp_settlement.eth_submit",
+            batch_id = %params.batch_id,
+            auction_id = %params.auction_id,
+            match_count = params.matches.len(),
+        );
+        Box::pin(
+            async move {
             let sol_matches = build_sol_matches(params)?;
             let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
@@ -142,7 +150,9 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
             Ok(format!("{:#x}", receipt.transaction_hash))
-        })
+        }
+            .instrument(span),
+        )
     }
 }
 
