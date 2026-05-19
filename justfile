@@ -100,6 +100,19 @@ up-zk:
     DARKPOOL_ZK_PROVING_KEY={{ZK_KEYS}} \
     {{COMPOSE}} --profile zk up -d --build
 
+# Bring up the obs stack (default services + prometheus/grafana/jaeger; server pushes OTLP to jaeger)
+up-obs:
+    OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317} \
+    {{COMPOSE}} --profile obs up -d --build
+
+# Tear down only the obs services (leaves postgres/anvil/deployer/darkpool-server up)
+down-obs:
+    {{COMPOSE}} --profile obs rm -sf prometheus grafana jaeger
+
+# Tail logs for the obs services
+logs-obs:
+    {{COMPOSE}} --profile obs logs -f prometheus grafana jaeger
+
 # Foreground (logs streamed)
 up-fg:
     {{COMPOSE}} up --build

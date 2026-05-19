@@ -104,6 +104,10 @@ services:
       DARKPOOL_RATE_BURST: ${DARKPOOL_RATE_BURST:-20}
       DARKPOOL_RATE_STALE_AFTER: ${DARKPOOL_RATE_STALE_AFTER:-10m}
       RUST_LOG: ${RUST_LOG:-info,dp_event=debug,dp_engine=info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-darkpool-api}
+      DP_ENVIRONMENT: ${DP_ENVIRONMENT:-local}
+      DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
     entrypoint:
       - /bin/sh
       - -c
@@ -116,6 +120,48 @@ services:
     ports:
       - "${DARKPOOL_GRPC_PORT:-9090}:9090"
       - "${DARKPOOL_HTTP_PORT:-8080}:8080"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: darkpool-jaeger
+    profiles: ["obs"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: darkpool-prometheus
+    profiles: ["obs"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: darkpool-grafana
+    profiles: ["obs"]
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/darkpool.json:/var/lib/grafana/dashboards/darkpool.json:ro
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
 
   keygen:
     image: darkpool-server:dev
