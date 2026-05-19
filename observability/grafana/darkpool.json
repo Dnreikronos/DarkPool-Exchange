@@ -166,7 +166,7 @@
         "name": "datasource",
         "type": "datasource",
         "query": "prometheus",
-        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" }
+        "current": { "selected": false, "text": "Prometheus", "value": "prometheus" }
       }
     ]
   },
