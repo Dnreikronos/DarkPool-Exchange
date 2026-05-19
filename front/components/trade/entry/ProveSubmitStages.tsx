@@ -49,7 +49,10 @@ export function PlaceButton({ idleLabel, phase, disabled, onClick, accent }: Pla
         className={cn(
           'relative flex h-12 items-center justify-center px-8',
           'font-mono uppercase tracking-[0.15em] text-[11px] font-medium leading-none',
-          'transition-colors transition-shadow duration-150 ease-out',
+          // Custom transition-property so colors AND shadow both animate —
+          // chaining `transition-colors transition-shadow` lets the second
+          // class win and only shadow tweens.
+          'transition-[color,background-color,box-shadow] duration-150 ease-out',
           'focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent',
           accent
             ? 'bg-brand-accent text-brand-on-accent hover:shadow-accent-glow'

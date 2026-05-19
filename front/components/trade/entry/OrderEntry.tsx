@@ -81,6 +81,8 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
     baseBalance: balances.weth,
     quoteBalance: balances.usdc,
   })
+  const formStateRef = React.useRef(form)
+  formStateRef.current = form
 
   const effectivePlaceOrder = React.useCallback(
     (payload: SubmitPayload) => {
@@ -120,10 +122,10 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
     ref,
     () => ({
       fill: (price: string, nextSide?: OrderSide) => {
-        form.fillFromLevel(price, nextSide)
+        formStateRef.current.fillFromLevel(price, nextSide)
       },
     }),
-    [form]
+    []
   )
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -176,7 +178,9 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
       </header>
       <form
         ref={formRef}
+        id="order-entry-form"
         onSubmit={handleSubmit}
+        aria-describedby={formError ? formErrorId : undefined}
         className="flex flex-1 flex-col gap-4 p-4"
         noValidate
       >

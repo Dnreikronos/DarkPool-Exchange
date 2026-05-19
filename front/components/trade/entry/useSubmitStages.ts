@@ -17,7 +17,7 @@
 //   - `delay`:      defaults to setTimeout-based sleep; tests pass a
 //                   manually-pumped scheduler.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 import {
   STAGE_DURATIONS_MS,
@@ -132,7 +132,10 @@ export function useSubmitStages(params: UseSubmitStagesParams): UseSubmitStagesR
   const [phase, setPhase] = useState<SubmissionPhase>({ kind: 'idle' })
   const runIdRef = useRef(0)
   const paramsRef = useRef(params)
-  useEffect(() => {
+  // useLayoutEffect over useEffect so paramsRef is current before any
+  // post-commit click handler can call submit() — useEffect would leave
+  // a one-render window where stale params are visible.
+  useLayoutEffect(() => {
     paramsRef.current = params
   })
 

@@ -50,16 +50,6 @@ describe('OrderEntry composition', () => {
     expect(html).not.toContain('Connect a wallet')
   })
 
-  it('shows a balance error when connected with zero balances and price/size are valid', () => {
-    walletStore.connect()
-    // The form starts with empty inputs — no balance check fires.
-    // We can't drive the field state from static markup, so we trust the
-    // separate validate.test.ts unit tests for balance-error coverage and
-    // just lock the wired surface: the panel renders without the
-    // disconnected error and without crashing.
-    expect(() => renderPanel()).not.toThrow()
-  })
-
   it('idle button reads "[ BUY · WETH ]" by default', () => {
     walletStore.connect()
     const html = renderPanel()

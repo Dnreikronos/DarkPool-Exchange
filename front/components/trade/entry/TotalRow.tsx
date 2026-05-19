@@ -19,8 +19,12 @@ export interface TotalRowProps {
   size: string
 }
 
-const FEE_DECIMALS = displayDecimalsFor(QUOTE_TOKEN)
+// Total renders at the quote-token's display precision (USDC=2dp). Fee
+// renders at +2 extra dp so a 5-bps charge on a small trade like
+// $5 doesn't round visibly to "0.00" — at $5 the fee is $0.0025, which
+// surfaces as `0.0025 USDC`.
 const TOTAL_DECIMALS = displayDecimalsFor(QUOTE_TOKEN)
+const FEE_DECIMALS = TOTAL_DECIMALS + 2
 
 export function TotalRow({ price, size }: TotalRowProps) {
   const total = computeTotal(price, size)
