@@ -244,16 +244,25 @@ fn resolve_want_json(env_value: Option<String>, stdout_is_tty: bool) -> bool {
 
 /// Treat empty / whitespace-only OTLP endpoint env values as unset so
 /// blank entries in a Kubernetes ConfigMap don't accidentally enable
-/// the OTel layer.
+/// the OTel layer. Surrounding whitespace is trimmed so values pasted
+/// from a YAML scalar still reach the exporter as a valid URI.
 fn resolve_otlp_endpoint(env_value: Option<String>) -> Option<String> {
-    env_value.filter(|s| !s.trim().is_empty())
+    env_value
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 /// Resolve `deployment.environment` from `DP_ENVIRONMENT`, falling
 /// back to `DEPLOYMENT_ENVIRONMENT`, defaulting to "development".
+/// Blank / whitespace-only values are treated as unset so a
+/// ConfigMap key that exists but is empty does not poison the
+/// resource tag.
 fn resolve_deployment_environment(primary: Option<String>, fallback: Option<String>) -> String {
-    primary
-        .or(fallback)
+    [primary, fallback]
+        .into_iter()
+        .flatten()
+        .map(|s| s.trim().to_owned())
+        .find(|s| !s.is_empty())
         .unwrap_or_else(|| "development".to_string())
 }
 
@@ -354,6 +363,19 @@ mod tests {
     }
 
     #[test]
+    fn otlp_endpoint_trims_surrounding_whitespace() {
+        // ConfigMap YAML scalars commonly leave a trailing newline.
+        assert_eq!(
+            resolve_otlp_endpoint(Some(" http://collector:4317 ".into())),
+            Some("http://collector:4317".into()),
+        );
+        assert_eq!(
+            resolve_otlp_endpoint(Some("\thttp://collector:4317\n".into())),
+            Some("http://collector:4317".into()),
+        );
+    }
+
+    #[test]
     fn deployment_env_prefers_primary() {
         assert_eq!(
             resolve_deployment_environment(Some("staging".into()), Some("prod".into())),
@@ -372,6 +394,32 @@ mod tests {
     #[test]
     fn deployment_env_defaults_to_development() {
         assert_eq!(resolve_deployment_environment(None, None), "development",);
+    }
+
+    #[test]
+    fn deployment_env_skips_blank_primary() {
+        // A ConfigMap key present but empty must not poison the resource
+        // tag — fall through to the fallback / default chain instead.
+        assert_eq!(
+            resolve_deployment_environment(Some(String::new()), Some("prod".into())),
+            "prod",
+        );
+        assert_eq!(
+            resolve_deployment_environment(Some("   ".into()), Some("prod".into())),
+            "prod",
+        );
+        assert_eq!(
+            resolve_deployment_environment(Some("\t\n".into()), None),
+            "development",
+        );
+    }
+
+    #[test]
+    fn deployment_env_trims_whitespace() {
+        assert_eq!(
+            resolve_deployment_environment(Some(" staging \n".into()), None),
+            "staging",
+        );
     }
 
     #[test]
