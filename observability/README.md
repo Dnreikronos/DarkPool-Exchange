@@ -13,7 +13,7 @@ surface.
 | ---------- | ------ | ------------------------------------------------------- |
 | `/healthz` | `GET`  | Liveness. Returns `200 {"status":"ok"}` while the process is running. |
 | `/readyz`  | `GET`  | Readiness. `200` once every probe (event store, aggregator binary) is healthy; `503 {"status":"not_ready","failed":<probe_name>}` otherwise. The detailed failure reason is logged server-side (the endpoint is unauthenticated, so it must not echo internals). |
-| `/metrics` | `GET`  | Prometheus text exposition (`v0.0.4`). Pre-registers every metric the operator emits so families show up even before the first auction tick. |
+| `/metrics` | `GET`  | Prometheus text exposition (`v0.0.4`). Counter and gauge families are force-registered at startup so they appear before the first auction tick. Histogram families (`darkpool_auction_duration_seconds`, `darkpool_batch_submission_duration_seconds`) only appear after their first observation — see the histogram note in the quick-start section. |
 
 ## Environment variables
 
