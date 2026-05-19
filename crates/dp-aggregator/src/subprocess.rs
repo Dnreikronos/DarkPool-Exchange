@@ -6,6 +6,7 @@ use std::time::Duration;
 use dp_auction::Match;
 use dp_zk::witness::BatchWitness;
 use serde::Serialize;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::aggregator::ProofAggregator;
@@ -66,7 +67,14 @@ impl ProofAggregator for SubprocessAggregator {
         matches: &'a [Match],
         witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
-        Box::pin(async move {
+        let span = tracing::info_span!(
+            "dp_aggregator.subprocess.aggregate",
+            batch_id = %batch_id,
+            auction_id = %auction_id,
+            match_count = matches.len(),
+        );
+        Box::pin(
+            async move {
             let private_witness = if witness.matches.is_empty() {
                 None
             } else {
@@ -149,7 +157,9 @@ impl ProofAggregator for SubprocessAggregator {
                     Err(AggregatorError::Timeout)
                 }
             }
-        })
+        }
+            .instrument(span),
+        )
     }
 }
 
