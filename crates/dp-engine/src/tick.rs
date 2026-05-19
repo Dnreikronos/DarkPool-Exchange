@@ -34,6 +34,7 @@ pub(crate) struct PendingAggregation {
 }
 
 impl Engine {
+    #[tracing::instrument(name = "dp_engine.auction_tick", skip(self))]
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
         let (notifications, pending, aggregator) = self.tick_under_lock();
 

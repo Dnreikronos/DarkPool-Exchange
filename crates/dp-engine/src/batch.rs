@@ -90,6 +90,7 @@ impl Engine {
         }
     }
 
+    #[tracing::instrument(name = "dp_engine.submit_batch", skip(self), fields(batch_id = %batch_id))]
     pub(crate) async fn submit_batch(&self, batch_id: Uuid) -> Result<(), EngineError> {
         // Acquire submitting flag + snapshot inputs.
         let snapshot = {

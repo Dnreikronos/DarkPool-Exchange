@@ -346,6 +346,14 @@ impl Engine {
         self.inner.subscribers.subscribe()
     }
 
+    #[tracing::instrument(
+        name = "dp_engine.place_encrypted_order",
+        skip(self, _client_commitment, proof, ciphertext),
+        fields(
+            ciphertext_bytes = ciphertext.len(),
+            proof_bytes = proof.len(),
+        )
+    )]
     pub async fn place_encrypted_order(
         &self,
         _client_commitment: Vec<u8>,
