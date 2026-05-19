@@ -2,6 +2,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
+use tracing::Instrument;
 use zeroize::Zeroize;
 
 use crate::decrypted_order::DecryptedOrder;
@@ -29,12 +30,17 @@ impl Decrypter for EciesDecrypter {
         &'a self,
         ciphertext: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>> {
-        Box::pin(async move {
-            let plaintext = ecies::decrypt(&self.secret_key, ciphertext)
-                .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
-            let order: DecryptedOrder = serde_json::from_slice(&plaintext)?;
-            Ok(order)
-        })
+        let span =
+            tracing::info_span!("dp_crypto.ecies_decrypt", ciphertext_bytes = ciphertext.len());
+        Box::pin(
+            async move {
+                let plaintext = ecies::decrypt(&self.secret_key, ciphertext)
+                    .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+                let order: DecryptedOrder = serde_json::from_slice(&plaintext)?;
+                Ok(order)
+            }
+            .instrument(span),
+        )
     }
 }
 
