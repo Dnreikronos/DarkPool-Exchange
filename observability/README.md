@@ -32,7 +32,7 @@ surface.
 | `darkpool_auctions_total`                         | counter   |           | Auctions that produced ≥1 match.                            |
 | `darkpool_auction_duration_seconds`               | histogram |           | `dp_auction::run` wall-clock per pair, per tick.            |
 | `darkpool_orders_placed_total`                    | counter   | `side`    | Orders successfully inserted into the book.                  |
-| `darkpool_orders_matched_total`                   | counter   |           | Matches (bid/ask pairs) produced in successful auctions. Double for leg rate. |
+| `darkpool_orders_matched_total`                   | counter   |           | Matches (bid/ask pairs) produced in successful auctions. Each match is one bid + one ask, so per-order rate = 2 × match rate. |
 | `darkpool_orders_expired_total`                   | counter   |           | Orders removed because TTL elapsed.                          |
 | `darkpool_clearing_price`                         | gauge     | `pair`    | Latest clearing price (best-effort, lossy past `f64`).      |
 | `darkpool_batch_submission_duration_seconds`      | histogram |           | `submitter.submit` round-trip on the success path.          |
