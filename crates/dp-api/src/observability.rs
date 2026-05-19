@@ -116,18 +116,12 @@ pub fn init_metrics() -> Result<PrometheusHandle, ObservabilityError> {
 pub fn init_tracing() -> Result<TracingGuard, ObservabilityError> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let format = std::env::var("DP_LOG_FORMAT")
-        .ok()
-        .map(|v| v.to_ascii_lowercase());
-    let want_json = match format.as_deref() {
-        Some("json") => true,
-        Some("text") | Some("plain") => false,
-        _ => !std::io::stdout().is_terminal(),
-    };
+    let want_json = resolve_want_json(
+        std::env::var("DP_LOG_FORMAT").ok(),
+        std::io::stdout().is_terminal(),
+    );
 
-    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+    let otlp_endpoint = resolve_otlp_endpoint(std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
 
     let mut guard = TracingGuard::default();
 
@@ -142,14 +136,10 @@ pub fn init_tracing() -> Result<TracingGuard, ObservabilityError> {
                 .build_span_exporter()
                 .map_err(|e| ObservabilityError::Setup(format!("otlp exporter: {e}")))?;
 
-            // Resource attrs follow OTel semantic conventions so the
-            // collector can filter spans by service / version / env
-            // without us baking them into every span attribute set.
-            // `deployment.environment` falls back to "development" so
-            // local runs land in a separate bucket from prod by default.
-            let deployment_env = std::env::var("DP_ENVIRONMENT")
-                .or_else(|_| std::env::var("DEPLOYMENT_ENVIRONMENT"))
-                .unwrap_or_else(|_| "development".to_string());
+            let deployment_env = resolve_deployment_environment(
+                std::env::var("DP_ENVIRONMENT").ok(),
+                std::env::var("DEPLOYMENT_ENVIRONMENT").ok(),
+            );
             let provider =
                 TracerProvider::builder()
                     .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
@@ -235,6 +225,36 @@ pub enum ObservabilityError {
     Setup(String),
 }
 
+/// Map the `DP_LOG_FORMAT` env var to a JSON/text choice. Accepts
+/// `json` → JSON, `text`/`plain` → text, anything else → auto-detect
+/// (JSON when stdout is not a TTY). Extracted so unit tests can cover
+/// each branch without touching the global subscriber.
+fn resolve_want_json(env_value: Option<String>, stdout_is_tty: bool) -> bool {
+    match env_value.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
+        Some(v) if v == "json" => true,
+        Some(v) if v == "text" || v == "plain" => false,
+        _ => !stdout_is_tty,
+    }
+}
+
+/// Treat empty / whitespace-only OTLP endpoint env values as unset so
+/// blank entries in a Kubernetes ConfigMap don't accidentally enable
+/// the OTel layer.
+fn resolve_otlp_endpoint(env_value: Option<String>) -> Option<String> {
+    env_value.filter(|s| !s.trim().is_empty())
+}
+
+/// Resolve `deployment.environment` from `DP_ENVIRONMENT`, falling
+/// back to `DEPLOYMENT_ENVIRONMENT`, defaulting to "development".
+fn resolve_deployment_environment(
+    primary: Option<String>,
+    fallback: Option<String>,
+) -> String {
+    primary
+        .or(fallback)
+        .unwrap_or_else(|| "development".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +304,96 @@ mod tests {
         assert!(out.contains(M_BATCH_SUBMISSION_DURATION));
         assert!(out.contains(M_CLEARING_PRICE));
         assert!(out.contains("pair=\"ETH/USDC\""));
+    }
+
+    #[test]
+    fn want_json_explicit_json() {
+        assert!(resolve_want_json(Some("json".into()), true));
+        assert!(resolve_want_json(Some("JSON".into()), true));
+        assert!(resolve_want_json(Some(" json ".into()), true));
+    }
+
+    #[test]
+    fn want_json_explicit_text() {
+        assert!(!resolve_want_json(Some("text".into()), false));
+        assert!(!resolve_want_json(Some("plain".into()), false));
+        assert!(!resolve_want_json(Some("PLAIN".into()), false));
+    }
+
+    #[test]
+    fn want_json_unset_follows_tty() {
+        // No env override → JSON when stdout is piped, text when on a TTY.
+        assert!(resolve_want_json(None, false));
+        assert!(!resolve_want_json(None, true));
+    }
+
+    #[test]
+    fn want_json_unknown_value_falls_back_to_tty() {
+        // Unrecognised value must not silently default to a fixed
+        // format; behaviour should match the unset case.
+        assert!(resolve_want_json(Some("yaml".into()), false));
+        assert!(!resolve_want_json(Some("yaml".into()), true));
+    }
+
+    #[test]
+    fn otlp_endpoint_passes_through_when_set() {
+        assert_eq!(
+            resolve_otlp_endpoint(Some("http://collector:4317".into())),
+            Some("http://collector:4317".into()),
+        );
+    }
+
+    #[test]
+    fn otlp_endpoint_treats_blank_as_unset() {
+        assert_eq!(resolve_otlp_endpoint(None), None);
+        assert_eq!(resolve_otlp_endpoint(Some(String::new())), None);
+        assert_eq!(resolve_otlp_endpoint(Some("   ".into())), None);
+        assert_eq!(resolve_otlp_endpoint(Some("\t\n".into())), None);
+    }
+
+    #[test]
+    fn deployment_env_prefers_primary() {
+        assert_eq!(
+            resolve_deployment_environment(Some("staging".into()), Some("prod".into())),
+            "staging",
+        );
+    }
+
+    #[test]
+    fn deployment_env_falls_back_when_primary_unset() {
+        assert_eq!(
+            resolve_deployment_environment(None, Some("prod".into())),
+            "prod",
+        );
+    }
+
+    #[test]
+    fn deployment_env_defaults_to_development() {
+        assert_eq!(
+            resolve_deployment_environment(None, None),
+            "development",
+        );
+    }
+
+    #[test]
+    fn observability_error_display_includes_inner_message() {
+        let err = ObservabilityError::Setup("recorder already set".into());
+        let rendered = err.to_string();
+        assert!(rendered.contains("recorder already set"), "got: {rendered}");
+        assert!(rendered.contains("observability setup failed"));
+    }
+
+    #[test]
+    fn tracing_guard_default_shutdown_is_no_op() {
+        // A default-constructed guard has no provider, so shutdown and
+        // drop must both be safe to call without an OTel exporter wired.
+        let guard = TracingGuard::default();
+        guard.shutdown();
+    }
+
+    #[test]
+    fn tracing_guard_default_drop_is_no_op() {
+        // Drop should not panic when provider is None.
+        let _ = TracingGuard::default();
     }
 }
