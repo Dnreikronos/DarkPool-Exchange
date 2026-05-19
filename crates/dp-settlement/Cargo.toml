@@ -28,3 +28,4 @@ futures-util = "0.3"
 dp-types = { path = "../dp-types" }
 alloy-node-bindings = "1"
 which = "6"
+tracing-subscriber = { workspace = true }

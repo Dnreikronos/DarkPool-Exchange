@@ -84,17 +84,25 @@ fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementEr
     })
 }
 
+/// Build the tracing span for a single `submit` call. Extracted so
+/// unit tests can verify the span's fields without standing up a real
+/// alloy `Provider`. Field names follow the OTel HTTP / RPC
+/// conventions where it makes sense.
+fn build_submit_span(params: &SubmitBatchParams) -> tracing::Span {
+    tracing::info_span!(
+        "dp_settlement.eth_submit",
+        batch_id = %params.batch_id,
+        auction_id = %params.auction_id,
+        match_count = params.matches.len(),
+    )
+}
+
 impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
     fn submit<'a>(
         &'a self,
         params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
-        let span = tracing::info_span!(
-            "dp_settlement.eth_submit",
-            batch_id = %params.batch_id,
-            auction_id = %params.auction_id,
-            match_count = params.matches.len(),
-        );
+        let span = build_submit_span(params);
         Box::pin(
             async move {
             let sol_matches = build_sol_matches(params)?;
@@ -202,5 +210,27 @@ mod tests {
             err,
             SettlementError::TooManyMatches { count: 257 }
         ));
+    }
+
+    #[test]
+    fn build_submit_span_records_batch_metadata() {
+        // Span metadata is only kept around when a subscriber is
+        // attached; install one for the duration of this test so we
+        // can introspect the field set.
+        use tracing_subscriber::layer::SubscriberExt;
+        let subscriber = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let params = test_params(vec![test_match(), test_match()]);
+        let span = build_submit_span(&params);
+        let metadata = span.metadata().expect("subscriber attached, span enabled");
+        // The span name is the operator/collector lookup key; assert
+        // it explicitly so a rename surfaces here, not in a Jaeger UI
+        // weeks later.
+        assert_eq!(metadata.name(), "dp_settlement.eth_submit");
+        let fields: Vec<&str> = metadata.fields().iter().map(|f| f.name()).collect();
+        assert!(fields.contains(&"batch_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"auction_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"match_count"), "fields: {fields:?}");
     }
 }
