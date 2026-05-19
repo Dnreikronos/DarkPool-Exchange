@@ -128,4 +128,19 @@ mod tests {
         store.append(&mut events).unwrap();
         assert_ne!(events[0].timestamp, DateTime::<Utc>::default());
     }
+
+    // Cover the `Store::ping` and `Store::size_bytes` trait defaults
+    // through MemStore — they have no override here, so a direct call
+    // exercises the default body in `store.rs`.
+    #[test]
+    fn default_ping_is_ok() {
+        let store: Box<dyn Store> = Box::new(MemStore::new());
+        store.ping().expect("default ping is infallible");
+    }
+
+    #[test]
+    fn default_size_bytes_is_zero() {
+        let store: Box<dyn Store> = Box::new(MemStore::new());
+        assert_eq!(store.size_bytes().unwrap(), 0);
+    }
 }

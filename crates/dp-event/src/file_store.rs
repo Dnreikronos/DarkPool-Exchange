@@ -264,4 +264,18 @@ mod tests {
         let err = store.read_from(0, 0).unwrap_err();
         assert!(matches!(err, EventError::LimitMustBePositive));
     }
+
+    #[test]
+    fn size_bytes_grows_after_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.bin");
+        let store = FileStore::open(&path).unwrap();
+
+        let empty = store.size_bytes().unwrap();
+        let mut events = vec![placed_event(), placed_event()];
+        store.append(&mut events).unwrap();
+        let after = store.size_bytes().unwrap();
+
+        assert!(after > empty, "size {after} should exceed empty {empty}");
+    }
 }
