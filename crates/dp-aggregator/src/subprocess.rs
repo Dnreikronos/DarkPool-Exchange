@@ -82,89 +82,89 @@ impl ProofAggregator for SubprocessAggregator {
         let span = build_aggregate_span(batch_id, auction_id, matches.len());
         Box::pin(
             async move {
-            let private_witness = if witness.matches.is_empty() {
-                None
-            } else {
-                Some(witness.matches.as_slice())
-            };
-            let input = AggregatorInput {
-                batch_id: batch_id.to_string(),
-                matches: matches
-                    .iter()
-                    .map(|m| AggregatorMatch {
-                        auction_id: auction_id.to_string(),
-                        bid_order_id: m.bid.order_id.to_string(),
-                        ask_order_id: m.ask.order_id.to_string(),
-                        price: m.price.to_string(),
-                        size: m.size.to_string(),
-                    })
-                    .collect(),
-                private_witness,
-                policy: Some(&witness.policy),
-            };
-            let payload = serde_json::to_vec(&input)?;
+                let private_witness = if witness.matches.is_empty() {
+                    None
+                } else {
+                    Some(witness.matches.as_slice())
+                };
+                let input = AggregatorInput {
+                    batch_id: batch_id.to_string(),
+                    matches: matches
+                        .iter()
+                        .map(|m| AggregatorMatch {
+                            auction_id: auction_id.to_string(),
+                            bid_order_id: m.bid.order_id.to_string(),
+                            ask_order_id: m.ask.order_id.to_string(),
+                            price: m.price.to_string(),
+                            size: m.size.to_string(),
+                        })
+                        .collect(),
+                    private_witness,
+                    policy: Some(&witness.policy),
+                };
+                let payload = serde_json::to_vec(&input)?;
 
-            let mut cmd = tokio::process::Command::new(&self.bin_path);
-            for (k, v) in &self.env {
-                cmd.env(k, v);
-            }
-            let mut child = cmd
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
-
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-            let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(&payload).await?;
-            stdin.shutdown().await?;
-            // shutdown() does not close the fd — drop the handle so the
-            // child observes EOF and proceeds.
-            drop(stdin);
-
-            let mut stdout_handle = child.stdout.take().unwrap();
-            let mut stderr_handle = child.stderr.take().unwrap();
-
-            let result = tokio::time::timeout(self.timeout, async {
-                let (stdout_res, stderr_res) = tokio::join!(
-                    async {
-                        let mut buf = Vec::new();
-                        stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
-                    },
-                    async {
-                        let mut buf = Vec::new();
-                        stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
-                    }
-                );
-                let stdout = stdout_res?;
-                let stderr = stderr_res?;
-                Ok::<_, std::io::Error>((stdout, stderr))
-            })
-            .await;
-
-            match result {
-                Ok(Ok((stdout, stderr))) => {
-                    let status = child.wait().await?;
-                    if !status.success() {
-                        return Err(AggregatorError::ProcessFailed {
-                            exit_code: status.code().unwrap_or(-1),
-                            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                        });
-                    }
-                    let mut proof = stdout;
-                    while proof.last() == Some(&b'\n') {
-                        proof.pop();
-                    }
-                    Ok(proof)
+                let mut cmd = tokio::process::Command::new(&self.bin_path);
+                for (k, v) in &self.env {
+                    cmd.env(k, v);
                 }
-                Ok(Err(e)) => Err(AggregatorError::Io(e)),
-                Err(_) => {
-                    let _ = child.kill().await;
-                    Err(AggregatorError::Timeout)
+                let mut child = cmd
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()?;
+
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                let mut stdin = child.stdin.take().unwrap();
+                stdin.write_all(&payload).await?;
+                stdin.shutdown().await?;
+                // shutdown() does not close the fd — drop the handle so the
+                // child observes EOF and proceeds.
+                drop(stdin);
+
+                let mut stdout_handle = child.stdout.take().unwrap();
+                let mut stderr_handle = child.stderr.take().unwrap();
+
+                let result = tokio::time::timeout(self.timeout, async {
+                    let (stdout_res, stderr_res) = tokio::join!(
+                        async {
+                            let mut buf = Vec::new();
+                            stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
+                        },
+                        async {
+                            let mut buf = Vec::new();
+                            stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
+                        }
+                    );
+                    let stdout = stdout_res?;
+                    let stderr = stderr_res?;
+                    Ok::<_, std::io::Error>((stdout, stderr))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok((stdout, stderr))) => {
+                        let status = child.wait().await?;
+                        if !status.success() {
+                            return Err(AggregatorError::ProcessFailed {
+                                exit_code: status.code().unwrap_or(-1),
+                                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                            });
+                        }
+                        let mut proof = stdout;
+                        while proof.last() == Some(&b'\n') {
+                            proof.pop();
+                        }
+                        Ok(proof)
+                    }
+                    Ok(Err(e)) => Err(AggregatorError::Io(e)),
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        Err(AggregatorError::Timeout)
+                    }
                 }
             }
-        }
             .instrument(span),
         )
     }

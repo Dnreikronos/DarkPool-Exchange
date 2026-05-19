@@ -26,10 +26,7 @@ fn init_tracing_installs_subscriber_then_rejects_second_call() {
     match init_tracing() {
         Ok(_) => panic!("second init_tracing must fail"),
         Err(ObservabilityError::Setup(msg)) => {
-            assert!(
-                !msg.is_empty(),
-                "Setup error message must not be empty"
-            );
+            assert!(!msg.is_empty(), "Setup error message must not be empty");
         }
     }
 }

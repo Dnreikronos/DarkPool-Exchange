@@ -58,7 +58,10 @@ pub fn init_metrics() -> Result<PrometheusHandle, ObservabilityError> {
         .install_recorder()
         .map_err(|e| ObservabilityError::Setup(e.to_string()))?;
 
-    describe_counter!(M_AUCTIONS_TOTAL, "Auctions that produced at least one match");
+    describe_counter!(
+        M_AUCTIONS_TOTAL,
+        "Auctions that produced at least one match"
+    );
     describe_histogram!(
         M_AUCTION_DURATION,
         "Wall-clock duration of a single auction (matching algorithm only), seconds"
@@ -125,37 +128,35 @@ pub fn init_tracing() -> Result<TracingGuard, ObservabilityError> {
 
     let mut guard = TracingGuard::default();
 
-    let otel_layer =
-        if let Some(endpoint) = otlp_endpoint {
-            let service_name =
-                std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "dp-api".to_string());
+    let otel_layer = if let Some(endpoint) = otlp_endpoint {
+        let service_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "dp-api".to_string());
 
-            let exporter = opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(endpoint)
-                .build_span_exporter()
-                .map_err(|e| ObservabilityError::Setup(format!("otlp exporter: {e}")))?;
+        let exporter = opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_endpoint(endpoint)
+            .build_span_exporter()
+            .map_err(|e| ObservabilityError::Setup(format!("otlp exporter: {e}")))?;
 
-            let deployment_env = resolve_deployment_environment(
-                std::env::var("DP_ENVIRONMENT").ok(),
-                std::env::var("DEPLOYMENT_ENVIRONMENT").ok(),
-            );
-            let provider =
-                TracerProvider::builder()
-                    .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
-                    .with_config(Config::default().with_resource(Resource::new(vec![
-                        KeyValue::new("service.name", service_name.clone()),
-                        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                        KeyValue::new("deployment.environment", deployment_env),
-                    ])))
-                    .build();
+        let deployment_env = resolve_deployment_environment(
+            std::env::var("DP_ENVIRONMENT").ok(),
+            std::env::var("DEPLOYMENT_ENVIRONMENT").ok(),
+        );
+        let provider = TracerProvider::builder()
+            .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+            .with_config(Config::default().with_resource(Resource::new(vec![
+                KeyValue::new("service.name", service_name.clone()),
+                KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                KeyValue::new("deployment.environment", deployment_env),
+            ])))
+            .build();
 
-            let tracer = provider.tracer(service_name);
-            guard.provider = Some(provider);
-            Some(tracing_opentelemetry::layer().with_tracer(tracer))
-        } else {
-            None
-        };
+        let tracer = provider.tracer(service_name);
+        guard.provider = Some(provider);
+        Some(tracing_opentelemetry::layer().with_tracer(tracer))
+    } else {
+        None
+    };
 
     // Box the format layer so the json and text branches produce a
     // single concrete type, otherwise `Subscriber::try_init` cannot be
@@ -230,7 +231,11 @@ pub enum ObservabilityError {
 /// (JSON when stdout is not a TTY). Extracted so unit tests can cover
 /// each branch without touching the global subscriber.
 fn resolve_want_json(env_value: Option<String>, stdout_is_tty: bool) -> bool {
-    match env_value.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
+    match env_value
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+    {
         Some(v) if v == "json" => true,
         Some(v) if v == "text" || v == "plain" => false,
         _ => !stdout_is_tty,
@@ -246,10 +251,7 @@ fn resolve_otlp_endpoint(env_value: Option<String>) -> Option<String> {
 
 /// Resolve `deployment.environment` from `DP_ENVIRONMENT`, falling
 /// back to `DEPLOYMENT_ENVIRONMENT`, defaulting to "development".
-fn resolve_deployment_environment(
-    primary: Option<String>,
-    fallback: Option<String>,
-) -> String {
+fn resolve_deployment_environment(primary: Option<String>, fallback: Option<String>) -> String {
     primary
         .or(fallback)
         .unwrap_or_else(|| "development".to_string())
@@ -369,10 +371,7 @@ mod tests {
 
     #[test]
     fn deployment_env_defaults_to_development() {
-        assert_eq!(
-            resolve_deployment_environment(None, None),
-            "development",
-        );
+        assert_eq!(resolve_deployment_environment(None, None), "development",);
     }
 
     #[test]

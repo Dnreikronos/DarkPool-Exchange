@@ -20,8 +20,10 @@ impl Decrypter for NoopDecrypter {
         &'a self,
         ciphertext: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>> {
-        let span =
-            tracing::info_span!("dp_crypto.noop_decrypt", ciphertext_bytes = ciphertext.len());
+        let span = tracing::info_span!(
+            "dp_crypto.noop_decrypt",
+            ciphertext_bytes = ciphertext.len()
+        );
         Box::pin(
             async move {
                 let order: DecryptedOrder = serde_json::from_slice(ciphertext)?;

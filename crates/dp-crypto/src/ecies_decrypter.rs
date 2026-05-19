@@ -30,8 +30,10 @@ impl Decrypter for EciesDecrypter {
         &'a self,
         ciphertext: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>> {
-        let span =
-            tracing::info_span!("dp_crypto.ecies_decrypt", ciphertext_bytes = ciphertext.len());
+        let span = tracing::info_span!(
+            "dp_crypto.ecies_decrypt",
+            ciphertext_bytes = ciphertext.len()
+        );
         Box::pin(
             async move {
                 let plaintext = ecies::decrypt(&self.secret_key, ciphertext)

@@ -105,60 +105,59 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
         let span = build_submit_span(params);
         Box::pin(
             async move {
-            let sol_matches = build_sol_matches(params)?;
-            let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
+                let sol_matches = build_sol_matches(params)?;
+                let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
-            let nonce = self
-                .provider
-                .get_transaction_count(sender)
-                .await
-                .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let nonce = self
+                    .provider
+                    .get_transaction_count(sender)
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
-            let latest_block = self
-                .provider
-                .get_block_by_number(BlockNumberOrTag::Latest)
-                .await
-                .map_err(|e| SettlementError::Rpc(e.to_string()))?
-                .ok_or_else(|| SettlementError::Rpc("no latest block".into()))?;
+                let latest_block = self
+                    .provider
+                    .get_block_by_number(BlockNumberOrTag::Latest)
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
+                    .ok_or_else(|| SettlementError::Rpc("no latest block".into()))?;
 
-            let base_fee = latest_block
-                .header
-                .base_fee_per_gas
-                .ok_or_else(|| SettlementError::Rpc("chain does not support EIP-1559".into()))?;
+                let base_fee = latest_block.header.base_fee_per_gas.ok_or_else(|| {
+                    SettlementError::Rpc("chain does not support EIP-1559".into())
+                })?;
 
-            let tip = self
-                .provider
-                .get_max_priority_fee_per_gas()
-                .await
-                .map_err(|e| SettlementError::Rpc(e.to_string()))?;
-            let fee_cap = u128::from(base_fee) * 2 + tip;
+                let tip = self
+                    .provider
+                    .get_max_priority_fee_per_gas()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let fee_cap = u128::from(base_fee) * 2 + tip;
 
-            let contract = DarkPool::new(self.contract, &self.provider);
-            let call = contract
-                .submitBatch(
-                    uuid_to_bytes32(params.batch_id),
-                    uuid_to_bytes32(params.auction_id),
-                    Bytes::copy_from_slice(&params.proof),
-                    params.public_inputs,
-                    sol_matches,
-                )
-                .from(sender)
-                .nonce(nonce)
-                .gas(self.gas_limit)
-                .max_fee_per_gas(fee_cap)
-                .max_priority_fee_per_gas(tip)
-                .chain_id(self.chain_id);
+                let contract = DarkPool::new(self.contract, &self.provider);
+                let call = contract
+                    .submitBatch(
+                        uuid_to_bytes32(params.batch_id),
+                        uuid_to_bytes32(params.auction_id),
+                        Bytes::copy_from_slice(&params.proof),
+                        params.public_inputs,
+                        sol_matches,
+                    )
+                    .from(sender)
+                    .nonce(nonce)
+                    .gas(self.gas_limit)
+                    .max_fee_per_gas(fee_cap)
+                    .max_priority_fee_per_gas(tip)
+                    .chain_id(self.chain_id);
 
-            let receipt = call
-                .send()
-                .await
-                .map_err(|e| SettlementError::Rpc(e.to_string()))?
-                .get_receipt()
-                .await
-                .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let receipt = call
+                    .send()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
+                    .get_receipt()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
-            Ok(format!("{:#x}", receipt.transaction_hash))
-        }
+                Ok(format!("{:#x}", receipt.transaction_hash))
+            }
             .instrument(span),
         )
     }
