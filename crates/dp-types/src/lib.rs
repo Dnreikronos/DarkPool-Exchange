@@ -1,6 +1,7 @@
 pub mod decimal_bincode;
 mod error;
 mod event_type;
+pub mod metrics;
 mod order;
 mod pair;
 mod side;

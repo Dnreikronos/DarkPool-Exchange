@@ -43,12 +43,18 @@ prost = "0.13"
 prost-types = "0.13"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.5", features = ["limit"] }
+tower-http = { version = "0.5", features = ["limit", "trace", "request-id"] }
 base64 = "0.22"
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false }
+tracing-opentelemetry = "0.27"
+opentelemetry = "0.26"
+opentelemetry-otlp = { version = "0.26", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
 async-trait = "0.1"
 http = "1"
 http-body = "1"

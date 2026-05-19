@@ -6,6 +6,29 @@ pub trait Store: Send + Sync {
     fn append(&self, events: &mut [Event]) -> Result<(), EventError>;
     fn read_from(&self, after_seq: u64, limit: usize) -> Result<Vec<Event>, EventError>;
     fn last_seq(&self) -> u64;
+
+    /// Liveness check for the backing storage. Default is a no-op so
+    /// existing backends keep compiling; overridden by backends that
+    /// can fail at runtime (network, file handle).
+    ///
+    /// **Runtime requirement.** Backends that bridge to async via
+    /// `tokio::task::block_in_place` (notably [`crate::PgStore`]) MUST be
+    /// called from a multi-threaded tokio runtime. The default
+    /// `#[tokio::main]` is multi-thread so production is safe, but
+    /// `#[tokio::test]` (which uses the current-thread runtime unless
+    /// `flavor = "multi_thread"` is set) will panic.
+    fn ping(&self) -> Result<(), EventError> {
+        Ok(())
+    }
+
+    /// Approximate on-disk / in-table size of the event log in bytes.
+    /// Surfaced to operators via the `darkpool_event_log_size_bytes`
+    /// gauge. Returns `Ok(0)` for backends with no meaningful answer.
+    ///
+    /// Same runtime requirement as [`Store::ping`].
+    fn size_bytes(&self) -> Result<u64, EventError> {
+        Ok(0)
+    }
 }
 
 pub fn assign_seq_and_timestamp(event: &mut Event, seq: &mut u64) {

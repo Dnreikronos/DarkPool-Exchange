@@ -7,6 +7,7 @@ use alloy_primitives::U256;
 use chrono::Utc;
 use dp_event::{Event, EventData};
 use dp_settlement::{BatchSink, SettlementError, SettlementMatch, SubmitBatchParams};
+use dp_types::metrics::{M_BATCH_SUBMISSION_DURATION, M_SETTLEMENT_CONFIRMATIONS};
 use dp_types::EventType;
 use uuid::Uuid;
 
@@ -89,6 +90,7 @@ impl Engine {
         }
     }
 
+    #[tracing::instrument(name = "dp_engine.submit_batch", skip(self), fields(batch_id = %batch_id))]
     pub(crate) async fn submit_batch(&self, batch_id: Uuid) -> Result<(), EngineError> {
         // Acquire submitting flag + snapshot inputs.
         let snapshot = {
@@ -145,7 +147,9 @@ impl Engine {
             matches: settlement_matches,
         };
 
+        let submit_start = Instant::now();
         let result = tokio::time::timeout(timeout, submitter.submit(&params)).await;
+        let submit_elapsed = submit_start.elapsed();
 
         let submit_outcome: Result<String, SettlementError> = match result {
             Ok(r) => r,
@@ -159,6 +163,11 @@ impl Engine {
                 return Err(EngineError::Submit(e));
             }
         };
+
+        // Record on success only: histogram percentiles on a mix of
+        // timeouts + RPC errors would distort what operators read as
+        // "submit latency."
+        metrics::histogram!(M_BATCH_SUBMISSION_DURATION).record(submit_elapsed.as_secs_f64());
 
         // Persist BatchConfirmed off-lock.
         let mut events = [Event {
@@ -215,6 +224,7 @@ impl BatchSink for Engine {
                 tracing::warn!(batch_id = %batch_id, "persist BatchSettled: {e}");
                 return Ok(());
             }
+            metrics::counter!(M_SETTLEMENT_CONFIRMATIONS).increment(1);
             let mut state = self.inner.state.lock();
             state.book.apply(&events[0]);
             state.pending_batches.remove(&batch_id);

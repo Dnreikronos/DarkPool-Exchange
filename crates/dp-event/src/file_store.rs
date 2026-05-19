@@ -136,6 +136,11 @@ impl Store for FileStore {
     fn last_seq(&self) -> u64 {
         self.inner.read().seq
     }
+
+    fn size_bytes(&self) -> Result<u64, EventError> {
+        let inner = self.inner.read();
+        Ok(inner.file.metadata()?.len())
+    }
 }
 
 #[cfg(test)]
@@ -258,5 +263,19 @@ mod tests {
         let store = FileStore::open(&path).unwrap();
         let err = store.read_from(0, 0).unwrap_err();
         assert!(matches!(err, EventError::LimitMustBePositive));
+    }
+
+    #[test]
+    fn size_bytes_grows_after_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.bin");
+        let store = FileStore::open(&path).unwrap();
+
+        let empty = store.size_bytes().unwrap();
+        let mut events = vec![placed_event(), placed_event()];
+        store.append(&mut events).unwrap();
+        let after = store.size_bytes().unwrap();
+
+        assert!(after > empty, "size {after} should exceed empty {empty}");
     }
 }

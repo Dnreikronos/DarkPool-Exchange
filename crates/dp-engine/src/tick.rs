@@ -1,12 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use alloy_primitives::U256;
 use chrono::Utc;
 use dp_aggregator::ProofAggregator;
 use dp_event::{Event, EventData};
 use dp_settlement::SettlementMatch;
+use dp_types::metrics::{
+    M_ACTIVE_ORDERS, M_AUCTIONS_TOTAL, M_AUCTION_DURATION, M_CLEARING_PRICE, M_ORDERS_EXPIRED,
+    M_ORDERS_MATCHED,
+};
 use dp_types::{EventType, Order};
+use rust_decimal::prelude::ToPrimitive;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -28,6 +34,7 @@ pub(crate) struct PendingAggregation {
 }
 
 impl Engine {
+    #[tracing::instrument(name = "dp_engine.auction_tick", skip(self))]
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
         let (notifications, pending, aggregator) = self.tick_under_lock();
 
@@ -117,6 +124,8 @@ impl Engine {
         // window in which sensitive material is held.
         self.prune_dead_secrets();
 
+        metrics::gauge!(M_ACTIVE_ORDERS).set(self.active_order_count() as f64);
+
         notifications
     }
 
@@ -155,6 +164,7 @@ impl Engine {
         // Expire orders.
         let mut expired = state.book.collect_expired(now);
         if !expired.is_empty() {
+            let expired_count = expired.len() as u64;
             for evt in expired.iter_mut() {
                 evt.timestamp = now;
             }
@@ -164,6 +174,7 @@ impl Engine {
                 for evt in &expired {
                     state.book.apply(evt);
                 }
+                metrics::counter!(M_ORDERS_EXPIRED).increment(expired_count);
             }
         }
 
@@ -187,10 +198,12 @@ impl Engine {
             let asks: Vec<_> = state.book.asks(&pair);
 
             let auction_id = Uuid::new_v4();
+            let auction_start = Instant::now();
             let result = match dp_auction::run(auction_id, &pair, &bids, &asks) {
                 Some(r) => r,
                 None => continue,
             };
+            let auction_elapsed = auction_start.elapsed();
 
             let mut events: Vec<Event> = Vec::with_capacity(1 + result.matches.len());
             events.push(Event {
@@ -237,6 +250,16 @@ impl Engine {
             if let Err(e) = self.inner.store.append(&mut events) {
                 tracing::warn!(pair = %pair, "persist auction events: {e}");
                 continue;
+            }
+
+            metrics::counter!(M_AUCTIONS_TOTAL).increment(1);
+            metrics::histogram!(M_AUCTION_DURATION).record(auction_elapsed.as_secs_f64());
+            // One increment per match (bid/ask pair). Operators reading
+            // `rate(darkpool_orders_matched_total)` get trade rate; double
+            // for leg rate. Description in observability.rs matches.
+            metrics::counter!(M_ORDERS_MATCHED).increment(result.matches.len() as u64);
+            if let Some(price) = result.clearing_price.to_f64() {
+                metrics::gauge!(M_CLEARING_PRICE, "pair" => pair.clone()).set(price);
             }
 
             let record = AuctionExecutedRecord {

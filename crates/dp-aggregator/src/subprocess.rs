@@ -6,6 +6,7 @@ use std::time::Duration;
 use dp_auction::Match;
 use dp_zk::witness::BatchWitness;
 use serde::Serialize;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::aggregator::ProofAggregator;
@@ -58,6 +59,18 @@ impl SubprocessAggregator {
     }
 }
 
+/// Build the tracing span for a single `aggregate` call. Extracted so
+/// unit tests can verify the span's fields without spawning a real
+/// subprocess.
+fn build_aggregate_span(batch_id: Uuid, auction_id: Uuid, match_count: usize) -> tracing::Span {
+    tracing::info_span!(
+        "dp_aggregator.subprocess.aggregate",
+        batch_id = %batch_id,
+        auction_id = %auction_id,
+        match_count = match_count,
+    )
+}
+
 impl ProofAggregator for SubprocessAggregator {
     fn aggregate<'a>(
         &'a self,
@@ -66,90 +79,94 @@ impl ProofAggregator for SubprocessAggregator {
         matches: &'a [Match],
         witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
-        Box::pin(async move {
-            let private_witness = if witness.matches.is_empty() {
-                None
-            } else {
-                Some(witness.matches.as_slice())
-            };
-            let input = AggregatorInput {
-                batch_id: batch_id.to_string(),
-                matches: matches
-                    .iter()
-                    .map(|m| AggregatorMatch {
-                        auction_id: auction_id.to_string(),
-                        bid_order_id: m.bid.order_id.to_string(),
-                        ask_order_id: m.ask.order_id.to_string(),
-                        price: m.price.to_string(),
-                        size: m.size.to_string(),
-                    })
-                    .collect(),
-                private_witness,
-                policy: Some(&witness.policy),
-            };
-            let payload = serde_json::to_vec(&input)?;
+        let span = build_aggregate_span(batch_id, auction_id, matches.len());
+        Box::pin(
+            async move {
+                let private_witness = if witness.matches.is_empty() {
+                    None
+                } else {
+                    Some(witness.matches.as_slice())
+                };
+                let input = AggregatorInput {
+                    batch_id: batch_id.to_string(),
+                    matches: matches
+                        .iter()
+                        .map(|m| AggregatorMatch {
+                            auction_id: auction_id.to_string(),
+                            bid_order_id: m.bid.order_id.to_string(),
+                            ask_order_id: m.ask.order_id.to_string(),
+                            price: m.price.to_string(),
+                            size: m.size.to_string(),
+                        })
+                        .collect(),
+                    private_witness,
+                    policy: Some(&witness.policy),
+                };
+                let payload = serde_json::to_vec(&input)?;
 
-            let mut cmd = tokio::process::Command::new(&self.bin_path);
-            for (k, v) in &self.env {
-                cmd.env(k, v);
-            }
-            let mut child = cmd
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
-
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-            let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(&payload).await?;
-            stdin.shutdown().await?;
-            // shutdown() does not close the fd — drop the handle so the
-            // child observes EOF and proceeds.
-            drop(stdin);
-
-            let mut stdout_handle = child.stdout.take().unwrap();
-            let mut stderr_handle = child.stderr.take().unwrap();
-
-            let result = tokio::time::timeout(self.timeout, async {
-                let (stdout_res, stderr_res) = tokio::join!(
-                    async {
-                        let mut buf = Vec::new();
-                        stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
-                    },
-                    async {
-                        let mut buf = Vec::new();
-                        stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
-                    }
-                );
-                let stdout = stdout_res?;
-                let stderr = stderr_res?;
-                Ok::<_, std::io::Error>((stdout, stderr))
-            })
-            .await;
-
-            match result {
-                Ok(Ok((stdout, stderr))) => {
-                    let status = child.wait().await?;
-                    if !status.success() {
-                        return Err(AggregatorError::ProcessFailed {
-                            exit_code: status.code().unwrap_or(-1),
-                            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                        });
-                    }
-                    let mut proof = stdout;
-                    while proof.last() == Some(&b'\n') {
-                        proof.pop();
-                    }
-                    Ok(proof)
+                let mut cmd = tokio::process::Command::new(&self.bin_path);
+                for (k, v) in &self.env {
+                    cmd.env(k, v);
                 }
-                Ok(Err(e)) => Err(AggregatorError::Io(e)),
-                Err(_) => {
-                    let _ = child.kill().await;
-                    Err(AggregatorError::Timeout)
+                let mut child = cmd
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()?;
+
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                let mut stdin = child.stdin.take().unwrap();
+                stdin.write_all(&payload).await?;
+                stdin.shutdown().await?;
+                // shutdown() does not close the fd — drop the handle so the
+                // child observes EOF and proceeds.
+                drop(stdin);
+
+                let mut stdout_handle = child.stdout.take().unwrap();
+                let mut stderr_handle = child.stderr.take().unwrap();
+
+                let result = tokio::time::timeout(self.timeout, async {
+                    let (stdout_res, stderr_res) = tokio::join!(
+                        async {
+                            let mut buf = Vec::new();
+                            stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
+                        },
+                        async {
+                            let mut buf = Vec::new();
+                            stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
+                        }
+                    );
+                    let stdout = stdout_res?;
+                    let stderr = stderr_res?;
+                    Ok::<_, std::io::Error>((stdout, stderr))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok((stdout, stderr))) => {
+                        let status = child.wait().await?;
+                        if !status.success() {
+                            return Err(AggregatorError::ProcessFailed {
+                                exit_code: status.code().unwrap_or(-1),
+                                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                            });
+                        }
+                        let mut proof = stdout;
+                        while proof.last() == Some(&b'\n') {
+                            proof.pop();
+                        }
+                        Ok(proof)
+                    }
+                    Ok(Err(e)) => Err(AggregatorError::Io(e)),
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        Err(AggregatorError::Timeout)
+                    }
                 }
             }
-        })
+            .instrument(span),
+        )
     }
 }
 
@@ -247,5 +264,23 @@ mod tests {
     async fn missing_binary() {
         let err = SubprocessAggregator::new(Path::new("/no/such/binary"), None).unwrap_err();
         assert!(matches!(err, AggregatorError::BinaryNotFound(_)));
+    }
+
+    #[test]
+    fn build_aggregate_span_records_batch_metadata() {
+        // Install a thread-local subscriber so span metadata is alive
+        // for the assertion. Without a subscriber `Span::metadata()`
+        // returns `None` and we cannot inspect the field set.
+        use tracing_subscriber::layer::SubscriberExt;
+        let subscriber = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = build_aggregate_span(Uuid::new_v4(), Uuid::new_v4(), 4);
+        let metadata = span.metadata().expect("subscriber attached, span enabled");
+        assert_eq!(metadata.name(), "dp_aggregator.subprocess.aggregate");
+        let fields: Vec<&str> = metadata.fields().iter().map(|f| f.name()).collect();
+        assert!(fields.contains(&"batch_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"auction_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"match_count"), "fields: {fields:?}");
     }
 }

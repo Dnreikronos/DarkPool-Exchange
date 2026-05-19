@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use tracing::Instrument;
+
 use crate::decrypted_order::DecryptedOrder;
 use crate::CryptoError;
 
@@ -18,10 +20,17 @@ impl Decrypter for NoopDecrypter {
         &'a self,
         ciphertext: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>> {
-        Box::pin(async move {
-            let order: DecryptedOrder = serde_json::from_slice(ciphertext)?;
-            Ok(order)
-        })
+        let span = tracing::info_span!(
+            "dp_crypto.noop_decrypt",
+            ciphertext_bytes = ciphertext.len()
+        );
+        Box::pin(
+            async move {
+                let order: DecryptedOrder = serde_json::from_slice(ciphertext)?;
+                Ok(order)
+            }
+            .instrument(span),
+        )
     }
 }
 

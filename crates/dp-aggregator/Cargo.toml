@@ -12,9 +12,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = "0.1"
 
 [dev-dependencies]
 dp-types = { path = "../dp-types" }
 dp-zk-cli = { path = "../dp-zk-cli" }
 hex = { workspace = true }
 tempfile = "3"
+tracing-subscriber = { workspace = true }

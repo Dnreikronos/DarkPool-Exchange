@@ -1046,3 +1046,11 @@ async fn full_pipeline_encrypted_order_to_settlement() {
         "ask commitment_key leaked in events"
     );
 }
+
+#[tokio::test]
+async fn event_log_size_bytes_routes_to_store() {
+    let (engine, _store) = make_engine();
+    // MemStore inherits the default Store::size_bytes which returns 0,
+    // so the engine method should pass that through unchanged.
+    assert_eq!(engine.event_log_size_bytes().unwrap(), 0);
+}

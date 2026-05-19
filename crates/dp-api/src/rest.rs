@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{MatchedPath, Path, Query, State};
+use axum::http::{header, HeaderValue, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::trace::TraceLayer;
 
 use crate::admin::AdminApiHandler;
 use crate::auth::{auth_axum_mw, AuthCore};
@@ -21,6 +25,7 @@ use crate::pb::{
     RegisterPairRequest, SuspendPairRequest,
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
+use crate::readiness::ReadinessProbes;
 use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
 
 pub type SharedHandler = Arc<ApiHandler>;
@@ -83,6 +88,114 @@ pub fn router_with_admin(
         .layer(from_fn_with_state(ratelimit, ratelimit_axum_mw))
         .layer(from_fn_with_state(admin_auth, auth_axum_mw));
     public.merge(admin)
+}
+
+/// State carried by the operational endpoints (`/healthz`, `/readyz`,
+/// `/metrics`). Cheap to clone — the Prometheus handle and probe set
+/// are `Arc`-wrapped internally.
+#[derive(Clone)]
+pub struct OpsState {
+    pub prom: PrometheusHandle,
+    pub readiness: ReadinessProbes,
+}
+
+/// Build the unauthenticated operational sub-router. Mounted alongside
+/// the auth-gated public + admin routers; load-balancer probes and the
+/// Prometheus scrape do not present API keys, so these paths must sit
+/// outside the auth layer.
+pub fn ops_router(state: OpsState) -> Router {
+    Router::new()
+        .route("/healthz", get(rest_healthz))
+        .route("/readyz", get(rest_readyz))
+        .route("/metrics", get(rest_metrics))
+        .with_state(state)
+}
+
+/// Compose the full server router: public + admin (auth-gated) + ops
+/// (unauthenticated) and apply tracing + x-request-id propagation
+/// across every route so logs and spans share a correlation ID.
+pub fn router_with_ops(
+    handler: SharedHandler,
+    admin_handler: SharedAdminHandler,
+    auth: AuthCore,
+    admin_auth: AuthCore,
+    ratelimit: RateLimitCore,
+    ops: OpsState,
+) -> Router {
+    let base = router_with_admin(handler, admin_handler, auth, admin_auth, ratelimit)
+        .merge(ops_router(ops));
+    // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
+    // wraps everything before it and therefore runs first on the request
+    // path. Desired request-side order is SetRequestId → Trace → Propagate,
+    // so we call them here in the reverse order — propagate (innermost),
+    // trace, then SetRequestId (outermost, generates the id before
+    // TraceLayer reads it).
+    base.layer(PropagateRequestIdLayer::x_request_id())
+        .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+}
+
+/// Build the per-request tracing span. Pulls the request_id off the
+/// header set by `SetRequestIdLayer` so log lines (and OTel spans) all
+/// carry the same correlation token.
+fn make_http_span(request: &AxumRequest<Body>) -> tracing::Span {
+    // Prefer the matched route template (e.g. `/v1/orders/:order_id`) so
+    // span/log telemetry does not explode in cardinality for ID-bearing
+    // paths. Fall back to the raw URI when no route matched (the ops
+    // sub-router and unknown paths).
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path());
+    let req_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
+    tracing::info_span!(
+        "http",
+        method = %request.method(),
+        path = %path,
+        request_id = req_id,
+    )
+}
+
+// ---------- ops handlers ----------
+
+async fn rest_healthz() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+}
+
+async fn rest_readyz(State(state): State<OpsState>) -> Response {
+    match state.readiness.check() {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ready"}))).into_response(),
+        Err(f) => {
+            // `/readyz` is unauthenticated; surfacing the probe's `reason`
+            // can leak internal paths or backend errors to anyone able to
+            // hit the listener. Log it server-side and keep the response
+            // body to a stable name → operators correlate via logs.
+            tracing::warn!(probe = f.name, reason = %f.reason, "readiness probe failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "status": "not_ready",
+                    "failed": f.name,
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn rest_metrics(State(state): State<OpsState>) -> Response {
+    let body = state.prom.render();
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    resp
 }
 
 pub fn status_to_response(status: tonic::Status) -> Response {
