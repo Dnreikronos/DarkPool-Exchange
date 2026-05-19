@@ -31,7 +31,7 @@ function walk(count: number, stepSec: number, start: number, jitter: number): Au
   return out.reverse()
 }
 
-const FRAME = 'border border-brand-border bg-brand-surface w-[640px]'
+const FRAME = 'border border-brand-border bg-brand-surface w-[640px] h-[300px]'
 
 export const OneMinuteWindow = () => (
   <div className={FRAME}>
@@ -39,7 +39,6 @@ export const OneMinuteWindow = () => (
       auctionsOverride={walk(20, 5, 3000, 4)}
       nowUnixSec={NOW}
       defaultTimeframe="1m"
-      height={260}
     />
   </div>
 )
@@ -50,7 +49,6 @@ export const FiveMinuteWindow = () => (
       auctionsOverride={walk(80, 5, 3000, 8)}
       nowUnixSec={NOW}
       defaultTimeframe="5m"
-      height={260}
     />
   </div>
 )
@@ -61,7 +59,6 @@ export const OneHourWindow = () => (
       auctionsOverride={walk(180, 30, 3000, 12)}
       nowUnixSec={NOW}
       defaultTimeframe="1h"
-      height={260}
     />
   </div>
 )
@@ -72,13 +69,12 @@ export const SingleAuctionEmpty = () => (
       auctionsOverride={[auction(2, '3000')]}
       nowUnixSec={NOW}
       defaultTimeframe="1m"
-      height={260}
     />
   </div>
 )
 
 export const NoAuctionsEmpty = () => (
   <div className={FRAME}>
-    <PriceHistoryChart auctionsOverride={[]} nowUnixSec={NOW} defaultTimeframe="1m" height={260} />
+    <PriceHistoryChart auctionsOverride={[]} nowUnixSec={NOW} defaultTimeframe="1m" />
   </div>
 )

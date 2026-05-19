@@ -34,7 +34,6 @@ const COLORS = {
 } as const
 
 const MIN_AUCTIONS_FOR_CHART = 2
-const MIN_HEIGHT = 200
 
 const TIMEFRAME_LABEL: Record<Timeframe, string> = {
   '1m': '1M',
@@ -157,8 +156,6 @@ export function PriceHistoryChartView({ points, rightEdgeUnixSec }: PriceHistory
 export interface PriceHistoryChartProps {
   /** Initial timeframe; defaults to '5m'. */
   defaultTimeframe?: Timeframe
-  /** Optional fixed height for the chart area. */
-  height?: number
   className?: string
   /**
    * Test/story injection: override the wall clock used to evaluate
@@ -178,10 +175,12 @@ export interface PriceHistoryChartProps {
  * user toggles between 1m / 5m / 1h windows; below the {@link
  * MIN_AUCTIONS_FOR_CHART} threshold the chart yields to a brutalist empty
  * state so first-load isn't a blank rectangle.
+ *
+ * Fills the parent height via flex; `MIN_CANVAS_HEIGHT` is the floor so
+ * an unsized container still renders something usable.
  */
 export function PriceHistoryChart({
   defaultTimeframe = '5m',
-  height,
   className,
   nowUnixSec,
   auctionsOverride,
@@ -204,17 +203,16 @@ export function PriceHistoryChart({
   const isEmpty = points.length < MIN_AUCTIONS_FOR_CHART
 
   return (
-    <figure className={className} aria-labelledby="price-history-caption">
+    <figure
+      className={cn('flex h-full flex-col', className)}
+      aria-labelledby="price-history-caption"
+    >
       <PriceHistoryHeader
         timeframe={timeframe}
         onChange={setTimeframe}
         lastPrice={points.length > 0 ? points[points.length - 1].value : null}
       />
-      <div
-        className="relative w-full"
-        style={{ height: height ?? MIN_HEIGHT }}
-        data-empty={isEmpty || undefined}
-      >
+      <div className="relative w-full flex-1 min-h-[200px]" data-empty={isEmpty || undefined}>
         {isEmpty ? (
           <PriceHistoryEmptyState count={auctions.length} />
         ) : (

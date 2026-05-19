@@ -10,6 +10,7 @@ import { AreaClosed, Line } from '@visx/shape'
 
 import { type DepthSeries, buildDepthSeries } from './selectors'
 import { useMockStore } from '../../../lib/mock-store'
+import { cn } from '../../ui/cn'
 
 const COLORS = {
   bidStroke: '#FFFFFF',
@@ -22,7 +23,7 @@ const COLORS = {
 } as const
 
 const MARGIN = { top: 12, right: 16, bottom: 28, left: 16 }
-const MIN_HEIGHT = 160
+const MIN_CANVAS_HEIGHT = 160
 
 export interface DepthChartViewProps {
   series: DepthSeries
@@ -153,8 +154,6 @@ function formatTick(n: number): string {
 }
 
 export interface DepthChartProps {
-  /** Optional fixed height; defaults to the parent's height or `MIN_HEIGHT`. */
-  height?: number
   className?: string
 }
 
@@ -162,22 +161,25 @@ export interface DepthChartProps {
  * Live depth chart driven by the mock store. Re-derives the cumulative
  * series on every orderbook update; visx SVG nodes are reused across
  * renders so the chart redraws in place without flicker.
+ *
+ * Fills the parent height via flex; `MIN_CANVAS_HEIGHT` is the floor so
+ * an unsized container still renders something usable.
  */
-export function DepthChart({ height, className }: DepthChartProps = {}) {
+export function DepthChart({ className }: DepthChartProps = {}) {
   const orderbook = useMockStore((s) => s.orderbook)
   const series = useMemo(() => buildDepthSeries(orderbook), [orderbook])
   const isEmpty = series.bids.length === 0 && series.asks.length === 0
 
   return (
-    <figure className={className} aria-labelledby="depth-chart-caption">
+    <figure className={cn('flex h-full flex-col', className)} aria-labelledby="depth-chart-caption">
       <DepthChartHeader series={series} />
-      <div className="relative h-full min-h-[160px]">
+      <div className="relative flex-1 min-h-[160px]">
         <ParentSize debounceTime={0}>
-          {({ width, height: h }) => (
+          {({ width, height }) => (
             <DepthChartView
               series={series}
               width={width}
-              height={Math.max(MIN_HEIGHT, height ?? h)}
+              height={Math.max(MIN_CANVAS_HEIGHT, height)}
             />
           )}
         </ParentSize>
