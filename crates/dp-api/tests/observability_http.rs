@@ -97,7 +97,13 @@ async fn readyz_returns_503_when_probe_fails() {
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_string(resp).await;
     assert!(body.contains("event_store"), "body={body}");
-    assert!(body.contains("db unreachable"), "body={body}");
+    // Probe `reason` must NOT appear in the response: `/readyz` is
+    // unauthenticated, so the detailed reason is logged server-side
+    // instead of returned to the client.
+    assert!(
+        !body.contains("db unreachable"),
+        "probe reason leaked to /readyz body: {body}"
+    );
 }
 
 #[tokio::test]

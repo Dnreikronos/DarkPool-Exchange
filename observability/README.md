@@ -12,7 +12,7 @@ surface.
 | Path       | Method | Purpose                                                 |
 | ---------- | ------ | ------------------------------------------------------- |
 | `/healthz` | `GET`  | Liveness. Returns `200 {"status":"ok"}` while the process is running. |
-| `/readyz`  | `GET`  | Readiness. `200` once every probe (event store, aggregator binary) is healthy; `503 {"failed":<name>,"reason":...}` otherwise. |
+| `/readyz`  | `GET`  | Readiness. `200` once every probe (event store, aggregator binary) is healthy; `503 {"status":"not_ready","failed":<probe_name>}` otherwise. The detailed failure reason is logged server-side (the endpoint is unauthenticated, so it must not echo internals). |
 | `/metrics` | `GET`  | Prometheus text exposition (`v0.0.4`). Pre-registers every metric the operator emits so families show up even before the first auction tick. |
 
 ## Environment variables

@@ -161,15 +161,21 @@ async fn rest_healthz() -> impl IntoResponse {
 async fn rest_readyz(State(state): State<OpsState>) -> Response {
     match state.readiness.check() {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ready"}))).into_response(),
-        Err(f) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "status": "not_ready",
-                "failed": f.name,
-                "reason": f.reason,
-            })),
-        )
-            .into_response(),
+        Err(f) => {
+            // `/readyz` is unauthenticated; surfacing the probe's `reason`
+            // can leak internal paths or backend errors to anyone able to
+            // hit the listener. Log it server-side and keep the response
+            // body to a stable name → operators correlate via logs.
+            tracing::warn!(probe = f.name, reason = %f.reason, "readiness probe failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "status": "not_ready",
+                    "failed": f.name,
+                })),
+            )
+                .into_response()
+        }
     }
 }
 
