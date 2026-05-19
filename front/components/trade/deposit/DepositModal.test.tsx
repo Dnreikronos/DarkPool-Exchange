@@ -81,18 +81,19 @@ describe('DepositForm', () => {
     expect(html).toContain('[ APPROVE REQUIRED ]')
   })
 
-  it('switches to [ APPROVED ] when allowance is already covered', () => {
+  it('surfaces the current allowance numerically on the allowance row', () => {
+    // Note: the `[ APPROVED ]` vs `[ APPROVE REQUIRED ]` toggle is
+    // driven by `needsApproval(amount, allowance)`. With the form's
+    // initial amount blank, `requiresApproval` always falls back to
+    // true — so the on-screen badge is exhaustively pinned by the
+    // `needsApproval` unit test in `validation.test.ts`. Here we
+    // only pin the numeric surface: the allowance value renders on
+    // the [ CURRENT ALLOWANCE ] row at the per-token display dp.
     walletStore.connect()
     walletStore.approve('USDC', '1000')
     const html = render(<DepositForm initialToken="USDC" />)
-    // Initial amount field is empty, so requiresApproval is computed on
-    // the live amount. With amount blank, validation is `empty` and
-    // requiresApproval falls back to true. Bump the amount via a
-    // controlled test: render with the form's initial state and rely
-    // on the user typing in Ladle. Here we just sanity-check the
-    // allowance row surfaces the configured 1000 alongside the badge.
     expect(html).toMatch(/CURRENT ALLOWANCE/)
-    // The allowance numeric value renders at the panel's 2dp for USDC.
+    // USDC renders at 2dp; no thousands comma below 10,000.
     expect(html).toContain('1000.00')
   })
 

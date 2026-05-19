@@ -5,7 +5,6 @@ import * as React from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/dialog'
 import type { TokenSymbol } from '../../../lib/wallet/types'
 
-import { useWithdrawController } from './hooks'
 import { WithdrawForm } from './WithdrawForm'
 
 interface WithdrawModalProps {
@@ -15,23 +14,16 @@ interface WithdrawModalProps {
 }
 
 /**
- * Modal chrome around `<WithdrawForm>`. See DepositModal for the
- * factoring rationale.
+ * Modal chrome around `<WithdrawForm>`. See `DepositModal` for the
+ * cancellation rationale: the form's hook cleanup cancels the
+ * setTimeout on unmount, so Esc / outside-click is intentionally not
+ * suppressed.
  */
 export function WithdrawModal({ open, onOpenChange, initialToken = 'USDC' }: WithdrawModalProps) {
-  const controller = useWithdrawController()
-  const isInFlight = controller.stage.kind === 'submitting'
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-w-md border border-brand-border"
-        onPointerDownOutside={(e) => {
-          if (isInFlight) e.preventDefault()
-        }}
-        onEscapeKeyDown={(e) => {
-          if (isInFlight) e.preventDefault()
-        }}
         aria-labelledby="withdraw-modal-title"
       >
         <DialogTitle className="sr-only" id="withdraw-modal-title">
