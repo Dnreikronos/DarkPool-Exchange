@@ -136,6 +136,11 @@ impl Store for FileStore {
     fn last_seq(&self) -> u64 {
         self.inner.read().seq
     }
+
+    fn size_bytes(&self) -> Result<u64, EventError> {
+        let inner = self.inner.read();
+        Ok(inner.file.metadata()?.len())
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,11 @@ use tokio::runtime::Handle;
 
 use crate::{Event, EventError, Store};
 
+/// Name of the table that holds the event log. Lifted to a constant so the
+/// `pg_total_relation_size($1::regclass)` bind on the size-bytes gauge has a
+/// single source of truth that a schema rename has to update.
+const EVENTS_TABLE: &str = "events";
+
 /// PostgreSQL-backed event store.
 ///
 /// Must be constructed and used inside a multi-threaded tokio runtime —
@@ -122,5 +127,34 @@ impl Store for PgStore {
 
     fn last_seq(&self) -> u64 {
         *self.last_seq.read()
+    }
+
+    fn ping(&self) -> Result<(), EventError> {
+        let pool = self.pool.clone();
+        tokio::task::block_in_place(|| {
+            self.handle.block_on(async {
+                sqlx::query("SELECT 1").execute(&pool).await?;
+                Ok::<_, EventError>(())
+            })
+        })
+    }
+
+    fn size_bytes(&self) -> Result<u64, EventError> {
+        // Bind the table name through a parameter + ::regclass cast so the
+        // value is never spliced into the SQL text. Today `EVENTS_TABLE` is
+        // a const, but binding keeps the call site safe against a future
+        // refactor that lets the caller pick the table.
+        let pool = self.pool.clone();
+        let bytes: i64 = tokio::task::block_in_place(|| {
+            self.handle.block_on(async {
+                let (n,): (i64,) =
+                    sqlx::query_as("SELECT pg_total_relation_size($1::regclass)::bigint")
+                        .bind(EVENTS_TABLE)
+                        .fetch_one(&pool)
+                        .await?;
+                Ok::<_, EventError>(n)
+            })
+        })?;
+        Ok(bytes.max(0) as u64)
     }
 }
