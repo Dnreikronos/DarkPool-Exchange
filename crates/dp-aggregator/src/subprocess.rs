@@ -59,6 +59,18 @@ impl SubprocessAggregator {
     }
 }
 
+/// Build the tracing span for a single `aggregate` call. Extracted so
+/// unit tests can verify the span's fields without spawning a real
+/// subprocess.
+fn build_aggregate_span(batch_id: Uuid, auction_id: Uuid, match_count: usize) -> tracing::Span {
+    tracing::info_span!(
+        "dp_aggregator.subprocess.aggregate",
+        batch_id = %batch_id,
+        auction_id = %auction_id,
+        match_count = match_count,
+    )
+}
+
 impl ProofAggregator for SubprocessAggregator {
     fn aggregate<'a>(
         &'a self,
@@ -67,12 +79,7 @@ impl ProofAggregator for SubprocessAggregator {
         matches: &'a [Match],
         witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
-        let span = tracing::info_span!(
-            "dp_aggregator.subprocess.aggregate",
-            batch_id = %batch_id,
-            auction_id = %auction_id,
-            match_count = matches.len(),
-        );
+        let span = build_aggregate_span(batch_id, auction_id, matches.len());
         Box::pin(
             async move {
             let private_witness = if witness.matches.is_empty() {
@@ -257,5 +264,23 @@ mod tests {
     async fn missing_binary() {
         let err = SubprocessAggregator::new(Path::new("/no/such/binary"), None).unwrap_err();
         assert!(matches!(err, AggregatorError::BinaryNotFound(_)));
+    }
+
+    #[test]
+    fn build_aggregate_span_records_batch_metadata() {
+        // Install a thread-local subscriber so span metadata is alive
+        // for the assertion. Without a subscriber `Span::metadata()`
+        // returns `None` and we cannot inspect the field set.
+        use tracing_subscriber::layer::SubscriberExt;
+        let subscriber = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = build_aggregate_span(Uuid::new_v4(), Uuid::new_v4(), 4);
+        let metadata = span.metadata().expect("subscriber attached, span enabled");
+        assert_eq!(metadata.name(), "dp_aggregator.subprocess.aggregate");
+        let fields: Vec<&str> = metadata.fields().iter().map(|f| f.name()).collect();
+        assert!(fields.contains(&"batch_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"auction_id"), "fields: {fields:?}");
+        assert!(fields.contains(&"match_count"), "fields: {fields:?}");
     }
 }

@@ -1995,6 +1995,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "uuid",
 ]
 
@@ -2176,6 +2177,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "uuid",
  "which",
 ]

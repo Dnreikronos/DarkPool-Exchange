@@ -19,3 +19,4 @@ dp-types = { path = "../dp-types" }
 dp-zk-cli = { path = "../dp-zk-cli" }
 hex = { workspace = true }
 tempfile = "3"
+tracing-subscriber = { workspace = true }
