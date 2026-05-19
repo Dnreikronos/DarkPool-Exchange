@@ -25,6 +25,10 @@ surface.
 | `OTEL_SERVICE_NAME`            | `dp-api`                               | Resource attribute on every exported span.                                                                                            |
 | `DP_ENVIRONMENT`               | `development`                          | Sets the `deployment.environment` OTel resource attribute so spans from local / staging / prod are filterable in the collector. Falls back to `DEPLOYMENT_ENVIRONMENT` if unset.  |
 
+Defaults above are the binary's own fallbacks. `docker-compose.yml` overrides
+some of them for the obs stack (`OTEL_SERVICE_NAME=darkpool-api`,
+`DP_ENVIRONMENT=local`); see the quick-start section.
+
 ## Metric catalogue
 
 | Name                                              | Type      | Labels    | Description                                                  |
@@ -39,6 +43,66 @@ surface.
 | `darkpool_settlement_confirmations_total`         | counter   |           | `BatchSettled` events handled by `BatchSink::on_batch_settled`. |
 | `darkpool_active_orders`                          | gauge     |           | Orders resting in the book after each tick.                  |
 | `darkpool_event_log_size_bytes`                   | gauge     |           | Polled every 30 s. Backend-specific: `pg_total_relation_size('events')` for postgres, `metadata().len()` for the file store, `0` for in-memory. |
+
+## Quick start (local stack)
+
+The repo ships a complete Prometheus + Grafana + Jaeger stack wired
+to `darkpool-server`, gated behind a docker compose profile so the
+default `just up` is unaffected.
+
+```bash
+just up-obs
+```
+
+That brings up `postgres`, `anvil`, `deployer`, `darkpool-server`,
+`prometheus`, `grafana`, and `jaeger`. `OTEL_EXPORTER_OTLP_ENDPOINT`
+is exported in the recipe so the server ships spans to the in-network
+Jaeger at `http://jaeger:4317`.
+
+Smoke test (under a minute):
+
+```bash
+# 1. Server is healthy + emitting metric families
+curl -fsS http://localhost:8080/healthz
+curl -fsS http://localhost:8080/metrics | grep '^darkpool_' | head
+
+# 2. Prometheus has the darkpool target marked "up"
+curl -fsS http://localhost:9091/api/v1/targets \
+  | jq '.data.activeTargets[] | {labels, health}'
+
+# 3. Generate a handful of HTTP spans
+for i in $(seq 1 5); do curl -s http://localhost:8080/healthz > /dev/null; done
+```
+
+Open in a browser:
+
+- Grafana — http://localhost:3001 (anonymous admin) → Dashboards → **DarkPool Operator**. Host port `3001` avoids collision with `front/` Next.js dev (3000); override with `GRAFANA_PORT`.
+- Jaeger — http://localhost:16686 → Service `darkpool-api` → Find Traces
+
+Tear down the obs services only (leaves the trading stack running):
+
+```bash
+just down-obs
+```
+
+Tail the obs logs:
+
+```bash
+just logs-obs
+```
+
+Notes:
+- Histograms (`darkpool_auction_duration_seconds`,
+  `darkpool_batch_submission_duration_seconds`) only register after the
+  first observation. With no traffic the dashboard's percentile panels
+  stay empty — counters and gauges should still render.
+- Dashboard rate panels use a 5-minute window (`rate(...[5m])`). A
+  sub-5m smoke run will show flat lines even with traffic; let the stack
+  run ≥5 minutes before judging rate panels.
+- Grafana runs with anonymous admin access. Local dev only — do not
+  copy this config into a deployed environment.
+- Prometheus is published on host port `9091` (not `9090`) to avoid
+  colliding with the gRPC listener.
 
 ## Local development
 
