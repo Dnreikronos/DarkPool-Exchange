@@ -7,9 +7,8 @@ use dp_aggregator::{NoopAggregator, ProofAggregator};
 use dp_crypto::{Decrypter, NoopDecrypter};
 use dp_event::{Event, EventData, Store};
 use dp_settlement::{NoopSubmitter, Submitter};
-#[cfg(test)]
-use dp_types::Side;
-use dp_types::{DarkPoolError, EventType, Order};
+use dp_types::metrics::M_ORDERS_PLACED;
+use dp_types::{DarkPoolError, EventType, Order, Side};
 use parking_lot::{Mutex, RwLock};
 use rand::RngCore;
 use rust_decimal::Decimal;
@@ -555,7 +554,12 @@ impl Engine {
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         state.book.apply(evt);
+        let side_label = match order.side {
+            Side::Buy => "buy",
+            Side::Sell => "sell",
+        };
         state.book.insert_order(order);
+        metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(())
     }
 
@@ -596,6 +600,14 @@ impl Engine {
     pub fn active_order_count(&self) -> usize {
         let state = self.inner.state.lock();
         state.book.active_order_count()
+    }
+
+    /// Best-effort size of the persistent event log in bytes. Routed
+    /// through the [`Store`] trait so the value is meaningful for every
+    /// backend (PgStore queries `pg_total_relation_size`, FileStore
+    /// stats the file, MemStore returns 0).
+    pub fn event_log_size_bytes(&self) -> Result<u64, dp_event::EventError> {
+        self.inner.store.size_bytes()
     }
 
     pub fn pending_batch_count(&self) -> usize {
