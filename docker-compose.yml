@@ -104,6 +104,10 @@ services:
       DARKPOOL_RATE_BURST: ${DARKPOOL_RATE_BURST:-20}
       DARKPOOL_RATE_STALE_AFTER: ${DARKPOOL_RATE_STALE_AFTER:-10m}
       RUST_LOG: ${RUST_LOG:-info,dp_event=debug,dp_engine=info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-darkpool-api}
+      DP_ENVIRONMENT: ${DP_ENVIRONMENT:-local}
+      DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
     entrypoint:
       - /bin/sh
       - -c
