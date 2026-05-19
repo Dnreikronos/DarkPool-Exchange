@@ -8,9 +8,11 @@ use dp_api::admin::AdminApiHandler;
 use dp_api::auth::{AuthCore, AuthLayer};
 use dp_api::config::Config;
 use dp_api::handler::ApiHandler;
+use dp_api::observability::{self, M_EVENT_LOG_SIZE_BYTES};
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
-use dp_api::rest;
+use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
+use dp_api::rest::{self, OpsState};
 use dp_crypto::EciesDecrypter;
 use dp_engine::{Engine, PairConfig, PairStatus};
 use dp_event::{FileStore, MemStore, PgStore, Store};
@@ -23,12 +25,10 @@ use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // Metrics first: the recorder must be installed before any
+    // `metrics::counter!` call so the Prometheus exporter sees them.
+    let prom_handle = observability::init_metrics()?;
+    let tracing_guard = observability::init_tracing()?;
 
     let cfg = Config::parse();
 
@@ -107,11 +107,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(rpc) = cfg.eth_rpc_url() {
         // Eth submitter wiring requires an alloy provider builder. The current
         // dp-settlement API takes a generic Provider; bootstrap glue for that
-        // path is deferred to a follow-up.
+        // path is deferred to a follow-up. The companion `eth_rpc` readiness
+        // probe is deferred with it — adding a probe today would only HTTP-ping
+        // a URL with no live provider behind it, which would mask a genuine
+        // RPC outage once the submitter ships.
         warn!(
             rpc = %rpc,
             "DARKPOOL_ETH_RPC is set but submitter wiring is not yet implemented; \
-             running with noop submitter — auctions will NOT be settled on-chain"
+             running with noop submitter — auctions will NOT be settled on-chain. \
+             The `eth_rpc` readiness probe is also deferred until the submitter lands."
         );
     } else {
         info!("batch submitter: noop (set --eth-rpc to enable on-chain settlement)");
@@ -182,8 +186,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
     });
 
-    let rest_app =
-        rest::router_with_admin(shared, shared_admin, auth_core, admin_auth_core, rl_core);
+    let readiness = ReadinessProbes::new()
+        .with(store_probe(store.clone()))
+        .with(aggregator_probe(
+            cfg.aggregator_bin_path().map(|s| s.to_string()),
+        ));
+    let ops = OpsState {
+        prom: prom_handle,
+        readiness,
+    };
+
+    // Periodic gauge: event-log size. Polled off the request path so a
+    // slow PgStore round-trip never blocks a scrape; 30 s matches the
+    // typical Prometheus interval without hammering postgres.
+    //
+    // `event_log_size_bytes()` is a synchronous `Store` method; PgStore
+    // bridges to async via `block_in_place`, which parks one tokio worker
+    // thread per call. Every 30 s is low-frequency enough that one parked
+    // worker per tick is tolerable; do not lower the interval without
+    // switching the call to a dedicated blocking task.
+    let gauge_engine = engine.clone();
+    let gauge_cancel = cancel.clone();
+    let gauge_handle = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = gauge_cancel.cancelled() => return,
+                _ = tick.tick() => {
+                    match gauge_engine.event_log_size_bytes() {
+                        Ok(bytes) => metrics::gauge!(M_EVENT_LOG_SIZE_BYTES).set(bytes as f64),
+                        // warn (not debug) so a persistent PgStore outage
+                        // doesn't leave the gauge silently frozen — without
+                        // a log line, operators have no signal that the
+                        // last-known value is stale.
+                        Err(e) => tracing::warn!("event_log_size_bytes: {e}"),
+                    }
+                }
+            }
+        }
+    });
+
+    let rest_app = rest::router_with_ops(
+        shared,
+        shared_admin,
+        auth_core,
+        admin_auth_core,
+        rl_core,
+        ops,
+    );
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
     let rest_handle = tokio::spawn(async move {
@@ -216,6 +267,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = engine_handle.await;
     let _ = grpc_handle.await;
     let _ = rest_handle.await;
+    let _ = gauge_handle.await;
+
+    // Flush any in-flight OTLP batches before the process exits.
+    tracing_guard.shutdown();
 
     info!("shutdown complete");
     Ok(())
