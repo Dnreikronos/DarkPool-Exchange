@@ -130,6 +130,24 @@ export function computeRealizedPnl(fills: readonly Fill[]): string {
   return position.usdc
 }
 
+/**
+ * Compare the fill-derived position against the pool's internal balance.
+ *
+ * Phase 1 limitation: `internal` is the wallet store's `internalBalances`
+ * snapshot, which has no deposit/withdrawal history layered in (#72 ships
+ * that). The strict-equality check below therefore fires whenever the
+ * trader has either (a) any non-zero pool balance with no fills, or
+ * (b) any fills with no matching pool balance. Both are *symptoms* of
+ * the same gap — the local session can't reconstruct
+ * `deposits + fills - withdrawals`. The banner copy in
+ * `DivergenceBanner.tsx` is intentionally framed around the symptom so
+ * we don't claim "lost history" when the real cause is "deposits not
+ * yet tracked".
+ *
+ * Phase 2 path: feed `internal` through `deposits + fills - withdrawals`
+ * before calling, and the same function narrows to its intended meaning
+ * — lost fill history — without a signature change.
+ */
 export function computeDivergence(fills: readonly Fill[], internal: Position): DivergenceResult {
   const expected = computePosition(fills)
   const wethDiff = toDec(expected.weth).minus(internal.weth).abs()

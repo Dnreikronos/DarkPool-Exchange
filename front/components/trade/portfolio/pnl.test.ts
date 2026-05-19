@@ -189,6 +189,18 @@ describe('computeDivergence', () => {
     expect(result.diverged).toBe(true)
   })
 
+  it('flags divergence when balance is non-zero but no fills exist (deposit-only case)', () => {
+    // Phase 1 invariant: a deposit lands without producing a fill, so the
+    // banner correctly fires until #72 + #101 close the loop. Locks the
+    // semantic documented in computeDivergence's docstring.
+    const result = computeDivergence([], { weth: '1', usdc: '500' })
+    expect(result.diverged).toBe(true)
+    expect(result.expected.weth).toBe('0')
+    expect(result.expected.usdc).toBe('0')
+    expect(result.actual.weth).toBe('1')
+    expect(result.actual.usdc).toBe('500')
+  })
+
   it('exposes the epsilon constants as part of the public contract', () => {
     expect(EPSILON_WETH).toBeDefined()
     expect(EPSILON_USDC).toBeDefined()
