@@ -142,11 +142,21 @@ pub fn init_tracing() -> Result<TracingGuard, ObservabilityError> {
                 .build_span_exporter()
                 .map_err(|e| ObservabilityError::Setup(format!("otlp exporter: {e}")))?;
 
+            // Resource attrs follow OTel semantic conventions so the
+            // collector can filter spans by service / version / env
+            // without us baking them into every span attribute set.
+            // `deployment.environment` falls back to "development" so
+            // local runs land in a separate bucket from prod by default.
+            let deployment_env = std::env::var("DP_ENVIRONMENT")
+                .or_else(|_| std::env::var("DEPLOYMENT_ENVIRONMENT"))
+                .unwrap_or_else(|_| "development".to_string());
             let provider =
                 TracerProvider::builder()
                     .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
                     .with_config(Config::default().with_resource(Resource::new(vec![
                         KeyValue::new("service.name", service_name.clone()),
+                        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                        KeyValue::new("deployment.environment", deployment_env),
                     ])))
                     .build();
 

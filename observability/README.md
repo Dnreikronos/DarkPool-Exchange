@@ -23,6 +23,7 @@ surface.
 | `DP_LOG_FORMAT`                | auto (json when stdout is not a TTY)   | `json` (Loki / Vector / Datadog friendly) or `text` (developer-readable).                                                             |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`  | unset                                  | When set, install an OTLP/gRPC span exporter and ship spans to the configured collector. Empty / unset = no OTel layer, zero overhead. |
 | `OTEL_SERVICE_NAME`            | `dp-api`                               | Resource attribute on every exported span.                                                                                            |
+| `DP_ENVIRONMENT`               | `development`                          | Sets the `deployment.environment` OTel resource attribute so spans from local / staging / prod are filterable in the collector. Falls back to `DEPLOYMENT_ENVIRONMENT` if unset.  |
 
 ## Metric catalogue
 
