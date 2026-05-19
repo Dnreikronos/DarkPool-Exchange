@@ -7,6 +7,10 @@ import { type MockStoreState, useMockStore } from '../../../lib/mock-store'
 
 export const DEFAULT_AUCTION_HISTORY_LIMIT = 50
 
+function normalizeLimit(limit: number): number {
+  return Math.max(0, Math.floor(limit))
+}
+
 /**
  * Pure selector over the mock store. Returns the newest `limit` auctions,
  * preserving the store's newest-first ordering. Exported separately so it
@@ -16,8 +20,9 @@ export function selectLatestAuctions(
   state: MockStoreState,
   limit: number = DEFAULT_AUCTION_HISTORY_LIMIT
 ): readonly AuctionSummary[] {
-  if (state.recentAuctions.length <= limit) return state.recentAuctions
-  return state.recentAuctions.slice(0, limit)
+  const normalizedLimit = normalizeLimit(limit)
+  if (state.recentAuctions.length <= normalizedLimit) return state.recentAuctions
+  return state.recentAuctions.slice(0, normalizedLimit)
 }
 
 export interface UseAuctionHistoryOptions {
@@ -38,7 +43,7 @@ export interface UseAuctionHistoryOptions {
  * row components, which would otherwise re-render on every 1s perturb.
  */
 export function useAuctionHistory(opts: UseAuctionHistoryOptions = {}): readonly AuctionSummary[] {
-  const limit = opts.limit ?? DEFAULT_AUCTION_HISTORY_LIMIT
+  const limit = normalizeLimit(opts.limit ?? DEFAULT_AUCTION_HISTORY_LIMIT)
   const recentAuctions = useMockStore((s) => s.recentAuctions)
   return useMemo(() => {
     if (recentAuctions.length <= limit) return recentAuctions

@@ -7,13 +7,15 @@ import { TapeRow } from './TapeRow'
 
 const NOW = 1_700_000_120
 
-function mkAuction(opts: Partial<{
-  auctionId: string
-  clearingPrice: string
-  matchedVolume: string
-  matchCount: number
-  ageSeconds: number
-}> = {}) {
+function mkAuction(
+  opts: Partial<{
+    auctionId: string
+    clearingPrice: string
+    matchedVolume: string
+    matchCount: number
+    ageSeconds: number
+  }> = {}
+) {
   return create(AuctionSummarySchema, {
     auctionId: opts.auctionId ?? 'a-001',
     pair: 'ETH/USDC',
@@ -35,12 +37,24 @@ export const SingleRow = () => (
 export const ListOfRows = () => (
   <ol className="w-[320px] border border-brand-border bg-brand-bg">
     <TapeRow
-      auction={mkAuction({ auctionId: 'a-100', ageSeconds: 2, clearingPrice: '2419.85', matchedVolume: '0.0121', matchCount: 1 })}
+      auction={mkAuction({
+        auctionId: 'a-100',
+        ageSeconds: 2,
+        clearingPrice: '2419.85',
+        matchedVolume: '0.0121',
+        matchCount: 1,
+      })}
       nowUnixSeconds={NOW}
       onSelect={noop}
     />
     <TapeRow
-      auction={mkAuction({ auctionId: 'a-099', ageSeconds: 7, clearingPrice: '12345.6789', matchedVolume: '0.089', matchCount: 5 })}
+      auction={mkAuction({
+        auctionId: 'a-099',
+        ageSeconds: 7,
+        clearingPrice: '12345.6789',
+        matchedVolume: '0.089',
+        matchCount: 5,
+      })}
       nowUnixSeconds={NOW}
       onSelect={noop}
     />
@@ -50,7 +64,13 @@ export const ListOfRows = () => (
       onSelect={noop}
     />
     <TapeRow
-      auction={mkAuction({ auctionId: 'a-097', ageSeconds: 65, clearingPrice: '2417.42', matchedVolume: '0.0023', matchCount: 1 })}
+      auction={mkAuction({
+        auctionId: 'a-097',
+        ageSeconds: 65,
+        clearingPrice: '2417.42',
+        matchedVolume: '0.0023',
+        matchCount: 1,
+      })}
       nowUnixSeconds={NOW}
       onSelect={noop}
     />

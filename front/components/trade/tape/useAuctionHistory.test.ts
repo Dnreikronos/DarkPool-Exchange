@@ -33,12 +33,25 @@ describe('selectLatestAuctions', () => {
     expect(rows).toHaveLength(state.recentAuctions.length)
   })
 
-  it('returns the same reference for identical inputs (memo seam)', () => {
+  it('returns referentially stable elements across calls (memo seam)', () => {
     const state = freshState()
     const a = selectLatestAuctions(state, 3)
     const b = selectLatestAuctions(state, 3)
     expect(a[0]).toBe(b[0])
     expect(a[1]).toBe(b[1])
+  })
+
+  it('returns the same array reference when the limit covers all rows', () => {
+    const state = freshState()
+    const a = selectLatestAuctions(state, 999)
+    const b = selectLatestAuctions(state, 999)
+    expect(a).toBe(b)
+  })
+
+  it('clamps negative or fractional limits without throwing', () => {
+    const state = freshState()
+    expect(selectLatestAuctions(state, -5)).toHaveLength(0)
+    expect(selectLatestAuctions(state, 2.7)).toHaveLength(2)
   })
 
   it('honors the default limit when called without an explicit value', () => {

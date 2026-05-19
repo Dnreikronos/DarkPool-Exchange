@@ -14,8 +14,18 @@ export function formatRelativeTime(auctionUnixSeconds: bigint, nowUnixSeconds: n
 }
 
 const MONTHS = [
-  'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-  'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
 ] as const
 
 function pad2(n: number): string {
@@ -52,9 +62,10 @@ export function secondsToNextAuction(
   nowUnixSeconds: number,
   intervalSeconds: number
 ): number {
-  if (lastAuctionUnixSeconds === null) return intervalSeconds
+  const safeInterval = intervalSeconds > 0 ? Math.floor(intervalSeconds) : 1
+  if (lastAuctionUnixSeconds === null) return safeInterval
   const elapsed = nowUnixSeconds - Number(lastAuctionUnixSeconds)
-  if (elapsed < 0) return intervalSeconds
-  const remainder = elapsed % intervalSeconds
-  return remainder === 0 ? intervalSeconds : intervalSeconds - remainder
+  if (elapsed < 0) return safeInterval
+  const remainder = elapsed % safeInterval
+  return remainder === 0 ? safeInterval : safeInterval - remainder
 }
