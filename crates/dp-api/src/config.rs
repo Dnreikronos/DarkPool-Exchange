@@ -53,6 +53,22 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_OPERATOR_KEY", default_value = "")]
     pub operator_key: String,
 
+    /// Comma-separated list of ECIES key URIs for the multi-key
+    /// decrypter, with optional `@active|@rotating|@sunset` status
+    /// suffix (defaults to `@active`). Example:
+    /// `file:/etc/dp/active.hex@active,age:/etc/dp/old.age@sunset`.
+    /// When set, takes precedence over `DARKPOOL_OPERATOR_KEY`.
+    #[arg(long, env = "DARKPOOL_OPERATOR_KEY_URIS", default_value = "")]
+    pub operator_key_uris: String,
+
+    /// URI for the Ethereum transaction signer. Independent from the
+    /// ECIES decryption key — settlement and order-decryption secrets
+    /// are intentionally separate. Schemes: `file:`, `age:`, `awskms:`.
+    /// When unset, falls back to the noop submitter even if
+    /// `DARKPOOL_ETH_RPC` is configured.
+    #[arg(long, env = "DARKPOOL_SIGNER_KEY_URI", default_value = "")]
+    pub signer_key_uri: String,
+
     #[arg(long, env = "DARKPOOL_AGGREGATOR_BIN", default_value = "")]
     pub aggregator_bin: String,
 
@@ -117,6 +133,14 @@ impl Config {
 
     pub fn operator_key_path(&self) -> Option<&str> {
         opt(&self.operator_key)
+    }
+
+    pub fn operator_key_uris_str(&self) -> Option<&str> {
+        opt(&self.operator_key_uris)
+    }
+
+    pub fn signer_key_uri_str(&self) -> Option<&str> {
+        opt(&self.signer_key_uri)
     }
 
     pub fn aggregator_bin_path(&self) -> Option<&str> {

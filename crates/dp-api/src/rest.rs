@@ -14,7 +14,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::admin::AdminApiHandler;
+use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
@@ -27,9 +27,11 @@ use crate::pb::{
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use dp_crypto::KeyStatus;
 
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
+pub type SharedKeyAdminHandler = Arc<KeyAdminHandler>;
 
 // Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
 // Rejects oversized requests before JSON parse + base64 decode burn CPU.
@@ -61,6 +63,22 @@ pub fn admin_router(handler: SharedAdminHandler) -> Router {
         .with_state(handler)
 }
 
+/// Key-rotation admin routes. Separate from `admin_router` because the
+/// state type differs (`KeyAdminHandler` vs `AdminApiHandler`) — axum's
+/// `with_state` is monomorphised per-router so merging them is the
+/// idiomatic way to keep both state types reachable from the same
+/// listener.
+pub fn key_admin_router(handler: SharedKeyAdminHandler) -> Router {
+    Router::new()
+        .route(
+            "/v1/admin/keys",
+            post(rest_register_key).get(rest_list_keys),
+        )
+        .route("/v1/admin/keys/:key_id", delete(rest_delete_key))
+        .route("/v1/admin/keys/:key_id/sunset", post(rest_sunset_key))
+        .with_state(handler)
+}
+
 pub fn router_with_middleware(
     handler: SharedHandler,
     auth: AuthCore,
@@ -77,6 +95,7 @@ pub fn router_with_middleware(
 pub fn router_with_admin(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
+    key_admin_handler: SharedKeyAdminHandler,
     auth: AuthCore,
     admin_auth: AuthCore,
     ratelimit: RateLimitCore,
@@ -85,6 +104,7 @@ pub fn router_with_admin(
         .layer(from_fn_with_state(ratelimit.clone(), ratelimit_axum_mw))
         .layer(from_fn_with_state(auth, auth_axum_mw));
     let admin = admin_router(admin_handler)
+        .merge(key_admin_router(key_admin_handler))
         .layer(from_fn_with_state(ratelimit, ratelimit_axum_mw))
         .layer(from_fn_with_state(admin_auth, auth_axum_mw));
     public.merge(admin)
@@ -117,13 +137,21 @@ pub fn ops_router(state: OpsState) -> Router {
 pub fn router_with_ops(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
+    key_admin_handler: SharedKeyAdminHandler,
     auth: AuthCore,
     admin_auth: AuthCore,
     ratelimit: RateLimitCore,
     ops: OpsState,
 ) -> Router {
-    let base = router_with_admin(handler, admin_handler, auth, admin_auth, ratelimit)
-        .merge(ops_router(ops));
+    let base = router_with_admin(
+        handler,
+        admin_handler,
+        key_admin_handler,
+        auth,
+        admin_auth,
+        ratelimit,
+    )
+    .merge(ops_router(ops));
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
     // path. Desired request-side order is SetRequestId → Trace → Propagate,
@@ -568,6 +596,113 @@ async fn rest_list_pairs_admin(
     Ok(Json(ListPairsJson {
         pairs: resp.pairs.into_iter().map(Into::into).collect(),
     }))
+}
+
+// ---------- key-rotation admin handlers ----------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterKeyJson {
+    id: String,
+    uri: String,
+    /// Optional, defaults to `rotating` so a careless `POST` does not
+    /// silently demote the current `active` key. Operators promote by
+    /// re-POSTing the active id with `status="active"`.
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyInfoJson {
+    id: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListKeysRespJson {
+    keys: Vec<KeyInfoJson>,
+}
+
+fn parse_status(s: Option<&str>) -> Result<KeyStatus, ApiError> {
+    match s.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("active") => Ok(KeyStatus::Active),
+        Some("rotating") | None | Some("") => Ok(KeyStatus::Rotating),
+        Some("sunset") => Ok(KeyStatus::Sunset),
+        Some(other) => Err(ApiError(tonic::Status::invalid_argument(format!(
+            "invalid status: {other} (expected active|rotating|sunset)"
+        )))),
+    }
+}
+
+fn key_admin_err(e: AdminKeyError) -> ApiError {
+    use tonic::Status;
+    match e {
+        AdminKeyError::Invalid(m) => ApiError(Status::invalid_argument(m)),
+        AdminKeyError::NotFound(m) => ApiError(Status::not_found(m)),
+        AdminKeyError::Resolve(m) => ApiError(Status::failed_precondition(m)),
+    }
+}
+
+async fn rest_register_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Json(body): Json<RegisterKeyJson>,
+) -> Result<Json<KeyInfoJson>, ApiError> {
+    if body.id.trim().is_empty() {
+        return Err(key_admin_err(AdminKeyError::Invalid(
+            "id is required".into(),
+        )));
+    }
+    if body.uri.trim().is_empty() {
+        return Err(key_admin_err(AdminKeyError::Invalid(
+            "uri is required".into(),
+        )));
+    }
+    let status = parse_status(body.status.as_deref())?;
+    h.upsert(body.id.clone(), &body.uri, status)
+        .map_err(key_admin_err)?;
+    Ok(Json(KeyInfoJson {
+        id: body.id,
+        status: status.to_string(),
+    }))
+}
+
+async fn rest_list_keys(State(h): State<SharedKeyAdminHandler>) -> Json<ListKeysRespJson> {
+    let keys = h
+        .list()
+        .into_iter()
+        .map(|(id, status)| KeyInfoJson {
+            id,
+            status: status.to_string(),
+        })
+        .collect();
+    Json(ListKeysRespJson { keys })
+}
+
+async fn rest_delete_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Path(key_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if h.remove(&key_id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(key_admin_err(AdminKeyError::NotFound(key_id)))
+    }
+}
+
+async fn rest_sunset_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Path(key_id): Path<String>,
+) -> Result<Json<KeyInfoJson>, ApiError> {
+    if h.sunset(&key_id) {
+        Ok(Json(KeyInfoJson {
+            id: key_id,
+            status: KeyStatus::Sunset.to_string(),
+        }))
+    } else {
+        Err(key_admin_err(AdminKeyError::NotFound(key_id)))
+    }
 }
 
 // ---------- base64 codec for JSON ----------

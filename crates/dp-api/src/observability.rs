@@ -31,8 +31,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 // integration tests) keep importing them through this module.
 pub use dp_types::metrics::{
     M_ACTIVE_ORDERS, M_AUCTIONS_TOTAL, M_AUCTION_DURATION, M_BATCH_SUBMISSION_DURATION,
-    M_CLEARING_PRICE, M_EVENT_LOG_SIZE_BYTES, M_ORDERS_EXPIRED, M_ORDERS_MATCHED, M_ORDERS_PLACED,
-    M_SETTLEMENT_CONFIRMATIONS,
+    M_CLEARING_PRICE, M_CRYPTO_DECRYPT_TOTAL, M_EVENT_LOG_SIZE_BYTES, M_ORDERS_EXPIRED,
+    M_ORDERS_MATCHED, M_ORDERS_PLACED, M_SETTLEMENT_CONFIRMATIONS,
 };
 
 const AUCTION_BUCKETS: &[f64] = &[
@@ -91,6 +91,10 @@ pub fn init_metrics() -> Result<PrometheusHandle, ObservabilityError> {
     describe_gauge!(
         M_EVENT_LOG_SIZE_BYTES,
         "Approximate size of the persistent event log, bytes"
+    );
+    describe_counter!(
+        M_CRYPTO_DECRYPT_TOTAL,
+        "Per-attempt ECIES decryption count, labeled by key_id, status, and outcome (success|failure). Each registered key emits zero-valued series at registration so the Sunset-drain dashboard reads from t=0."
     );
 
     // Force-register the families that may otherwise stay absent until
