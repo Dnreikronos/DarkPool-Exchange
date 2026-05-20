@@ -8,9 +8,9 @@
 //!    operator publishes to chain via the contract's
 //!    `setOperatorPubkey(bytes,uint64)` call.
 //!
-//! 2. `dp-zk-rotate-key publish --contract 0x.. --rpc URL --owner-key
-//!    file:/path/owner.hex --pubkey-hex 0x02..` — submit the
-//!    `setOperatorPubkey` transaction.
+//! 2. `dp-zk-rotate-key pubkey --uri file:/path/secret.hex` — load an
+//!    existing secret and print its SEC1-compressed pubkey. Useful
+//!    when the secret was generated out-of-band.
 //!
 //! 3. `dp-zk-rotate-key curl-spec --uri file:/path/new.hex
 //!    --status rotating` — print the `curl` one-liner that registers
@@ -18,9 +18,9 @@
 //!    `POST /v1/admin/keys`. Keeps secret URIs in operator hands;
 //!    avoids stuffing them into shell history through autocomplete.
 //!
-//! The CLI does NOT call the running operator over HTTP itself: a
-//! rotation is a deliberate human action, and the runbook routes
-//! through `curl` so the admin API call is auditable in shell logs.
+//! On-chain publication is intentionally NOT a CLI mode — the runbook
+//! routes through `cast send setOperatorPubkey(...)` so the
+//! VK-rotation tx remains a deliberate, auditable human action.
 
 use std::fs;
 use std::path::PathBuf;
