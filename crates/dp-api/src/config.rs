@@ -15,6 +15,26 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_HTTP_ADDR", default_value = "0.0.0.0:8080")]
     pub http_addr: SocketAddr,
 
+    /// PEM-encoded TLS server certificate (chain). When set together
+    /// with --tls-key, TLS is enabled on both gRPC and REST listeners.
+    /// When both are empty, both listeners bind plaintext (see the TLS
+    /// runbook at docs/operations/tls-setup.md).
+    #[arg(long, env = "DARKPOOL_TLS_CERT", default_value = "")]
+    pub tls_cert: String,
+
+    /// PEM-encoded TLS private key matching --tls-cert. Must be readable
+    /// only by the service user (mode 0400 in prod). Unset together with
+    /// --tls-cert means plaintext.
+    #[arg(long, env = "DARKPOOL_TLS_KEY", default_value = "")]
+    pub tls_key: String,
+
+    /// PEM-encoded CA bundle used to verify *client* certificates.
+    /// Presence enables mTLS on both listeners — clients without a cert
+    /// signed by this CA are rejected at the TLS handshake. Requires
+    /// --tls-cert / --tls-key.
+    #[arg(long, env = "DARKPOOL_TLS_CLIENT_CA", default_value = "")]
+    pub tls_client_ca: String,
+
     #[arg(long, env = "DARKPOOL_AUCTION_INTERVAL", default_value = "5s", value_parser = parse_duration)]
     pub auction_interval: Duration,
 
@@ -158,6 +178,73 @@ impl Config {
     pub fn contract_address(&self) -> Option<&str> {
         opt(&self.contract_addr)
     }
+
+    pub fn tls_cert_path(&self) -> Option<&str> {
+        opt(&self.tls_cert)
+    }
+
+    pub fn tls_key_path(&self) -> Option<&str> {
+        opt(&self.tls_key)
+    }
+
+    pub fn tls_client_ca_path(&self) -> Option<&str> {
+        opt(&self.tls_client_ca)
+    }
+
+    /// Resolve the requested TLS posture, rejecting half-configured
+    /// states (cert without key or vice-versa). Caller should error
+    /// out at boot when this returns `Err`.
+    pub fn tls_mode(&self) -> Result<TlsMode, String> {
+        match (
+            self.tls_cert_path(),
+            self.tls_key_path(),
+            self.tls_client_ca_path(),
+        ) {
+            (None, None, None) => Ok(TlsMode::Plaintext),
+            (Some(c), Some(k), None) => Ok(TlsMode::Tls {
+                cert: c.into(),
+                key: k.into(),
+            }),
+            (Some(c), Some(k), Some(ca)) => Ok(TlsMode::Mtls {
+                cert: c.into(),
+                key: k.into(),
+                client_ca: ca.into(),
+            }),
+            (Some(_), None, _) => {
+                Err("--tls-cert / DARKPOOL_TLS_CERT set but --tls-key is missing".into())
+            }
+            (None, Some(_), _) => {
+                Err("--tls-key / DARKPOOL_TLS_KEY set but --tls-cert is missing".into())
+            }
+            (None, None, Some(_)) => Err(
+                "--tls-client-ca / DARKPOOL_TLS_CLIENT_CA set without --tls-cert and --tls-key"
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// Resolved TLS posture for both listeners. The variants are exhaustive
+/// of what the operator can ask for via [`Config::tls_mode`]:
+///
+/// - `Plaintext` — no TLS material configured; both listeners bind
+///   plaintext. Acceptable for local dev only; main.rs logs a loud
+///   warning at boot.
+/// - `Tls` — server-auth TLS, no client cert required.
+/// - `Mtls` — mutual TLS, clients must present a cert signed by
+///   `client_ca`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TlsMode {
+    Plaintext,
+    Tls {
+        cert: std::path::PathBuf,
+        key: std::path::PathBuf,
+    },
+    Mtls {
+        cert: std::path::PathBuf,
+        key: std::path::PathBuf,
+        client_ca: std::path::PathBuf,
+    },
 }
 
 fn opt(s: &str) -> Option<&str> {
@@ -198,5 +285,77 @@ mod tests {
     #[test]
     fn parse_duration_invalid() {
         assert!(parse_duration("not-a-duration").is_err());
+    }
+
+    fn cfg_with_tls(cert: &str, key: &str, ca: &str) -> Config {
+        // Parser preserves the env defaults for everything else; we only
+        // care about the TLS triple here.
+        Config::parse_from([
+            "darkpool-server",
+            "--tls-cert",
+            cert,
+            "--tls-key",
+            key,
+            "--tls-client-ca",
+            ca,
+        ])
+    }
+
+    #[test]
+    fn tls_mode_plaintext_when_empty() {
+        let cfg = cfg_with_tls("", "", "");
+        assert_eq!(cfg.tls_mode().unwrap(), TlsMode::Plaintext);
+    }
+
+    #[test]
+    fn tls_mode_tls_when_cert_and_key() {
+        let cfg = cfg_with_tls("/srv/cert.pem", "/srv/key.pem", "");
+        match cfg.tls_mode().unwrap() {
+            TlsMode::Tls { cert, key } => {
+                assert_eq!(cert.to_str(), Some("/srv/cert.pem"));
+                assert_eq!(key.to_str(), Some("/srv/key.pem"));
+            }
+            other => panic!("expected Tls, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tls_mode_mtls_when_full_triple() {
+        let cfg = cfg_with_tls("/srv/cert.pem", "/srv/key.pem", "/srv/ca.pem");
+        match cfg.tls_mode().unwrap() {
+            TlsMode::Mtls {
+                cert,
+                key,
+                client_ca,
+            } => {
+                assert_eq!(cert.to_str(), Some("/srv/cert.pem"));
+                assert_eq!(key.to_str(), Some("/srv/key.pem"));
+                assert_eq!(client_ca.to_str(), Some("/srv/ca.pem"));
+            }
+            other => panic!("expected Mtls, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tls_mode_rejects_cert_without_key() {
+        let cfg = cfg_with_tls("/srv/cert.pem", "", "");
+        let err = cfg.tls_mode().unwrap_err();
+        assert!(err.contains("tls-key"), "msg: {err}");
+    }
+
+    #[test]
+    fn tls_mode_rejects_key_without_cert() {
+        let cfg = cfg_with_tls("", "/srv/key.pem", "");
+        let err = cfg.tls_mode().unwrap_err();
+        assert!(err.contains("tls-cert"), "msg: {err}");
+    }
+
+    #[test]
+    fn tls_mode_rejects_client_ca_without_server_material() {
+        // Client-CA on its own would silently downgrade to plaintext if
+        // we didn't reject it — operators would think mTLS is on.
+        let cfg = cfg_with_tls("", "", "/srv/ca.pem");
+        let err = cfg.tls_mode().unwrap_err();
+        assert!(err.contains("tls-client-ca"), "msg: {err}");
     }
 }
