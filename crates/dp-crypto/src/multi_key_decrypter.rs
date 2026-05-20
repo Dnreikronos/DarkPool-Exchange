@@ -79,6 +79,42 @@ impl KeyEntry {
     }
 }
 
+/// Maximum length for an operator-chosen `key_id`. Tight enough that
+/// `darkpool_crypto_decrypt_total{key_id="..."}` never balloons the
+/// Prometheus series cardinality even if an operator scripts an
+/// accidental registration loop.
+pub const MAX_KEY_ID_LEN: usize = 64;
+
+/// Reject ids that would explode the metric cardinality of
+/// `darkpool_crypto_decrypt_total` or break shell/dashboard quoting.
+/// Allowed shape: 1..=64 chars, ASCII alphanumeric plus `._-`.
+///
+/// Call this at every admission point (admin REST DTO, boot-time URI
+/// parser) so bad ids never reach `KeyEntry::new` and from there a
+/// metric label. The constructor itself stays infallible because the
+/// internal `insert` / `from_entries` paths feed values that have
+/// already passed this gate.
+pub fn validate_key_id(id: &str) -> Result<(), CryptoError> {
+    if id.is_empty() {
+        return Err(CryptoError::KeySource("key_id must not be empty".into()));
+    }
+    if id.len() > MAX_KEY_ID_LEN {
+        return Err(CryptoError::KeySource(format!(
+            "key_id exceeds {MAX_KEY_ID_LEN} chars: {} given",
+            id.len()
+        )));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(CryptoError::KeySource(
+            "key_id may only contain ASCII alphanumerics and '.', '_', '-'".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Zero-init the `darkpool_crypto_decrypt_total{key_id, status, outcome}`
 /// series for both outcomes so /metrics renders them from the moment a
 /// key is registered. Uses `increment(0)` (not `absolute(0)`) so that
