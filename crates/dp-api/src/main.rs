@@ -483,13 +483,20 @@ fn parse_status_word(s: &str) -> Result<KeyStatus, Box<dyn std::error::Error + S
 /// Stable 6-char id derived from the URI, used when the operator did
 /// not pin an explicit `#id`. Keeps log lines unique across keys
 /// without leaking URI internals.
+///
+/// Uses SHA-256 (not `DefaultHasher`) because the derived id is
+/// referenced from Prometheus labels and operator workflows: a
+/// toolchain upgrade silently switching the hash output would rename
+/// every auto-derived key id and break metric continuity. SHA-256 is
+/// stable across compiler versions by construction.
 fn short_id_for_uri(uri: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    uri.hash(&mut h);
-    let v = h.finish();
-    format!("{:06x}", v & 0xff_ffff)
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(uri.as_bytes());
+    // Six hex chars = three bytes of digest. That's 24 bits of entropy,
+    // ample for the realistic ≤ 3-key set the rotation runbook
+    // enforces; collisions only matter relative to the other auto-
+    // derived ids in the same process.
+    format!("{:02x}{:02x}{:02x}", digest[0], digest[1], digest[2])
 }
 
 /// Strip the query string from a key URI before logging. AWS KMS URIs
