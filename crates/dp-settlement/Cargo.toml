@@ -40,3 +40,4 @@ alloy-node-bindings = "1"
 which = "6"
 tracing-subscriber = { workspace = true }
 tempfile = "3"
+serial_test = { workspace = true }

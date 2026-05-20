@@ -29,3 +29,4 @@ k256     = "0.13"
 rand     = "0.8"
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+serial_test = { workspace = true }

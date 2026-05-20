@@ -140,8 +140,50 @@ fn decrypt_age_file(path: &str, passphrase: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Save → remove the `DARKPOOL_SIGNER_PASSPHRASE` env for the
+    /// duration of a single test. Restores the prior value on drop so
+    /// adjacent serialized tests see a clean slate either way.
+    ///
+    /// SAFETY: `set_var` / `remove_var` are `unsafe` on Rust ≥ 1.74 in
+    /// multi-threaded contexts. The `#[serial]` attribute on every
+    /// caller of this guard guarantees no concurrent test touches the
+    /// same var, which is the contract `set_var` requires.
+    struct PassphraseGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl PassphraseGuard {
+        fn cleared() -> Self {
+            let prev = std::env::var_os("DARKPOOL_SIGNER_PASSPHRASE");
+            unsafe {
+                std::env::remove_var("DARKPOOL_SIGNER_PASSPHRASE");
+            }
+            Self { prev }
+        }
+
+        fn set(value: &str) -> Self {
+            let prev = std::env::var_os("DARKPOOL_SIGNER_PASSPHRASE");
+            unsafe {
+                std::env::set_var("DARKPOOL_SIGNER_PASSPHRASE", value);
+            }
+            Self { prev }
+        }
+    }
+
+    impl Drop for PassphraseGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("DARKPOOL_SIGNER_PASSPHRASE", v),
+                    None => std::env::remove_var("DARKPOOL_SIGNER_PASSPHRASE"),
+                }
+            }
+        }
+    }
 
     // anvil's deterministic key #0 — public, used solely as a hex
     // fixture across tests; no secret-management implications.
@@ -228,12 +270,11 @@ mod tests {
     }
 
     #[test]
+    #[serial(darkpool_signer_passphrase)]
     fn from_uri_age_without_passphrase_errors() {
-        // Only valid when the env var is unset; bail out if a parent
-        // test or the runner set it.
-        if std::env::var("DARKPOOL_SIGNER_PASSPHRASE").is_ok() {
-            return;
-        }
+        // Force the env var to be unset regardless of ambient CI state
+        // — the `#[serial]` group prevents another test from racing it.
+        let _guard = PassphraseGuard::cleared();
         match from_uri("age:/tmp/nonexistent.age") {
             Err(SettlementError::Signer(msg)) => {
                 assert!(msg.contains("DARKPOOL_SIGNER_PASSPHRASE"), "got: {msg}");
@@ -244,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(darkpool_signer_passphrase)]
     fn from_uri_age_round_trip() {
         // Build an age-encrypted blob containing the test hex secret,
         // then resolve it through the `age:` URI scheme. Exercises the
@@ -261,15 +303,8 @@ mod tests {
         f.write_all(&encrypted).unwrap();
         f.flush().unwrap();
 
-        // SAFETY: tests touching this env var are single-threaded in
-        // practice for this crate (only this test sets/removes it).
-        unsafe {
-            std::env::set_var("DARKPOOL_SIGNER_PASSPHRASE", pass);
-        }
+        let _guard = PassphraseGuard::set(pass);
         let res = from_uri(&format!("age:{}", f.path().display()));
-        unsafe {
-            std::env::remove_var("DARKPOOL_SIGNER_PASSPHRASE");
-        }
         let signer = res.expect("age decrypt");
         let expected = Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap();
         assert_eq!(signer.address(), expected);

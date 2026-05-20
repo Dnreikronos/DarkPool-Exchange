@@ -153,6 +153,7 @@ fn decrypt_via_aws_kms(_spec: &str) -> Result<Vec<u8>, CryptoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -161,6 +162,42 @@ mod tests {
         f.write_all(content.as_bytes()).unwrap();
         f.flush().unwrap();
         f
+    }
+
+    /// Save → mutate `DARKPOOL_KEY_PASSPHRASE` for one test, restore on
+    /// drop. Pair with `#[serial(darkpool_key_passphrase)]` so the
+    /// `unsafe` set/remove can never race a parallel reader.
+    struct KeyPassphraseGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl KeyPassphraseGuard {
+        fn cleared() -> Self {
+            let prev = std::env::var_os("DARKPOOL_KEY_PASSPHRASE");
+            unsafe {
+                std::env::remove_var("DARKPOOL_KEY_PASSPHRASE");
+            }
+            Self { prev }
+        }
+
+        fn set(value: &str) -> Self {
+            let prev = std::env::var_os("DARKPOOL_KEY_PASSPHRASE");
+            unsafe {
+                std::env::set_var("DARKPOOL_KEY_PASSPHRASE", value);
+            }
+            Self { prev }
+        }
+    }
+
+    impl Drop for KeyPassphraseGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("DARKPOOL_KEY_PASSPHRASE", v),
+                    None => std::env::remove_var("DARKPOOL_KEY_PASSPHRASE"),
+                }
+            }
+        }
     }
 
     #[test]
@@ -182,17 +219,11 @@ mod tests {
     }
 
     #[test]
+    #[serial(darkpool_key_passphrase)]
     fn age_uri_without_passphrase_errors() {
-        // The env var must NOT be set; clear it just in case the test
-        // runner inherited one. Tests run single-threaded inside a
-        // process when env mutation is in play, but env::remove_var is
-        // still unsafe Rust ≥ 1.74 in multi-threaded contexts. Skip
-        // mutation: by default the var is unset in CI.
-        if std::env::var("DARKPOOL_KEY_PASSPHRASE").is_ok() {
-            // Test runner leaked a passphrase env — skip rather than
-            // mutate it.
-            return;
-        }
+        // Force the env var clear regardless of ambient state — the
+        // serial group prevents the round-trip test from racing this.
+        let _guard = KeyPassphraseGuard::cleared();
         match KeySource::from_uri("age:/tmp/nonexistent.age") {
             Err(CryptoError::KeySource(msg)) => {
                 assert!(msg.contains("DARKPOOL_KEY_PASSPHRASE"), "got: {msg}");
@@ -249,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(darkpool_key_passphrase)]
     fn age_round_trip() {
         // Encrypt a 64-char hex secret with a passphrase, then resolve
         // it back through the `age:` URI scheme. This exercises the
@@ -268,17 +300,8 @@ mod tests {
         f.write_all(&encrypted).unwrap();
         f.flush().unwrap();
 
-        // Set the passphrase only for the duration of this test.
-        // SAFETY: tests run single-threaded for env mutation paths.
-        // In Rust ≥ 1.74 env::set_var is unsafe in multi-threaded
-        // contexts — gate behind a serial_test if you add more.
-        unsafe {
-            std::env::set_var("DARKPOOL_KEY_PASSPHRASE", pass);
-        }
+        let _guard = KeyPassphraseGuard::set(pass);
         let res = KeySource::from_uri(&format!("age:{}", f.path().display()));
-        unsafe {
-            std::env::remove_var("DARKPOOL_KEY_PASSPHRASE");
-        }
         let src = res.expect("age decrypt");
         let _ = src.into_decrypter().expect("decrypter built");
     }
