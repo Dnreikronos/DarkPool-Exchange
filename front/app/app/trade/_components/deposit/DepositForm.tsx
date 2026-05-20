@@ -11,7 +11,11 @@ import type { TokenSymbol } from '@/lib/wallet/types'
 
 import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
-import { useDepositController, useTxState, type DepositRevertReason } from '../../_hooks/deposit/hooks'
+import {
+  useDepositController,
+  useTxState,
+  type DepositRevertReason,
+} from '../../_hooks/deposit/hooks'
 import { StepIndicator, type Step } from './StepIndicator'
 import { TokenToggle } from './TokenToggle'
 import { needsApproval, validateDeposit } from '../../_lib/deposit/validation'

@@ -5,10 +5,7 @@ import {
   GetOrderBookResponseSchema,
   PriceLevelSchema,
 } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
-import type {
-  GetOrderBookResponse,
-  PriceLevel,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { GetOrderBookResponse, PriceLevel } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
 
 import { DepthChartView } from './DepthChart'
 import { buildDepthSeries } from '../../_lib/charts/selectors'

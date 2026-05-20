@@ -10,7 +10,14 @@
 
 export { OrderBook, OrderBookContent } from './OrderBook'
 export type { OrderBookProps } from './OrderBook'
-export { useOrderBook, useRecentAuctions, ORDERBOOK_POLL_MS } from '../../_hooks/orderbook/useOrderBook'
-export type { UseOrderBookOptions, UseRecentAuctionsOptions } from '../../_hooks/orderbook/useOrderBook'
+export {
+  useOrderBook,
+  useRecentAuctions,
+  ORDERBOOK_POLL_MS,
+} from '../../_hooks/orderbook/useOrderBook'
+export type {
+  UseOrderBookOptions,
+  UseRecentAuctionsOptions,
+} from '../../_hooks/orderbook/useOrderBook'
 export { computeDepthRows, formatDelta } from '../../_lib/orderbook/depth'
 export type { DepthRow, DepthRows, DeltaSign, FormattedDelta } from '../../_lib/orderbook/depth'
