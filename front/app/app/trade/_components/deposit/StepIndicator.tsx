@@ -4,7 +4,7 @@ import * as React from 'react'
 
 import { cn } from '@/components/ui/cn'
 
-import type { Stage } from './stage-machine'
+import type { Stage } from '../../_lib/deposit/stage-machine'
 
 export interface Step {
   /** Two-char zero-padded label, e.g. `01`, `02`. */

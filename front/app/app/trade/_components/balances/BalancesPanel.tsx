@@ -5,7 +5,7 @@ import * as React from 'react'
 import { NumericText } from '@/components/NumericText'
 import { useInternalBalances, useWallet, useWalletBalances } from '@/lib/wallet/hooks'
 import type { Balances, TokenSymbol } from '@/lib/wallet/types'
-import { displayDecimalsFor } from './format-balance'
+import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
 const TOKEN_ROWS: readonly TokenSymbol[] = ['WETH', 'USDC']
 

@@ -11,7 +11,7 @@ import type {
 } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
 
 import { DepthChartView } from './DepthChart'
-import { buildDepthSeries } from './selectors'
+import { buildDepthSeries } from '../../_lib/charts/selectors'
 
 function level(price: string, totalSize: string, orderCount = 1): PriceLevel {
   return create(PriceLevelSchema, { price, totalSize, orderCount })

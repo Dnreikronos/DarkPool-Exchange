@@ -9,5 +9,5 @@ export {
 } from './PriceHistoryChart'
 export type { PriceHistoryChartProps, PriceHistoryChartViewProps } from './PriceHistoryChart'
 
-export { TIMEFRAME_MS, buildDepthSeries, selectAuctionsInWindow } from './selectors'
-export type { DepthPoint, DepthSeries, PricePoint, Timeframe } from './selectors'
+export { TIMEFRAME_MS, buildDepthSeries, selectAuctionsInWindow } from '../../_lib/charts/selectors'
+export type { DepthPoint, DepthSeries, PricePoint, Timeframe } from '../../_lib/charts/selectors'

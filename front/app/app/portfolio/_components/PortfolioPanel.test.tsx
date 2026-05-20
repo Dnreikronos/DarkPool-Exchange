@@ -66,7 +66,7 @@ describe('createMockStore + portfolio derivations (integration)', () => {
     const fills = store.getState().fillHistory
     expect(fills).toHaveLength(1)
 
-    const { computeSummary } = await import('./pnl')
+    const { computeSummary } = await import('../_lib/pnl')
     const summary = computeSummary(fills, auction.clearingPrice)
     expect(summary.position.weth).toBe('1')
     // The mock auction records fills at the clearing price, not the

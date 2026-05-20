@@ -16,8 +16,8 @@ import * as React from 'react'
 
 import { cn } from '@/components/ui/cn'
 
-import { STAGE_LABELS, type SubmitStageId } from './policy'
-import type { SubmissionPhase } from './useSubmitStages'
+import { STAGE_LABELS, type SubmitStageId } from '../../_lib/entry/policy'
+import type { SubmissionPhase } from '../../_hooks/entry/useSubmitStages'
 
 export interface PlaceButtonProps {
   /** What the button reads when idle (e.g. "BUY · WETH"). */

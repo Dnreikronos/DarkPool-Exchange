@@ -14,8 +14,8 @@ import {
   STAGE_ORDER,
   STAGE_TOTAL_MS,
   type SubmitStageId,
-} from './policy'
-import type { SubmissionPhase } from './useSubmitStages'
+} from '../../_lib/entry/policy'
+import type { SubmissionPhase } from '../../_hooks/entry/useSubmitStages'
 
 // Ladle is the project's visual-verification surface (the JSX test
 // transform is node-only). Each story imperatively positions the wallet

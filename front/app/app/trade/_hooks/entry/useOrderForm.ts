@@ -11,7 +11,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 
-import { validateOrder, type OrderSide, type ValidationResult } from './validate'
+import { validateOrder, type OrderSide, type ValidationResult } from '../../_lib/entry/validate'
 
 export interface OrderFormState {
   side: OrderSide

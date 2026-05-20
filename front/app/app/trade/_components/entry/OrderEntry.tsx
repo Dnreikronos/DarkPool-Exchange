@@ -32,14 +32,14 @@ import { useInternalBalances, useWallet } from '@/lib/wallet/hooks'
 import { useToast } from '@/components/ui/use-toast'
 
 import { BuySellTabs } from './BuySellTabs'
-import { errorMessage } from './errors'
+import { errorMessage } from '../../_lib/entry/errors'
 import { DecimalInput } from './inputs'
-import { BASE_TOKEN, FEE_BPS, QUOTE_TOKEN } from './policy'
+import { BASE_TOKEN, FEE_BPS, QUOTE_TOKEN } from '../../_lib/entry/policy'
 import { PlaceButton } from './ProveSubmitStages'
 import { TotalRow } from './TotalRow'
-import { useOrderForm } from './useOrderForm'
-import { useSubmitStages, type SubmitPayload } from './useSubmitStages'
-import type { OrderSide } from './validate'
+import { useOrderForm } from '../../_hooks/entry/useOrderForm'
+import { useSubmitStages, type SubmitPayload } from '../../_hooks/entry/useSubmitStages'
+import type { OrderSide } from '../../_lib/entry/validate'
 
 export interface OrderEntryHandle {
   /** Fill the form from an external source (orderbook click-to-fill). */

@@ -9,12 +9,12 @@ import { NumericText } from '@/components/NumericText'
 import { useInternalBalances, useWallet } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
-import { displayDecimalsFor } from '../balances/format-balance'
+import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
-import { useTxState, useWithdrawController, type WithdrawRevertReason } from './hooks'
+import { useTxState, useWithdrawController, type WithdrawRevertReason } from '../../_hooks/deposit/hooks'
 import { StepIndicator, type Step } from './StepIndicator'
 import { TokenToggle } from './TokenToggle'
-import { validateWithdraw } from './validation'
+import { validateWithdraw } from '../../_lib/deposit/validation'
 
 const WITHDRAW_STEPS: readonly Step[] = [{ index: '01', label: 'Withdraw' }]
 

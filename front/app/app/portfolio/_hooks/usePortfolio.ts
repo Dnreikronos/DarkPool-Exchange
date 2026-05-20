@@ -5,9 +5,9 @@ import { useMemo } from 'react'
 import { type MockStoreState, useMockStore } from '@/lib/mock-store'
 import type { Fill } from '@/lib/mock-store'
 
-import { computeDivergence, computeSummary } from './pnl'
-import type { DivergenceResult, PortfolioSummary } from './pnl'
-import type { Position } from './pnl'
+import { computeDivergence, computeSummary } from '../_lib/pnl'
+import type { DivergenceResult, PortfolioSummary } from '../_lib/pnl'
+import type { Position } from '../_lib/pnl'
 
 export interface UsePortfolioReturn {
   fills: readonly Fill[]

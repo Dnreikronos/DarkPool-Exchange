@@ -7,8 +7,8 @@ import type { AuctionSummary } from '@/lib/sdk'
 import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
 import { TapeRow } from './TapeRow'
-import { useAuctionHistory } from './useAuctionHistory'
-import { useNow } from './useNow'
+import { useAuctionHistory } from '../../_hooks/tape/useAuctionHistory'
+import { useNow } from '../../_hooks/tape/useNow'
 
 export interface TapeProps {
   limit?: number

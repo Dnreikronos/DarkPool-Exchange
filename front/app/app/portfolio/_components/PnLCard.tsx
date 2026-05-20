@@ -5,7 +5,7 @@ import * as React from 'react'
 import { Decimal } from '@/lib/units'
 import { NumericText } from '@/components/NumericText'
 
-import type { PortfolioSummary } from './pnl'
+import type { PortfolioSummary } from '../_lib/pnl'
 
 export interface PnLCardProps {
   summary: PortfolioSummary

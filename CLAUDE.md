@@ -116,9 +116,10 @@ in the repo root for the longer story.
 #### Where code lives (route co-location)
 
 The tree follows the [Next.js App Router co-location pattern](https://nextjs.org/docs/app/getting-started/project-structure#colocation):
-**route-scoped code lives inside the route**, in a `_`-prefixed
-private folder (Next won't try to route those). Only landing-page
-components and genuinely shared primitives stay at `front/components/`.
+**route-scoped code lives inside the route**, separated by kind into
+`_`-prefixed private folders (Next won't try to route those). Only
+landing-page components and genuinely shared primitives stay at
+`front/components/`.
 
 ```
 front/
@@ -133,15 +134,18 @@ front/
 │       ├── _shell/                    # banner / rail / pair selector
 │       ├── trade/
 │       │   ├── page.tsx
-│       │   └── _components/           # owned by /app/trade only
-│       │       ├── Shell.tsx
-│       │       ├── balances/  charts/  deposit/  entry/  orderbook/  tape/
-│       │       └─ ↳ each panel folder keeps its own components, hooks,
-│       │          utils and tests together — they are tightly coupled
-│       │          and split would scatter related code for no benefit.
-│       └── portfolio/
+│       │   ├── _components/           # JSX components only
+│       │   │   ├── Shell.tsx
+│       │   │   └── balances/  charts/  deposit/  entry/  orderbook/  tape/
+│       │   ├── _hooks/                # use* hooks
+│       │   │   └── deposit/  entry/  orderbook/  tape/
+│       │   └── _lib/                  # pure utils, types, constants
+│       │       └── balances/  charts/  deposit/  entry/  orderbook/  tape/
+│       └── portfolio/                 # flatter — no per-feature subgrouping
 │           ├── page.tsx
-│           └── _components/           # owned by /app/portfolio only
+│           ├── _components/           # PortfolioPanel, PnLCard, …
+│           ├── _hooks/                # usePortfolio
+│           └── _lib/                  # csv, format, pnl
 ├── components/                        # ONLY landing + truly shared things
 │   ├── ui/                            #   shadcn primitives — used everywhere
 │   ├── NumericText.tsx                #   shared between landing and panels
@@ -149,11 +153,24 @@ front/
 └── lib/                               # shared utilities (sdk, wallet, mock-store, units…)
 ```
 
-Import conventions for moved code:
-- Inside a route folder, prefer **relative** imports (`./_components/X`,
-  `../balances/format-balance`) for siblings — short and refactor-friendly.
-- Reach for the `@/` absolute alias when crossing route boundaries
-  (`@/components/ui/button`, `@/lib/units`, `@/components/NumericText`).
+- **`_components/`** holds JSX components, their stories, their
+  component tests (`*.test.tsx`), and any CSS modules they use.
+- **`_hooks/`** holds React hooks (`use*`) and their unit tests
+  (`*.test.ts`). Even if a hook is only used by one component, it
+  lives here — file kind drives the folder, not coupling.
+- **`_lib/`** holds plain TypeScript: validators, formatters, state
+  machines, type aliases, constants, and their unit tests.
+- Sub-grouping by feature (`_lib/entry/`, `_hooks/tape/`) is used in
+  `/app/trade` because the route fans out into six panels. The
+  flatter `/app/portfolio` doesn't bother — pick whichever scales for
+  the route.
+
+Import conventions:
+- Inside a route folder, prefer **relative** imports for siblings:
+  `'./BalancesPanel'`, `'../../_lib/balances/format-balance'`,
+  `'../_hooks/usePortfolio'`. Short and refactor-friendly.
+- Reach for the `@/` absolute alias when crossing route boundaries:
+  `@/components/ui/button`, `@/lib/units`, `@/components/NumericText`.
 - Vitest needs the alias too — `front/vitest.config.ts` mirrors the
   `@/*` mapping from `tsconfig.json`. Don't strip it.
 
@@ -198,13 +215,13 @@ Import conventions for moved code:
   add fallbacks or feature flags for the old `front/` — it's gone.
 - **Lockfile sanity:** if `package.json` changed, run the full install
   before committing the lockfile.
-- **Co-locate route-scoped code.** A panel, hook, util, or test used
-  by exactly one route lives inside that route, under a `_`-prefixed
-  folder (see the "Where code lives" tree above). `front/components/`
-  is reserved for landing-page components and shared primitives
-  (`ui/`, `NumericText`). Adding `front/components/<feature>/` for a
-  single panel is the wrong shape — put it in
-  `front/app/app/<route>/_components/<feature>/` instead.
+- **Co-locate route-scoped code, split by kind.** A panel, hook, or
+  util used by exactly one route lives inside that route, separated
+  into `_components/`, `_hooks/`, `_lib/` (see the "Where code lives"
+  tree above). `front/components/` is reserved for landing-page
+  components and shared primitives (`ui/`, `NumericText`). Don't
+  dump a hook into `_components/` because "it's near the component
+  that uses it" — file kind drives the folder.
 
 ---
 

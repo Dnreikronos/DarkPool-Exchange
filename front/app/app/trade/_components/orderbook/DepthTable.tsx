@@ -4,7 +4,7 @@ import { Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
 import { DepthRow } from './DepthRow'
 
-import type { DepthRow as DepthRowData } from './depth'
+import type { DepthRow as DepthRowData } from '../../_lib/orderbook/depth'
 
 export type DepthTableSide = Side.BUY | Side.SELL
 

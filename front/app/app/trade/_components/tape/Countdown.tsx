@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import { secondsToNextAuction } from './format'
+import { secondsToNextAuction } from '../../_lib/tape/format'
 
 export interface CountdownProps {
   latestAuctionUnixSeconds: bigint | null

@@ -9,10 +9,10 @@
 import * as React from 'react'
 
 import { NumericText } from '@/components/NumericText'
-import { displayDecimalsFor } from '../balances/format-balance'
+import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
-import { computeFee, computeTotal } from './derive'
-import { FEE_BPS, QUOTE_TOKEN } from './policy'
+import { computeFee, computeTotal } from '../../_lib/entry/derive'
+import { FEE_BPS, QUOTE_TOKEN } from '../../_lib/entry/policy'
 
 export interface TotalRowProps {
   price: string

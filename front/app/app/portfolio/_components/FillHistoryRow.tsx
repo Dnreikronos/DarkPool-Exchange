@@ -6,7 +6,7 @@ import { NumericText } from '@/components/NumericText'
 import { Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 import type { Fill } from '@/lib/mock-store'
 
-import { formatBatch, formatFillTimestamp } from './format'
+import { formatBatch, formatFillTimestamp } from '../_lib/format'
 
 export interface FillHistoryRowProps {
   fill: Fill

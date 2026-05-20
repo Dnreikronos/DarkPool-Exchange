@@ -3,7 +3,7 @@
 import * as React from 'react'
 
 import { NumericText } from '@/components/NumericText'
-import type { DivergenceResult } from './pnl'
+import type { DivergenceResult } from '../_lib/pnl'
 
 export interface DivergenceBannerProps {
   result: DivergenceResult

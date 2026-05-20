@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { STAGE_DURATIONS_MS, STAGE_ORDER, STAGE_TOTAL_MS, SUCCESS_HOLD_MS } from './policy'
+import { STAGE_DURATIONS_MS, STAGE_ORDER, STAGE_TOTAL_MS, SUCCESS_HOLD_MS } from '../../_lib/entry/policy'
 import {
   progressAtEndOfStage,
   progressAtStartOfStage,

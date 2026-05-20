@@ -6,12 +6,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { DEFAULT_PAIR } from '@/lib/sdk/mocks/factories'
 import { Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
-import { computeDepthRows, formatDelta } from './depth'
+import { computeDepthRows, formatDelta } from '../../_lib/orderbook/depth'
 import { DepthTable, type DepthTableSide } from './DepthTable'
 import { OrderBookHeader } from './OrderBookHeader'
 import { SpreadRow } from './SpreadRow'
 import { OrderBookEmpty, OrderBookError, OrderBookLoading } from './states'
-import { useOrderBook, useRecentAuctions } from './useOrderBook'
+import { useOrderBook, useRecentAuctions } from '../../_hooks/orderbook/useOrderBook'
 
 export interface OrderBookProps {
   pair?: string

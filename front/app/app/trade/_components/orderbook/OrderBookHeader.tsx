@@ -2,7 +2,7 @@
 
 import { NumericText } from '@/components/NumericText'
 
-import type { FormattedDelta } from './depth'
+import type { FormattedDelta } from '../../_lib/orderbook/depth'
 
 export interface OrderBookHeaderProps {
   /** Latest clearing price as a wire-string. `null` while no auctions have run yet. */

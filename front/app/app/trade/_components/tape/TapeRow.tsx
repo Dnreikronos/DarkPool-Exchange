@@ -5,7 +5,7 @@ import * as React from 'react'
 import { NumericText } from '@/components/NumericText'
 import type { AuctionSummary } from '@/lib/sdk'
 
-import { formatCount, formatRelativeTime } from './format'
+import { formatCount, formatRelativeTime } from '../../_lib/tape/format'
 import styles from './tape.module.css'
 
 export interface TapeRowProps {

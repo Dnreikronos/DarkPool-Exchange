@@ -7,7 +7,7 @@ import { useWallet } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
 import { DepositModal } from './DepositModal'
-import { useTxState } from './hooks'
+import { useTxState } from '../../_hooks/deposit/hooks'
 import { WithdrawModal } from './WithdrawModal'
 
 interface DepositTriggersProps {

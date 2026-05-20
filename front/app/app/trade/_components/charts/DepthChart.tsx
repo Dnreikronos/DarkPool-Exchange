@@ -8,7 +8,7 @@ import { ParentSize } from '@visx/responsive'
 import { scaleLinear } from '@visx/scale'
 import { AreaClosed, Line } from '@visx/shape'
 
-import { type DepthSeries, buildDepthSeries } from './selectors'
+import { type DepthSeries, buildDepthSeries } from '../../_lib/charts/selectors'
 import { useMockStore } from '@/lib/mock-store'
 import { cn } from '@/components/ui/cn'
 

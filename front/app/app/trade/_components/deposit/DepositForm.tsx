@@ -9,12 +9,12 @@ import { NumericText } from '@/components/NumericText'
 import { useWallet, useWalletBalances } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
-import { displayDecimalsFor } from '../balances/format-balance'
+import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
-import { useDepositController, useTxState, type DepositRevertReason } from './hooks'
+import { useDepositController, useTxState, type DepositRevertReason } from '../../_hooks/deposit/hooks'
 import { StepIndicator, type Step } from './StepIndicator'
 import { TokenToggle } from './TokenToggle'
-import { needsApproval, validateDeposit } from './validation'
+import { needsApproval, validateDeposit } from '../../_lib/deposit/validation'
 
 const DEPOSIT_STEPS: readonly Step[] = [
   { index: '01', label: 'Approve' },

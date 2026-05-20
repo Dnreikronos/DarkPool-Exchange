@@ -22,7 +22,7 @@ import {
   type PricePoint,
   type Timeframe,
   selectAuctionsInWindow,
-} from './selectors'
+} from '../../_lib/charts/selectors'
 
 const COLORS = {
   bg: '#06060A',

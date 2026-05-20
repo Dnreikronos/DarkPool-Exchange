@@ -5,8 +5,8 @@ import * as React from 'react'
 import { walletStore, type TxState } from '@/lib/wallet/mock-store'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
-import { reduceStage, INITIAL_STAGE, type Stage } from './stage-machine'
-import { needsApproval } from './validation'
+import { reduceStage, INITIAL_STAGE, type Stage } from '../../_lib/deposit/stage-machine'
+import { needsApproval } from '../../_lib/deposit/validation'
 
 // Step cadence per the F1.5 spec: each fake on-chain step takes ~1s.
 // Exposed so tests / stories can override without monkey-patching

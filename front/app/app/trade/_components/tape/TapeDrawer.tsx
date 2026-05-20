@@ -5,7 +5,7 @@ import * as React from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import type { AuctionSummary } from '@/lib/sdk'
 
-import { formatFullTimestamp } from './format'
+import { formatFullTimestamp } from '../../_lib/tape/format'
 import styles from './tape.module.css'
 
 export interface TapeDrawerProps {

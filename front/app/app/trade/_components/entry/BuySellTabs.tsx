@@ -9,7 +9,7 @@ import * as React from 'react'
 
 import { cn } from '@/components/ui/cn'
 
-import type { OrderSide } from './validate'
+import type { OrderSide } from '../../_lib/entry/validate'
 
 export interface BuySellTabsProps {
   value: OrderSide

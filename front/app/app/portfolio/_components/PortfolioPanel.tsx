@@ -7,7 +7,7 @@ import { useInternalBalances, useWallet } from '@/lib/wallet/hooks'
 import { DivergenceBanner } from './DivergenceBanner'
 import { FillHistoryTable } from './FillHistoryTable'
 import { PnLCard } from './PnLCard'
-import { usePortfolio } from './usePortfolio'
+import { usePortfolio } from '../_hooks/usePortfolio'
 
 /**
  * Portfolio surface: P&L summary + fill history. Mounts inside

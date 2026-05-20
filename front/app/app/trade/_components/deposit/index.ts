@@ -13,7 +13,7 @@ export {
   type StepTiming,
   type WithdrawController,
   type WithdrawRevertReason,
-} from './hooks'
+} from '../../_hooks/deposit/hooks'
 export {
   INITIAL_STAGE,
   isInFlight,
@@ -22,7 +22,7 @@ export {
   type Stage,
   type StageAction,
   type StageKind,
-} from './stage-machine'
+} from '../../_lib/deposit/stage-machine'
 export {
   needsApproval,
   validateDeposit,
@@ -30,4 +30,4 @@ export {
   type ValidationErr,
   type ValidationOk,
   type ValidationResult,
-} from './validation'
+} from '../../_lib/deposit/validation'

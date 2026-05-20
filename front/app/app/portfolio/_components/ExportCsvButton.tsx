@@ -4,7 +4,7 @@ import * as React from 'react'
 
 import type { Fill } from '@/lib/mock-store'
 
-import { fillsToCsv } from './csv'
+import { fillsToCsv } from '../_lib/csv'
 
 export interface ExportCsvButtonProps {
   fills: readonly Fill[]

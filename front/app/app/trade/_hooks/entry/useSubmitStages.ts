@@ -25,7 +25,7 @@ import {
   STAGE_TOTAL_MS,
   SUCCESS_HOLD_MS,
   type SubmitStageId,
-} from './policy'
+} from '../../_lib/entry/policy'
 
 export type SubmissionPhase =
   | { kind: 'idle' }
