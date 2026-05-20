@@ -23,7 +23,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::ecies_decrypter::{load_operator_key_file, EciesDecrypter};
 use crate::{CryptoError, Decrypter};
@@ -52,14 +52,19 @@ impl KeySource {
         let secret = if let Some(path) = uri.strip_prefix("file:") {
             load_operator_key_file(path)?
         } else if let Some(path) = uri.strip_prefix("age:") {
-            let pass = std::env::var("DARKPOOL_KEY_PASSPHRASE").map_err(|_| {
+            // Both the passphrase and the decrypted hex blob are
+            // wrapped so they are scrubbed on early-return / error
+            // paths as well as on the happy path.
+            let pass = Zeroizing::new(std::env::var("DARKPOOL_KEY_PASSPHRASE").map_err(|_| {
                 CryptoError::KeySource(
                     "age: key URI requires DARKPOOL_KEY_PASSPHRASE env var".into(),
                 )
-            })?;
-            let bytes = decrypt_age_passphrase(Path::new(path), &pass)
+            })?);
+            let mut bytes = decrypt_age_passphrase(Path::new(path), &pass)
                 .map_err(|e| CryptoError::KeySource(format!("age: {e}")))?;
-            parse_hex_secret(&bytes)?
+            let secret = parse_hex_secret(&bytes)?;
+            bytes.zeroize();
+            secret
         } else if let Some(rest) = uri.strip_prefix("awskms:") {
             decrypt_via_aws_kms(rest)?
         } else {
