@@ -1,12 +1,14 @@
 mod abi;
 mod eth_submitter;
 mod helpers;
+pub mod signer;
 mod submitter;
 mod watcher;
 
 pub use abi::DarkPool;
 pub use eth_submitter::{EthSubmitter, EthSubmitterConfig};
 pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
+pub use signer::{LocalTxSigner, TxSigner};
 pub use submitter::{NoopSubmitter, Submitter};
 pub use watcher::{BatchSink, Watcher};
 

@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use alloy_network::{EthereumWallet, TransactionBuilder};
@@ -18,8 +18,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use dp_settlement::{
-    BatchSink, DarkPool, EthSubmitter, EthSubmitterConfig, SettlementError, SettlementMatch,
-    SubmitBatchParams, Submitter, Watcher,
+    BatchSink, DarkPool, EthSubmitter, EthSubmitterConfig, LocalTxSigner, SettlementError,
+    SettlementMatch, SubmitBatchParams, Submitter, TxSigner, Watcher,
 };
 
 const ANVIL_KEY_0_HEX: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -192,9 +192,19 @@ async fn settles_batch_end_to_end() {
         deploy(&http_provider, code).await
     };
 
-    // Deploy DarkPool(verifier, feeRecipient = signer_addr)
+    // Deploy DarkPool(verifier, feeRecipient = signer_addr, operatorPubkey).
+    // The pubkey is the SEC1-compressed encoding of secp256k1's
+    // generator — a 33-byte placeholder is enough to satisfy the
+    // constructor's length check for this end-to-end smoke test;
+    // ciphertext decryption is not exercised here.
+    let placeholder_pubkey: alloy_primitives::Bytes = alloy_primitives::Bytes::from_static(&[
+        0x02, 0x79, 0xBE, 0x66, 0x7E, 0xF9, 0xDC, 0xBB, 0xAC, 0x55, 0xA0, 0x62, 0x95, 0xCE, 0x87,
+        0x0B, 0x07, 0x02, 0x9B, 0xFC, 0xDB, 0x2D, 0xCE, 0x28, 0xD9, 0x59, 0xF2, 0x81, 0x5B, 0x16,
+        0xF8, 0x17, 0x98,
+    ]);
     let mut pool_code = pool_bc;
-    pool_code.extend_from_slice(&(verifier_addr, signer_addr).abi_encode_params());
+    pool_code
+        .extend_from_slice(&(verifier_addr, signer_addr, placeholder_pubkey).abi_encode_params());
     let pool_addr = deploy(&http_provider, pool_code).await;
 
     // Mint + approve + deposit
@@ -227,10 +237,14 @@ async fn settles_batch_end_to_end() {
         .expect("watcher subscribe_logs timeout")
         .expect("watcher dropped ready signal");
 
-    // Submit a batch via EthSubmitter
+    // Submit a batch via EthSubmitter. Build the signer from the same
+    // hex used to seed anvil so the wallet address matches the operator
+    // registered above.
+    let tx_signer: Arc<dyn TxSigner> =
+        Arc::new(LocalTxSigner::from_hex(ANVIL_KEY_0_HEX).expect("local signer"));
     let config = EthSubmitterConfig {
         rpc_url: anvil.endpoint(),
-        private_key: ANVIL_KEY_0_HEX.to_string(),
+        signer: tx_signer,
         contract_address: pool_addr.to_string(),
         chain_id: ANVIL_CHAIN_ID,
         gas_limit: Some(2_000_000),
