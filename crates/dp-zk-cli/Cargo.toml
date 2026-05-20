@@ -23,6 +23,10 @@ path = "src/bin/dp-zk-fixture-gen.rs"
 name = "dp-aggregator"
 path = "src/bin/dp-aggregator.rs"
 
+[[bin]]
+name = "dp-zk-rotate-key"
+path = "src/bin/dp-zk-rotate-key.rs"
+
 [dependencies]
 dp-zk = { path = "../dp-zk" }
 clap = { workspace = true }
@@ -31,6 +35,8 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
 hex = { workspace = true }
+k256 = "0.13"
+rand = "0.8"
 ark-bn254 = { workspace = true, features = ["std"] }
 ark-ec = { workspace = true, features = ["std"] }
 ark-ff = { workspace = true, features = ["std"] }

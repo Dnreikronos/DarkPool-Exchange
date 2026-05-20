@@ -1,22 +1,29 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider;
 use alloy_rpc_types::BlockNumberOrTag;
-use alloy_signer_local::PrivateKeySigner;
 use tracing::Instrument;
 
 use crate::abi::{DarkPool, SolMatch, MAX_MATCHES_PER_BATCH};
 use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
+use crate::signer::TxSigner;
 use crate::submitter::Submitter;
 use crate::{SettlementError, SettlementMatch, SubmitBatchParams};
 
 pub struct EthSubmitterConfig {
     pub rpc_url: String,
-    pub private_key: String,
+    /// Operator transaction-signing backend. Constructed via
+    /// `dp_settlement::signer::from_uri` at boot so the raw private key
+    /// stays inside the adapter (KMS-backed signers never expose it at
+    /// all). Wrapped in `Arc` because the submitter holds it for the
+    /// process lifetime and `EthereumWallet` derived from it is cloned
+    /// per-call.
+    pub signer: Arc<dyn TxSigner>,
     pub contract_address: String,
     pub chain_id: u64,
     pub gas_limit: Option<u64>,
@@ -32,9 +39,7 @@ pub struct EthSubmitter<P> {
 
 impl<P: Provider + Send + Sync> EthSubmitter<P> {
     pub fn new(provider: P, config: &EthSubmitterConfig) -> Result<Self, SettlementError> {
-        let signer = PrivateKeySigner::from_str(&config.private_key)
-            .map_err(|e| SettlementError::Signer(e.to_string()))?;
-        let wallet = EthereumWallet::from(signer);
+        let wallet = config.signer.wallet();
         let contract = Address::from_str(&config.contract_address)
             .map_err(|e| SettlementError::Rpc(e.to_string()))?;
         Ok(Self {

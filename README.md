@@ -154,12 +154,21 @@ cargo run   --release --bin darkpool-server
 --http-addr 0.0.0.0:8080         # REST listen addr
 --auction-interval 5s            # batch auction tick
 --event-log /var/lib/darkpool.log  # durable event log (omit → in-memory)
---operator-key /etc/darkpool/op.key  # ECIES private key (omit → noop decrypter)
+--operator-key /etc/darkpool/op.key  # ECIES private key (single-key mode)
+--operator-key-uris file:/etc/dp/active.hex@active,age:/etc/dp/old.age@sunset
+                                 # multi-key rotation mode (issue #28)
+--signer-key-uri file:/etc/dp/eth.hex   # independent Ethereum signer URI
 --aggregator-bin /usr/local/bin/dp-aggregate  # proof aggregator subprocess (omit → noop)
 --eth-rpc wss://...              # settlement RPC (currently warns; submitter wiring deferred)
 --api-keys k1,k2                 # comma-separated API keys (omit → no auth)
 --rate-limit 100  --rate-burst 20  --rate-stale-after 5m
 ```
+
+### Operations
+
+- [Operator key rotation](docs/operations/key-rotation.md) — runbook for
+  generating, publishing, registering, draining, and deleting an
+  ECIES key without restarting the operator.
 
 ## Project structure
 

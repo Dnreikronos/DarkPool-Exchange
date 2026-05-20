@@ -6,13 +6,14 @@ use std::sync::OnceLock;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
-use dp_api::admin::AdminApiHandler;
+use dp_api::admin::{AdminApiHandler, KeyAdminHandler};
 use dp_api::auth::AuthCore;
 use dp_api::handler::ApiHandler;
 use dp_api::observability::{init_metrics, M_AUCTIONS_TOTAL, M_ORDERS_PLACED};
 use dp_api::ratelimit::RateLimitCore;
 use dp_api::readiness::{Probe, ReadinessProbes};
 use dp_api::rest::{router_with_ops, OpsState};
+use dp_crypto::MultiKeyDecrypter;
 use dp_engine::Engine;
 use dp_event::{MemStore, Store};
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -38,12 +39,14 @@ fn make_router(probes: ReadinessProbes) -> axum::Router {
     let engine = fresh_engine();
     let api = ApiHandler::new(engine.clone());
     let admin = AdminApiHandler::new(engine);
+    let key_admin = KeyAdminHandler::new(MultiKeyDecrypter::new());
     let auth = AuthCore::new(vec!["trader-key".into()]);
     let admin_auth = AuthCore::new(vec!["admin-key".into()]);
     let rl = RateLimitCore::new(1000.0, 1000.0, std::time::Duration::from_secs(60));
     router_with_ops(
         Arc::new(api),
         Arc::new(admin),
+        Arc::new(key_admin),
         auth,
         admin_auth,
         rl,

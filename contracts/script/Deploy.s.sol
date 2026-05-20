@@ -14,6 +14,25 @@ contract DeployScript is Script {
         address feeRecipient = vm.envAddress("FEE_RECIPIENT");
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         string memory vkPath = vm.envString("VK_JSON_PATH");
+        // SEC1-encoded operator ECIES pubkey (33-byte compressed or
+        // 65-byte uncompressed). Required at deploy: the DarkPool
+        // constructor refuses to initialise without one so clients can
+        // discover the encryption key from chain state alone.
+        bytes memory operatorPubkey = vm.parseBytes(vm.envString("OPERATOR_PUBKEY_HEX"));
+        // Fail before vm.startBroadcast() so a malformed env var doesn't
+        // leave Groth16Verifier + VerifierProxy deployed but DarkPool
+        // missing — those partial deploys waste gas and force a manual
+        // address-bookkeeping fix.
+        require(
+            operatorPubkey.length == 33 || operatorPubkey.length == 65,
+            "OPERATOR_PUBKEY_HEX must be 33 (compressed) or 65 (uncompressed) bytes"
+        );
+        bytes1 pubkeyTag = operatorPubkey[0];
+        require(
+            (operatorPubkey.length == 33 && (pubkeyTag == 0x02 || pubkeyTag == 0x03))
+                || (operatorPubkey.length == 65 && pubkeyTag == 0x04),
+            "OPERATOR_PUBKEY_HEX SEC1 tag does not match length"
+        );
         address deployer = vm.addr(deployerKey);
         // VERIFIER_GOVERNOR: address that can rotate the verifier backend.
         // In production this should be a TimelockController (or a multisig
@@ -43,8 +62,9 @@ contract DeployScript is Script {
         console.log("VerifierProxy:", address(proxy));
         console.log("VerifierProxy owner:", governor);
 
-        DarkPool pool = new DarkPool(address(proxy), feeRecipient);
+        DarkPool pool = new DarkPool(address(proxy), feeRecipient, operatorPubkey);
         console.log("DarkPool:", address(pool));
+        console.log("OperatorPubkey bytes:", operatorPubkey.length);
 
         vm.stopBroadcast();
     }

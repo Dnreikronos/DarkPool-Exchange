@@ -21,7 +21,20 @@ impl Drop for EciesDecrypter {
 impl EciesDecrypter {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, CryptoError> {
         let sk = load_operator_key_file(path)?;
-        Ok(Self { secret_key: sk })
+        Self::from_bytes(sk)
+    }
+
+    /// Build directly from a 32-byte secp256k1 secret. Takes ownership
+    /// of the bytes so they live behind the `Drop`-time zeroize
+    /// guarantee on this struct.
+    pub fn from_bytes(secret_key: Vec<u8>) -> Result<Self, CryptoError> {
+        if secret_key.len() != 32 {
+            return Err(CryptoError::InvalidKeyFile(format!(
+                "expected 32 bytes, got {}",
+                secret_key.len()
+            )));
+        }
+        Ok(Self { secret_key })
     }
 }
 
@@ -159,5 +172,19 @@ mod tests {
         let f = write_key_file(&format!("  {}  \n", hex::encode(key)));
         let loaded = load_operator_key_file(f.path()).unwrap();
         assert_eq!(loaded, key);
+    }
+
+    #[test]
+    fn from_bytes_rejects_wrong_length() {
+        match EciesDecrypter::from_bytes(vec![0u8; 31]) {
+            Err(CryptoError::InvalidKeyFile(msg)) => assert!(msg.contains("32 bytes")),
+            Err(other) => panic!("unexpected: {other:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn from_bytes_accepts_32_bytes() {
+        assert!(EciesDecrypter::from_bytes(vec![0u8; 32]).is_ok());
     }
 }

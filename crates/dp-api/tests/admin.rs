@@ -3,11 +3,12 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use dp_api::admin::AdminApiHandler;
+use dp_api::admin::{AdminApiHandler, KeyAdminHandler};
 use dp_api::auth::AuthCore;
 use dp_api::handler::ApiHandler;
 use dp_api::ratelimit::RateLimitCore;
 use dp_api::rest;
+use dp_crypto::MultiKeyDecrypter;
 use dp_engine::Engine;
 use dp_event::MemStore;
 use http_body_util::BodyExt;
@@ -21,11 +22,19 @@ fn make_app() -> axum::Router {
     let engine = Engine::new(store, Duration::from_secs(1));
     let handler = ApiHandler::new(engine.clone());
     let admin = AdminApiHandler::new(engine);
+    let key_admin = KeyAdminHandler::new(MultiKeyDecrypter::new());
 
     let auth = AuthCore::new(vec![TRADER_KEY.to_string()]);
     let admin_auth = AuthCore::new(vec![OPERATOR_KEY.to_string()]);
     let rl = RateLimitCore::new(1_000.0, 1_000.0, Duration::from_secs(60));
-    rest::router_with_admin(Arc::new(handler), Arc::new(admin), auth, admin_auth, rl)
+    rest::router_with_admin(
+        Arc::new(handler),
+        Arc::new(admin),
+        Arc::new(key_admin),
+        auth,
+        admin_auth,
+        rl,
+    )
 }
 
 async fn body_json(b: Body) -> serde_json::Value {

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use dp_aggregator::SubprocessAggregator;
-use dp_api::admin::AdminApiHandler;
+use dp_api::admin::{AdminApiHandler, KeyAdminHandler};
 use dp_api::auth::{AuthCore, AuthLayer};
 use dp_api::config::Config;
 use dp_api::handler::ApiHandler;
@@ -13,7 +13,9 @@ use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
-use dp_crypto::EciesDecrypter;
+use dp_crypto::{
+    decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
+};
 use dp_engine::{Engine, PairConfig, PairStatus};
 use dp_event::{FileStore, MemStore, PgStore, Store};
 use rust_decimal::Decimal;
@@ -45,14 +47,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
 
-    if let Some(key_path) = cfg.operator_key_path() {
-        // Fail-fast: surface bad operator-key paths at boot rather than on
-        // first decrypt attempt.
+    // Always construct a MultiKeyDecrypter and wire it to the engine
+    // so admin-time rotation does not require restarting the process.
+    // When no keys are configured the engine sees an empty decrypter
+    // and `place_order` rejects ciphertexts with a clear "no
+    // decryption keys registered" diagnostic — the same shape as a
+    // misconfiguration today.
+    let multi = MultiKeyDecrypter::new();
+    let mut multi_seeded = false;
+    if let Some(uris) = cfg.operator_key_uris_str() {
+        for raw in uris.split(',') {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let (uri, status, id) = parse_key_uri_spec(trimmed, multi_seeded)?;
+            // Operator-supplied `#id` suffixes must conform to the
+            // same shape the admin endpoint enforces — fail at boot
+            // rather than after a metric series is already poisoned.
+            validate_key_id(&id)?;
+            let decrypter = decrypter_from_uri(&uri)?;
+            multi.insert(KeyEntry::new(id.clone(), status, decrypter));
+            multi_seeded = true;
+            info!(
+                key_id = %id,
+                uri = %sanitize_uri_for_log(&uri),
+                status = %status,
+                "decrypter: ECIES key registered"
+            );
+        }
+    } else if let Some(key_path) = cfg.operator_key_path() {
+        // Fail-fast: surface bad operator-key paths at boot rather
+        // than on first decrypt attempt. Single-key legacy mode keeps
+        // working without touching DARKPOOL_OPERATOR_KEY_URIS.
         let dec = EciesDecrypter::from_file(key_path)?;
-        engine.set_decrypter(Arc::new(dec));
-        info!(key = %key_path, "decrypter: ECIES");
+        multi.insert(KeyEntry::new("primary", KeyStatus::Active, Arc::new(dec)));
+        multi_seeded = true;
+        info!(key = %key_path, "decrypter: ECIES (single-key)");
+    }
+    if multi_seeded {
+        engine.set_decrypter(Arc::new(multi.clone()));
     } else {
-        info!("decrypter: noop (set --operator-key to enable)");
+        info!(
+            "decrypter: noop (set --operator-key or --operator-key-uris to enable). \
+             Admin endpoint POST /v1/admin/keys can register keys at runtime."
+        );
+        // Still install the multi so the admin endpoint can register
+        // keys live without a restart; an empty multi rejects orders
+        // until at least one key is added.
+        engine.set_decrypter(Arc::new(multi.clone()));
     }
 
     if let Some(agg_bin) = cfg.aggregator_bin_path() {
@@ -105,18 +148,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     if let Some(rpc) = cfg.eth_rpc_url() {
-        // Eth submitter wiring requires an alloy provider builder. The current
-        // dp-settlement API takes a generic Provider; bootstrap glue for that
-        // path is deferred to a follow-up. The companion `eth_rpc` readiness
-        // probe is deferred with it — adding a probe today would only HTTP-ping
-        // a URL with no live provider behind it, which would mask a genuine
-        // RPC outage once the submitter ships.
-        warn!(
-            rpc = %rpc,
-            "DARKPOOL_ETH_RPC is set but submitter wiring is not yet implemented; \
-             running with noop submitter — auctions will NOT be settled on-chain. \
-             The `eth_rpc` readiness probe is also deferred until the submitter lands."
-        );
+        // Resolve the signer URI up-front so a typo in operator config
+        // fails at boot rather than on the first batch. Submitter
+        // construction beyond signer building still needs a fully-built
+        // alloy `Provider` (with the wallet attached); that path lands
+        // in a follow-up, but the signer side of issue #28 is wired now
+        // so KMS / age URIs surface their parsing errors at boot.
+        if let Some(uri) = cfg.signer_key_uri_str() {
+            let signer = dp_settlement::signer::from_uri(uri)?;
+            // Loud on purpose: with the signer resolved but no
+            // submitter installed in `Engine`, batches still settle on
+            // the noop path even though the operator configured both
+            // ETH_RPC and a signer URI. Surfaces at warn so a config
+            // audit catches it instead of discovering it via empty
+            // BatchSettled events on chain.
+            warn!(
+                rpc = %rpc,
+                signer = %sanitize_uri_for_log(uri),
+                address = %signer.address(),
+                "operator signer resolved but submitter wiring is NOT installed yet \
+                 (issue #28 follow-up). Auctions will NOT settle on-chain until the \
+                 alloy Provider+wallet+contract glue lands."
+            );
+        } else {
+            warn!(
+                rpc = %rpc,
+                "DARKPOOL_ETH_RPC is set but DARKPOOL_SIGNER_KEY_URI is not; \
+                 running with noop submitter — auctions will NOT be settled on-chain. \
+                 Set --signer-key-uri to point at a TxSigner backend."
+            );
+        }
     } else {
         info!("batch submitter: noop (set --eth-rpc to enable on-chain settlement)");
     }
@@ -161,8 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let handler = ApiHandler::new(engine.clone());
     let admin_handler = AdminApiHandler::new(engine.clone());
+    let key_admin_handler = KeyAdminHandler::new(multi.clone());
     let shared = Arc::new(handler.clone());
     let shared_admin = Arc::new(admin_handler.clone());
+    let shared_key_admin = Arc::new(key_admin_handler.clone());
 
     let grpc_cancel = cancel.clone();
     let grpc_addr = cfg.grpc_addr;
@@ -230,6 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let rest_app = rest::router_with_ops(
         shared,
         shared_admin,
+        shared_key_admin,
         auth_core,
         admin_auth_core,
         rl_core,
@@ -366,6 +430,101 @@ fn seed_pairs_from_json(
     Ok(())
 }
 
+/// Parse a single entry of `DARKPOOL_OPERATOR_KEY_URIS`. The wire
+/// format is `<uri>[#<id>][@<status>]`:
+/// - `uri` — required, passed verbatim to `decrypter_from_uri`.
+/// - `id` — optional operator-chosen handle. Defaults to a derived
+///   label (`key-<n>`) so log lines and metrics always carry a
+///   non-empty `key_id`.
+/// - `status` — optional; one of `active|rotating|sunset`. Defaults
+///   to `active` for the first entry of the list and `rotating` for
+///   every subsequent entry so a careless list never silently demotes
+///   the primary.
+fn parse_key_uri_spec(
+    spec: &str,
+    already_seeded: bool,
+) -> Result<(String, KeyStatus, String), Box<dyn std::error::Error + Send + Sync>> {
+    // Split off `@status` from the right so URIs containing an `@` in
+    // a query string (e.g. `awskms:alias/x?ciphertext=base64@@==`) are
+    // not mis-parsed. The `@status` suffix is positional and the only
+    // legal place for it.
+    let (head, status) = match spec.rsplit_once('@') {
+        Some((h, s)) if matches!(s, "active" | "rotating" | "sunset") => (h, parse_status_word(s)?),
+        // A status-shaped suffix (short, all-alphabetic) that isn't one
+        // of the three valid words is almost certainly an operator typo
+        // (e.g. `@actv`). Surfacing it here avoids the misleading
+        // "file not found" the URI loader would otherwise produce when
+        // it tries to open a path that ends in `@actv`.
+        Some((_, s)) if is_status_shaped(s) => {
+            return Err(format!(
+                "invalid key status suffix '@{s}': expected '@active', '@rotating', or '@sunset'"
+            )
+            .into());
+        }
+        _ => (
+            spec,
+            if already_seeded {
+                KeyStatus::Rotating
+            } else {
+                KeyStatus::Active
+            },
+        ),
+    };
+    let (uri, id) = match head.rsplit_once('#') {
+        Some((u, i)) if !i.is_empty() => (u.to_string(), i.to_string()),
+        _ => (head.to_string(), format!("key-{}", short_id_for_uri(head))),
+    };
+    Ok((uri, status, id))
+}
+
+/// `true` when `s` looks like a status word — short, non-empty, all
+/// ASCII alphabetic. Used to distinguish a typo'd `@status` suffix
+/// (e.g. `@actv`) from a legitimate non-status `@` inside a URI
+/// (e.g. an `=`-padded base64 ciphertext tail).
+fn is_status_shaped(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 16 && s.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn parse_status_word(s: &str) -> Result<KeyStatus, Box<dyn std::error::Error + Send + Sync>> {
+    match s {
+        "active" => Ok(KeyStatus::Active),
+        "rotating" => Ok(KeyStatus::Rotating),
+        "sunset" => Ok(KeyStatus::Sunset),
+        other => Err(format!("invalid key status: {other}").into()),
+    }
+}
+
+/// Stable 6-char id derived from the URI, used when the operator did
+/// not pin an explicit `#id`. Keeps log lines unique across keys
+/// without leaking URI internals.
+///
+/// Uses SHA-256 (not `DefaultHasher`) because the derived id is
+/// referenced from Prometheus labels and operator workflows: a
+/// toolchain upgrade silently switching the hash output would rename
+/// every auto-derived key id and break metric continuity. SHA-256 is
+/// stable across compiler versions by construction.
+fn short_id_for_uri(uri: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(uri.as_bytes());
+    // Six hex chars = three bytes of digest. That's 24 bits of entropy,
+    // ample for the realistic ≤ 3-key set the rotation runbook
+    // enforces; collisions only matter relative to the other auto-
+    // derived ids in the same process.
+    format!("{:02x}{:02x}{:02x}", digest[0], digest[1], digest[2])
+}
+
+/// Strip the query string from a key URI before logging. AWS KMS URIs
+/// carry the wrapped DEK as `?ciphertext=<base64>`; even though the
+/// ciphertext is only useful with the KMS key, treating it as
+/// log-grade plaintext is poor hygiene. Falls back to the original
+/// string when no query is present.
+fn sanitize_uri_for_log(uri: &str) -> String {
+    match uri.split_once('?') {
+        Some((head, _)) => format!("{head}?<redacted>"),
+        None => uri.to_string(),
+    }
+}
+
 /// Strip the `user:password@` userinfo from a DB connection URL so it can be
 /// logged without leaking credentials. Falls back to the original string when
 /// the URL doesn't follow the `scheme://userinfo@host` shape.
@@ -381,7 +540,66 @@ fn sanitize_db_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_db_url, validate_zk_key_dir};
+    use super::{parse_key_uri_spec, sanitize_db_url, sanitize_uri_for_log, validate_zk_key_dir};
+    use dp_crypto::KeyStatus;
+
+    #[test]
+    fn parse_key_uri_default_status_active_for_first() {
+        let (uri, status, _id) = parse_key_uri_spec("file:/k.hex", false).unwrap();
+        assert_eq!(uri, "file:/k.hex");
+        assert_eq!(status, KeyStatus::Active);
+    }
+
+    #[test]
+    fn parse_key_uri_default_status_rotating_for_subsequent() {
+        let (_uri, status, _id) = parse_key_uri_spec("file:/k.hex", true).unwrap();
+        assert_eq!(status, KeyStatus::Rotating);
+    }
+
+    #[test]
+    fn parse_key_uri_explicit_status_suffix() {
+        let (uri, status, _id) = parse_key_uri_spec("file:/k.hex@sunset", true).unwrap();
+        assert_eq!(uri, "file:/k.hex");
+        assert_eq!(status, KeyStatus::Sunset);
+    }
+
+    #[test]
+    fn parse_key_uri_typo_status_rejected() {
+        // The bug guard: `@actv` would otherwise be glued back onto the
+        // URI and surface as a confusing "file not found" instead of
+        // pointing the operator at the real mistake.
+        let err = parse_key_uri_spec("file:/k.hex@actv", false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("invalid key status suffix"), "got: {msg}");
+        assert!(msg.contains("actv"), "got: {msg}");
+    }
+
+    #[test]
+    fn parse_key_uri_base64_query_tail_not_misparsed() {
+        // The `@` inside a base64-padded query string ends with non-
+        // alphabetic chars, so it must fall through to the default
+        // status path rather than tripping the typo guard.
+        let (uri, status, _id) =
+            parse_key_uri_spec("awskms:alias/x?ciphertext=base64@@==", false).unwrap();
+        assert_eq!(uri, "awskms:alias/x?ciphertext=base64@@==");
+        assert_eq!(status, KeyStatus::Active);
+    }
+
+    #[test]
+    fn sanitize_uri_for_log_strips_query_string() {
+        assert_eq!(
+            sanitize_uri_for_log("awskms:alias/dp?ciphertext=AQID"),
+            "awskms:alias/dp?<redacted>"
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_for_log_passthrough_without_query() {
+        assert_eq!(
+            sanitize_uri_for_log("file:/etc/dp/key.hex"),
+            "file:/etc/dp/key.hex"
+        );
+    }
 
     #[test]
     fn strips_credentials() {

@@ -14,7 +14,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::admin::AdminApiHandler;
+use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
@@ -27,9 +27,11 @@ use crate::pb::{
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use dp_crypto::KeyStatus;
 
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
+pub type SharedKeyAdminHandler = Arc<KeyAdminHandler>;
 
 // Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
 // Rejects oversized requests before JSON parse + base64 decode burn CPU.
@@ -61,6 +63,22 @@ pub fn admin_router(handler: SharedAdminHandler) -> Router {
         .with_state(handler)
 }
 
+/// Key-rotation admin routes. Separate from `admin_router` because the
+/// state type differs (`KeyAdminHandler` vs `AdminApiHandler`) — axum's
+/// `with_state` is monomorphised per-router so merging them is the
+/// idiomatic way to keep both state types reachable from the same
+/// listener.
+pub fn key_admin_router(handler: SharedKeyAdminHandler) -> Router {
+    Router::new()
+        .route(
+            "/v1/admin/keys",
+            post(rest_register_key).get(rest_list_keys),
+        )
+        .route("/v1/admin/keys/:key_id", delete(rest_delete_key))
+        .route("/v1/admin/keys/:key_id/sunset", post(rest_sunset_key))
+        .with_state(handler)
+}
+
 pub fn router_with_middleware(
     handler: SharedHandler,
     auth: AuthCore,
@@ -77,6 +95,7 @@ pub fn router_with_middleware(
 pub fn router_with_admin(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
+    key_admin_handler: SharedKeyAdminHandler,
     auth: AuthCore,
     admin_auth: AuthCore,
     ratelimit: RateLimitCore,
@@ -85,6 +104,7 @@ pub fn router_with_admin(
         .layer(from_fn_with_state(ratelimit.clone(), ratelimit_axum_mw))
         .layer(from_fn_with_state(auth, auth_axum_mw));
     let admin = admin_router(admin_handler)
+        .merge(key_admin_router(key_admin_handler))
         .layer(from_fn_with_state(ratelimit, ratelimit_axum_mw))
         .layer(from_fn_with_state(admin_auth, auth_axum_mw));
     public.merge(admin)
@@ -117,13 +137,21 @@ pub fn ops_router(state: OpsState) -> Router {
 pub fn router_with_ops(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
+    key_admin_handler: SharedKeyAdminHandler,
     auth: AuthCore,
     admin_auth: AuthCore,
     ratelimit: RateLimitCore,
     ops: OpsState,
 ) -> Router {
-    let base = router_with_admin(handler, admin_handler, auth, admin_auth, ratelimit)
-        .merge(ops_router(ops));
+    let base = router_with_admin(
+        handler,
+        admin_handler,
+        key_admin_handler,
+        auth,
+        admin_auth,
+        ratelimit,
+    )
+    .merge(ops_router(ops));
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
     // path. Desired request-side order is SetRequestId → Trace → Propagate,
@@ -570,6 +598,124 @@ async fn rest_list_pairs_admin(
     }))
 }
 
+// ---------- key-rotation admin handlers ----------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterKeyJson {
+    id: String,
+    uri: String,
+    /// Optional, defaults to `rotating` so a careless `POST` does not
+    /// silently demote the current `active` key. Operators promote by
+    /// re-POSTing the active id with `status="active"`.
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyInfoJson {
+    id: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListKeysRespJson {
+    keys: Vec<KeyInfoJson>,
+}
+
+fn parse_status(s: Option<&str>) -> Result<KeyStatus, ApiError> {
+    match s.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("active") => Ok(KeyStatus::Active),
+        Some("rotating") | None | Some("") => Ok(KeyStatus::Rotating),
+        Some("sunset") => Ok(KeyStatus::Sunset),
+        Some(other) => Err(ApiError(tonic::Status::invalid_argument(format!(
+            "invalid status: {other} (expected active|rotating|sunset)"
+        )))),
+    }
+}
+
+fn key_admin_err(e: AdminKeyError) -> ApiError {
+    use tonic::Status;
+    match e {
+        AdminKeyError::Invalid(m) => ApiError(Status::invalid_argument(m)),
+        AdminKeyError::NotFound(m) => ApiError(Status::not_found(m)),
+        AdminKeyError::Resolve(m) => ApiError(Status::failed_precondition(m)),
+    }
+}
+
+async fn rest_register_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Json(body): Json<RegisterKeyJson>,
+) -> Result<Json<KeyInfoJson>, ApiError> {
+    let id = body.id.trim().to_owned();
+    let uri = body.uri.trim();
+    if id.is_empty() {
+        return Err(key_admin_err(AdminKeyError::Invalid(
+            "id is required".into(),
+        )));
+    }
+    if uri.is_empty() {
+        return Err(key_admin_err(AdminKeyError::Invalid(
+            "uri is required".into(),
+        )));
+    }
+    let status = parse_status(body.status.as_deref())?;
+    // `upsert` does blocking I/O (file read for `file:`, age decrypt,
+    // and — once wired — an AWS KMS round-trip for `awskms:`). Run it
+    // off the tokio worker so a slow URI cannot stall unrelated
+    // requests sharing the worker pool.
+    let handler = h.clone();
+    let upsert_id = id.clone();
+    let upsert_uri = uri.to_owned();
+    tokio::task::spawn_blocking(move || handler.upsert(upsert_id, &upsert_uri, status))
+        .await
+        .map_err(|e| ApiError(tonic::Status::internal(format!("upsert join error: {e}"))))?
+        .map_err(key_admin_err)?;
+    Ok(Json(KeyInfoJson {
+        id,
+        status: status.to_string(),
+    }))
+}
+
+async fn rest_list_keys(State(h): State<SharedKeyAdminHandler>) -> Json<ListKeysRespJson> {
+    let keys = h
+        .list()
+        .into_iter()
+        .map(|(id, status)| KeyInfoJson {
+            id,
+            status: status.to_string(),
+        })
+        .collect();
+    Json(ListKeysRespJson { keys })
+}
+
+async fn rest_delete_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Path(key_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if h.remove(&key_id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(key_admin_err(AdminKeyError::NotFound(key_id)))
+    }
+}
+
+async fn rest_sunset_key(
+    State(h): State<SharedKeyAdminHandler>,
+    Path(key_id): Path<String>,
+) -> Result<Json<KeyInfoJson>, ApiError> {
+    if h.sunset(&key_id) {
+        Ok(Json(KeyInfoJson {
+            id: key_id,
+            status: KeyStatus::Sunset.to_string(),
+        }))
+    } else {
+        Err(key_admin_err(AdminKeyError::NotFound(key_id)))
+    }
+}
+
 // ---------- base64 codec for JSON ----------
 
 mod base64_bytes {
@@ -808,5 +954,319 @@ mod tests {
         assert_eq!(json.pair, "BTC/USD");
         assert_eq!(json.submitted_at_unix, "1000");
         assert_eq!(json.expires_at_unix, "2000");
+    }
+
+    // ---------- key-rotation REST coverage ----------
+
+    use crate::admin::{AdminKeyError, KeyAdminHandler};
+    use axum::body::to_bytes;
+    use axum::http::Request;
+    use dp_crypto::MultiKeyDecrypter;
+    use std::io::Write;
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+    use tower::ServiceExt;
+
+    fn write_hex_key_file(content: &[u8; 32]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(hex::encode(content).as_bytes()).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn key_admin_app() -> (axum::Router, NamedTempFile) {
+        let handler = Arc::new(KeyAdminHandler::new(MultiKeyDecrypter::new()));
+        let f = write_hex_key_file(&[0xAB; 32]);
+        (key_admin_router(handler), f)
+    }
+
+    fn parse_status_ok(s: Option<&str>) -> KeyStatus {
+        match parse_status(s) {
+            Ok(s) => s,
+            Err(_) => panic!("expected Ok for {:?}", s),
+        }
+    }
+
+    #[test]
+    fn parse_status_active() {
+        assert_eq!(parse_status_ok(Some("active")), KeyStatus::Active);
+        assert_eq!(parse_status_ok(Some("  ACTIVE ")), KeyStatus::Active);
+    }
+
+    #[test]
+    fn parse_status_rotating_is_default() {
+        assert_eq!(parse_status_ok(None), KeyStatus::Rotating);
+        assert_eq!(parse_status_ok(Some("")), KeyStatus::Rotating);
+        assert_eq!(parse_status_ok(Some("rotating")), KeyStatus::Rotating);
+    }
+
+    #[test]
+    fn parse_status_sunset() {
+        assert_eq!(parse_status_ok(Some("sunset")), KeyStatus::Sunset);
+    }
+
+    #[test]
+    fn parse_status_invalid_returns_400() {
+        let err = match parse_status(Some("retired")) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn key_admin_err_maps_invalid_to_400() {
+        let resp = key_admin_err(AdminKeyError::Invalid("bad".into())).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn key_admin_err_maps_not_found_to_404() {
+        let resp = key_admin_err(AdminKeyError::NotFound("k".into())).into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn key_admin_err_maps_resolve_to_400() {
+        let resp = key_admin_err(AdminKeyError::Resolve("nope".into())).into_response();
+        // FailedPrecondition maps to BAD_REQUEST in the table above.
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn body_bytes(resp: Response) -> Vec<u8> {
+        to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes")
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn rest_register_key_round_trip() {
+        let (app, f) = key_admin_app();
+        let uri = format!("file:{}", f.path().display());
+        let body = serde_json::json!({"id": "k-2026", "uri": uri, "status": "active"});
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["id"], "k-2026");
+        assert_eq!(v["status"], "active");
+
+        // List should now reflect the registered key.
+        let list_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/admin/keys")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let bytes = body_bytes(list_resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["keys"][0]["id"], "k-2026");
+        assert_eq!(v["keys"][0]["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn rest_register_key_rejects_blank_id() {
+        let (app, _f) = key_admin_app();
+        let body = serde_json::json!({"id": "  ", "uri": "file:/tmp/x"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rest_register_key_rejects_blank_uri() {
+        let (app, _f) = key_admin_app();
+        let body = serde_json::json!({"id": "k", "uri": "   "});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rest_register_key_rejects_unknown_scheme() {
+        let (app, _f) = key_admin_app();
+        let body = serde_json::json!({"id": "k", "uri": "vault://nope"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        // Resolve -> FailedPrecondition -> 400.
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rest_register_key_rejects_invalid_status() {
+        let (app, f) = key_admin_app();
+        let uri = format!("file:{}", f.path().display());
+        let body = serde_json::json!({"id": "k", "uri": uri, "status": "retired"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rest_sunset_key_round_trip() {
+        let (app, f) = key_admin_app();
+        let uri = format!("file:{}", f.path().display());
+
+        // Register first.
+        let body = serde_json::json!({"id": "to-sunset", "uri": uri, "status": "active"});
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("register");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Sunset.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys/to-sunset/sunset")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("sunset");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["status"], "sunset");
+    }
+
+    #[tokio::test]
+    async fn rest_sunset_unknown_key_returns_404() {
+        let (app, _f) = key_admin_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys/missing/sunset")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn rest_delete_key_round_trip() {
+        let (app, f) = key_admin_app();
+        let uri = format!("file:{}", f.path().display());
+        let body = serde_json::json!({"id": "doomed", "uri": uri, "status": "sunset"});
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("register");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/admin/keys/doomed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("delete");
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // Second delete returns 404 once the entry is gone.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/admin/keys/doomed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("delete-again");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn rest_healthz_returns_ok() {
+        async fn run() -> Response {
+            rest_healthz().await.into_response()
+        }
+        let resp = run().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["status"], "ok");
     }
 }

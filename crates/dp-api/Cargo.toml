@@ -49,9 +49,11 @@ http.workspace = true
 http-body.workspace = true
 humantime.workspace = true
 futures-util.workspace = true
+sha2 = { workspace = true }
 
 [dev-dependencies]
 alloy-primitives.workspace = true
+hex.workspace = true
 http-body-util.workspace = true
 serial_test.workspace = true
 tempfile = "3"
