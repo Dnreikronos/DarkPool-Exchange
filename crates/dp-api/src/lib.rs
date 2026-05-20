@@ -11,4 +11,5 @@ pub mod pb;
 pub mod ratelimit;
 pub mod readiness;
 pub mod rest;
+pub mod tls;
 pub mod validation;
