@@ -14,6 +14,11 @@ contract DeployScript is Script {
         address feeRecipient = vm.envAddress("FEE_RECIPIENT");
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         string memory vkPath = vm.envString("VK_JSON_PATH");
+        // SEC1-encoded operator ECIES pubkey (33-byte compressed or
+        // 65-byte uncompressed). Required at deploy: the DarkPool
+        // constructor refuses to initialise without one so clients can
+        // discover the encryption key from chain state alone.
+        bytes memory operatorPubkey = vm.parseBytes(vm.envString("OPERATOR_PUBKEY_HEX"));
         address deployer = vm.addr(deployerKey);
         // VERIFIER_GOVERNOR: address that can rotate the verifier backend.
         // In production this should be a TimelockController (or a multisig
@@ -43,8 +48,9 @@ contract DeployScript is Script {
         console.log("VerifierProxy:", address(proxy));
         console.log("VerifierProxy owner:", governor);
 
-        DarkPool pool = new DarkPool(address(proxy), feeRecipient);
+        DarkPool pool = new DarkPool(address(proxy), feeRecipient, operatorPubkey);
         console.log("DarkPool:", address(pool));
+        console.log("OperatorPubkey bytes:", operatorPubkey.length);
 
         vm.stopBroadcast();
     }

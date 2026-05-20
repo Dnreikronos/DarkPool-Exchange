@@ -27,19 +27,43 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     uint256 public minPrice;
     uint256 public positionLimit;
 
+    /// @notice SEC1-encoded ECIES public key advertised to clients.
+    /// Updated via `setOperatorPubkey`; the off-chain decrypter
+    /// continues to accept the previous key until in-flight orders
+    /// drain. Stored as raw bytes (rather than uint256 pairs) so
+    /// SEC1 compressed (33-byte) and uncompressed (65-byte) encodings
+    /// can both be served verbatim to clients.
+    bytes public operatorPubkey;
+
+    /// @notice Block timestamp at which `operatorPubkey` becomes the
+    /// primary. Pure metadata — the contract does not gate any state
+    /// transition on this value; it exists so clients can avoid the
+    /// thundering-herd encryption-to-old-key window during a rotation.
+    uint64 public operatorPubkeyEffectiveAt;
+
     modifier onlyOperator() {
         require(operators[msg.sender], "not operator");
         _;
     }
 
-    constructor(address verifier_, address feeRecipient_) Ownable(msg.sender) {
+    constructor(address verifier_, address feeRecipient_, bytes memory operatorPubkey_)
+        Ownable(msg.sender)
+    {
         require(verifier_ != address(0), "zero verifier");
         // The verifier slot is immutable — a non-contract address would brick
         // submitBatch with no recovery path, so reject it at construction.
         require(verifier_.code.length > 0, "verifier has no code");
         require(feeRecipient_ != address(0), "zero fee recipient");
+        require(
+            operatorPubkey_.length == 33 || operatorPubkey_.length == 65,
+            "bad pubkey len"
+        );
+        require(_validSec1Tag(operatorPubkey_), "bad pubkey tag");
         verifier = IVerifier(verifier_);
         feeRecipient = feeRecipient_;
+        operatorPubkey = operatorPubkey_;
+        operatorPubkeyEffectiveAt = uint64(block.timestamp);
+        emit OperatorPubkeyUpdated(bytes(""), operatorPubkey_, uint64(block.timestamp));
     }
 
     function deposit(address token, uint256 amount) external whenNotPaused {
@@ -140,6 +164,34 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     function setFeeRecipient(address recipient) external onlyOwner {
         require(recipient != address(0), "zero address");
         feeRecipient = recipient;
+    }
+
+    /// @notice Publish a new operator ECIES pubkey.
+    /// @dev The off-chain decrypter continues to accept the old key for
+    ///      `MultiKeyDecrypter`-driven drain; this on-chain pointer is
+    ///      the discovery surface for clients. SEC1 length check is the
+    ///      same as the client-side validator (compressed 33 or
+    ///      uncompressed 65 bytes) so an operator typo surfaces here
+    ///      rather than as silent message loss.
+    function setOperatorPubkey(bytes calldata newPubkey, uint64 effectiveAt) external onlyOwner {
+        require(newPubkey.length == 33 || newPubkey.length == 65, "bad pubkey len");
+        require(_validSec1Tag(newPubkey), "bad pubkey tag");
+        bytes memory old = operatorPubkey;
+        operatorPubkey = newPubkey;
+        operatorPubkeyEffectiveAt = effectiveAt;
+        emit OperatorPubkeyUpdated(old, newPubkey, effectiveAt);
+    }
+
+    /// @dev SEC1 leading-byte check. Compressed (33 bytes) uses 0x02
+    /// or 0x03 to encode the Y parity; uncompressed (65 bytes) uses
+    /// 0x04. Length is the caller's responsibility — callers must
+    /// gate on `len == 33 || len == 65` before invoking this.
+    function _validSec1Tag(bytes memory pubkey) internal pure returns (bool) {
+        bytes1 tag = pubkey[0];
+        if (pubkey.length == 33) {
+            return tag == 0x02 || tag == 0x03;
+        }
+        return tag == 0x04;
     }
 
     function pause() external onlyOwner {

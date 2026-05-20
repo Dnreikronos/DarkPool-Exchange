@@ -45,9 +45,14 @@ contract DarkPoolTest is Test {
     address trader1 = address(0x10);
     address trader2 = address(0x20);
 
+    // 33-byte SEC1-compressed placeholder; the leading byte is the
+    // compression tag (02/03) followed by 32 bytes of X coordinate.
+    bytes initialPubkey =
+        hex"0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798";
+
     function setUp() public {
         verifier = new MockVerifier(true);
-        pool = new DarkPool(address(verifier), feeRecipient);
+        pool = new DarkPool(address(verifier), feeRecipient, initialPubkey);
         pool.addOperator(operator);
 
         baseToken = new MockERC20("Base", "BASE", 18);
@@ -180,7 +185,7 @@ contract DarkPoolTest is Test {
 
     function test_submitBatch_invalidProof_reverts() public {
         MockVerifier badVerifier = new MockVerifier(false);
-        DarkPool badPool = new DarkPool(address(badVerifier), feeRecipient);
+        DarkPool badPool = new DarkPool(address(badVerifier), feeRecipient, initialPubkey);
         badPool.addOperator(operator);
 
         uint256[6] memory inputs;
@@ -347,19 +352,120 @@ contract DarkPoolTest is Test {
 
     function test_constructor_zeroVerifier_reverts() public {
         vm.expectRevert("zero verifier");
-        new DarkPool(address(0), feeRecipient);
+        new DarkPool(address(0), feeRecipient, initialPubkey);
     }
 
     function test_constructor_eoaVerifier_reverts() public {
         // The verifier slot is immutable, so a non-contract address (EOA or
         // never-deployed) would permanently brick submitBatch.
         vm.expectRevert("verifier has no code");
-        new DarkPool(address(0xBEEF), feeRecipient);
+        new DarkPool(address(0xBEEF), feeRecipient, initialPubkey);
     }
 
     function test_constructor_zeroFeeRecipient_reverts() public {
         vm.expectRevert("zero fee recipient");
-        new DarkPool(address(verifier), address(0));
+        new DarkPool(address(verifier), address(0), initialPubkey);
+    }
+
+    function test_constructor_emptyPubkey_reverts() public {
+        vm.expectRevert("bad pubkey len");
+        new DarkPool(address(verifier), feeRecipient, hex"");
+    }
+
+    function test_constructor_pubkeyTooShort_reverts() public {
+        // 32 bytes — one byte short of compressed SEC1.
+        bytes memory bad = new bytes(32);
+        vm.expectRevert("bad pubkey len");
+        new DarkPool(address(verifier), feeRecipient, bad);
+    }
+
+    function test_constructor_emitsInitialPubkeyEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit IDarkPool.OperatorPubkeyUpdated(bytes(""), initialPubkey, uint64(block.timestamp));
+        new DarkPool(address(verifier), feeRecipient, initialPubkey);
+    }
+
+    // --- setOperatorPubkey ---
+
+    function test_setOperatorPubkey_storesAndEmits() public {
+        // Uncompressed SEC1 — 65 bytes (0x04 prefix + 32-byte X + 32-byte Y).
+        bytes memory next = new bytes(65);
+        next[0] = 0x04;
+        for (uint256 i = 1; i < 65; i++) {
+            next[i] = bytes1(uint8(i));
+        }
+        uint64 effectiveAt = uint64(block.timestamp + 600);
+
+        vm.expectEmit(false, false, false, true);
+        emit IDarkPool.OperatorPubkeyUpdated(initialPubkey, next, effectiveAt);
+        pool.setOperatorPubkey(next, effectiveAt);
+
+        assertEq(pool.operatorPubkey(), next);
+        assertEq(pool.operatorPubkeyEffectiveAt(), effectiveAt);
+    }
+
+    function test_setOperatorPubkey_notOwner_reverts() public {
+        bytes memory next = new bytes(33);
+        next[0] = 0x02;
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.setOperatorPubkey(next, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_badLen_reverts() public {
+        // Neither 33 nor 65 bytes — must be rejected so a typo doesn't
+        // brick discovery silently.
+        bytes memory bad = new bytes(48);
+        vm.expectRevert("bad pubkey len");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_badCompressedTag_reverts() public {
+        // 33 bytes with a tag byte that isn't 0x02 or 0x03 is not a
+        // valid SEC1 compressed point — reject so an operator typo
+        // doesn't silently brick client discovery.
+        bytes memory bad = new bytes(33);
+        for (uint256 i = 0; i < 33; i++) {
+            bad[i] = 0xff;
+        }
+        vm.expectRevert("bad pubkey tag");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_badUncompressedTag_reverts() public {
+        // 65 bytes must start with 0x04; anything else is malformed.
+        bytes memory bad = new bytes(65);
+        bad[0] = 0x05;
+        vm.expectRevert("bad pubkey tag");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_acceptsBothCompressedTags() public {
+        // 0x02 and 0x03 (Y-parity) must both be accepted.
+        bytes memory withTwo = new bytes(33);
+        withTwo[0] = 0x02;
+        for (uint256 i = 1; i < 33; i++) {
+            withTwo[i] = bytes1(uint8(i));
+        }
+        pool.setOperatorPubkey(withTwo, uint64(block.timestamp));
+        assertEq(pool.operatorPubkey(), withTwo);
+
+        bytes memory withThree = new bytes(33);
+        withThree[0] = 0x03;
+        for (uint256 i = 1; i < 33; i++) {
+            withThree[i] = bytes1(uint8(i));
+        }
+        pool.setOperatorPubkey(withThree, uint64(block.timestamp));
+        assertEq(pool.operatorPubkey(), withThree);
+    }
+
+    function test_constructor_badPubkeyTag_reverts() public {
+        bytes memory bad = new bytes(33);
+        for (uint256 i = 0; i < 33; i++) {
+            bad[i] = 0xff;
+        }
+        vm.expectRevert("bad pubkey tag");
+        new DarkPool(address(verifier), feeRecipient, bad);
     }
 
     // --- Immutable verifier ---
