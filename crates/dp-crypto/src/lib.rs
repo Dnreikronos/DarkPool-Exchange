@@ -1,10 +1,12 @@
 mod decrypted_order;
 mod decrypter;
 mod ecies_decrypter;
+mod multi_key_decrypter;
 
 pub use decrypted_order::DecryptedOrder;
 pub use decrypter::{Decrypter, NoopDecrypter};
 pub use ecies_decrypter::{load_operator_key_file, EciesDecrypter};
+pub use multi_key_decrypter::{KeyEntry, KeyStatus, MultiKeyDecrypter};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
