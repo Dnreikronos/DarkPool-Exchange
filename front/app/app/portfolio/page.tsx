@@ -1,4 +1,4 @@
-import { PortfolioPanel } from '@/components/trade/portfolio'
+import { PortfolioPanel } from './_components'
 
 export const metadata = {
   title: 'Portfolio · DarkPool',

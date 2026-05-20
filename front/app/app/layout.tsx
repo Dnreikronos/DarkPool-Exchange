@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { ConnectButton } from '@/components/trade/ConnectButton'
+import { ConnectButton } from './_components/ConnectButton'
 import { AuctionStrip } from './_shell/AuctionStrip'
 import { ArbitrumHex } from './_shell/icons'
 import { PairSelector } from './_shell/PairSelector'
