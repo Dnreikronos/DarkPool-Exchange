@@ -150,11 +150,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // so KMS / age URIs surface their parsing errors at boot.
         if let Some(uri) = cfg.signer_key_uri_str() {
             let signer = dp_settlement::signer::from_uri(uri)?;
-            info!(
+            // Loud on purpose: with the signer resolved but no
+            // submitter installed in `Engine`, batches still settle on
+            // the noop path even though the operator configured both
+            // ETH_RPC and a signer URI. Surfaces at warn so a config
+            // audit catches it instead of discovering it via empty
+            // BatchSettled events on chain.
+            warn!(
                 rpc = %rpc,
                 signer = %sanitize_uri_for_log(uri),
                 address = %signer.address(),
-                "operator signer resolved (full submitter wiring still pending)"
+                "operator signer resolved but submitter wiring is NOT installed yet \
+                 (issue #28 follow-up). Auctions will NOT settle on-chain until the \
+                 alloy Provider+wallet+contract glue lands."
             );
         } else {
             warn!(
