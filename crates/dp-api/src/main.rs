@@ -13,7 +13,9 @@ use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
-use dp_crypto::{decrypter_from_uri, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter};
+use dp_crypto::{
+    decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
+};
 use dp_engine::{Engine, PairConfig, PairStatus};
 use dp_event::{FileStore, MemStore, PgStore, Store};
 use rust_decimal::Decimal;
@@ -60,6 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 continue;
             }
             let (uri, status, id) = parse_key_uri_spec(trimmed, multi_seeded)?;
+            // Operator-supplied `#id` suffixes must conform to the
+            // same shape the admin endpoint enforces — fail at boot
+            // rather than after a metric series is already poisoned.
+            validate_key_id(&id)?;
             let decrypter = decrypter_from_uri(&uri)?;
             multi.insert(KeyEntry::new(id.clone(), status, decrypter));
             multi_seeded = true;

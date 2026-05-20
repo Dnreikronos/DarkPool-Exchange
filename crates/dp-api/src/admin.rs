@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use alloy_primitives::Address;
-use dp_crypto::{decrypter_from_uri, KeyEntry, KeyStatus, MultiKeyDecrypter};
+use dp_crypto::{decrypter_from_uri, validate_key_id, KeyEntry, KeyStatus, MultiKeyDecrypter};
 use dp_engine::{Engine, PairConfig, PairStatus};
 use rust_decimal::Decimal;
 use tonic::{Request, Response, Status};
@@ -45,6 +45,10 @@ impl KeyAdminHandler {
     /// endpoint can promote (Rotating → Active) or demote
     /// (Active → Rotating) without a separate route.
     pub fn upsert(&self, id: String, uri: &str, status: KeyStatus) -> Result<(), AdminKeyError> {
+        // Gate at admission so a bad id never reaches the metric label
+        // set. Auto-derived ids (`key-XXXXXX`, `primary`) pass by
+        // construction; operator-supplied ids must conform.
+        validate_key_id(&id).map_err(|e| AdminKeyError::Invalid(e.to_string()))?;
         let decrypter =
             decrypter_from_uri(uri).map_err(|e| AdminKeyError::Resolve(e.to_string()))?;
         self.multi.insert(KeyEntry::new(id, status, decrypter));
