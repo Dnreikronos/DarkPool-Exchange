@@ -139,19 +139,28 @@ fn generate(uri: &str, force: bool) -> Result<(), String> {
     let sk = SigningKey::random(&mut rand::thread_rng());
     let sk_bytes = sk.to_bytes();
     let pk_compressed = sk.verifying_key().to_sec1_bytes();
-    fs::write(&path, hex::encode(sk_bytes))
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
-    // Tight permissions on POSIX — the secret is the encryption key
-    // for every order placed against this operator. On non-POSIX
-    // (Windows) skip silently.
+    // Atomic 0600 create on POSIX — write-then-chmod briefly leaves
+    // the secret world-readable on shared hosts. On non-POSIX
+    // (Windows) fall back to plain write; ACL hardening is the
+    // operator's responsibility there.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&path)
-            .map_err(|e| e.to_string())?
-            .permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("open {}: {e}", path.display()))?;
+        f.write_all(hex::encode(sk_bytes).as_bytes())
+            .map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&path, hex::encode(sk_bytes))
+            .map_err(|e| format!("write {}: {e}", path.display()))?;
     }
     println!("{}", hex::encode(&pk_compressed));
     eprintln!(
