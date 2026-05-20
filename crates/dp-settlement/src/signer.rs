@@ -18,6 +18,7 @@ use std::sync::Arc;
 use alloy_network::EthereumWallet;
 use alloy_primitives::Address;
 use alloy_signer_local::PrivateKeySigner;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::SettlementError;
 
@@ -77,14 +78,18 @@ pub fn from_uri(uri: &str) -> Result<Arc<dyn TxSigner>, SettlementError> {
         return Ok(Arc::new(signer));
     }
     if let Some(path) = uri.strip_prefix("age:") {
-        let pass = std::env::var("DARKPOOL_SIGNER_PASSPHRASE").map_err(|_| {
+        // Wrap the passphrase and decrypted hex so error/early-return
+        // paths don't leak the secret into the heap allocator's free
+        // list before the next allocation overwrites it.
+        let pass = Zeroizing::new(std::env::var("DARKPOOL_SIGNER_PASSPHRASE").map_err(|_| {
             SettlementError::Signer(
                 "age: signer URI requires DARKPOOL_SIGNER_PASSPHRASE env var".into(),
             )
-        })?;
-        let hex = decrypt_age_file(path, &pass)
+        })?);
+        let mut hex = decrypt_age_file(path, &pass)
             .map_err(|e| SettlementError::Signer(format!("age signer: {e}")))?;
         let signer = LocalTxSigner::from_hex(&hex)?;
+        hex.zeroize();
         return Ok(Arc::new(signer));
     }
     if let Some(rest) = uri.strip_prefix("awskms:") {

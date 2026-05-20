@@ -24,6 +24,7 @@ hex = { workspace = true }
 tracing = "0.1"
 futures-util = "0.3"
 age = { version = "0.10", default-features = false, features = ["armor"] }
+zeroize = "1.8"
 
 [features]
 default = []
