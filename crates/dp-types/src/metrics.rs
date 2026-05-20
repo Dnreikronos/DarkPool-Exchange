@@ -13,7 +13,8 @@ pub const M_BATCH_SUBMISSION_DURATION: &str = "darkpool_batch_submission_duratio
 pub const M_SETTLEMENT_CONFIRMATIONS: &str = "darkpool_settlement_confirmations_total";
 pub const M_ACTIVE_ORDERS: &str = "darkpool_active_orders";
 pub const M_EVENT_LOG_SIZE_BYTES: &str = "darkpool_event_log_size_bytes";
-/// Per-attempt ECIES decryption count, labeled by `key_id` and `outcome`
-/// (`success` | `failure`). Operators watch the Sunset key's success
-/// series go to zero before deleting it during a rotation drain.
+/// Per-attempt ECIES decryption count, labeled by `key_id`, `status`,
+/// and `outcome` (`success` | `failure`). Operators watch the Sunset
+/// key's success series go to zero before deleting it during a rotation
+/// drain.
 pub const M_CRYPTO_DECRYPT_TOTAL: &str = "darkpool_crypto_decrypt_total";
