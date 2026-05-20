@@ -113,6 +113,50 @@ in the repo root for the longer story.
   to `apps/trading/src/...` as `front/...`.** The epic carries the
   mapping table.
 
+#### Where code lives (route co-location)
+
+The tree follows the [Next.js App Router co-location pattern](https://nextjs.org/docs/app/getting-started/project-structure#colocation):
+**route-scoped code lives inside the route**, in a `_`-prefixed
+private folder (Next won't try to route those). Only landing-page
+components and genuinely shared primitives stay at `front/components/`.
+
+```
+front/
+├── app/
+│   ├── page.tsx                       # landing (/)
+│   ├── layout.tsx
+│   ├── globals.css
+│   └── app/                           # trading app (/app/*)
+│       ├── layout.tsx
+│       ├── _components/               # shared by every /app/* route
+│       │   └── ConnectButton.tsx      #   (e.g. wallet button in the chrome)
+│       ├── _shell/                    # banner / rail / pair selector
+│       ├── trade/
+│       │   ├── page.tsx
+│       │   └── _components/           # owned by /app/trade only
+│       │       ├── Shell.tsx
+│       │       ├── balances/  charts/  deposit/  entry/  orderbook/  tape/
+│       │       └─ ↳ each panel folder keeps its own components, hooks,
+│       │          utils and tests together — they are tightly coupled
+│       │          and split would scatter related code for no benefit.
+│       └── portfolio/
+│           ├── page.tsx
+│           └── _components/           # owned by /app/portfolio only
+├── components/                        # ONLY landing + truly shared things
+│   ├── ui/                            #   shadcn primitives — used everywhere
+│   ├── NumericText.tsx                #   shared between landing and panels
+│   └── Hero.tsx Nav.tsx Footer.tsx …  #   landing-page only
+└── lib/                               # shared utilities (sdk, wallet, mock-store, units…)
+```
+
+Import conventions for moved code:
+- Inside a route folder, prefer **relative** imports (`./_components/X`,
+  `../balances/format-balance`) for siblings — short and refactor-friendly.
+- Reach for the `@/` absolute alias when crossing route boundaries
+  (`@/components/ui/button`, `@/lib/units`, `@/components/NumericText`).
+- Vitest needs the alias too — `front/vitest.config.ts` mirrors the
+  `@/*` mapping from `tsconfig.json`. Don't strip it.
+
 ### Locked-in product decisions
 - **MVP scope:** trading app only. Landing page is out of scope.
 - **Pairs:** single-pair `ETH/USDC` hardcoded. Multi-pair is gated on
@@ -154,6 +198,13 @@ in the repo root for the longer story.
   add fallbacks or feature flags for the old `front/` — it's gone.
 - **Lockfile sanity:** if `package.json` changed, run the full install
   before committing the lockfile.
+- **Co-locate route-scoped code.** A panel, hook, util, or test used
+  by exactly one route lives inside that route, under a `_`-prefixed
+  folder (see the "Where code lives" tree above). `front/components/`
+  is reserved for landing-page components and shared primitives
+  (`ui/`, `NumericText`). Adding `front/components/<feature>/` for a
+  single panel is the wrong shape — put it in
+  `front/app/app/<route>/_components/<feature>/` instead.
 
 ---
 
