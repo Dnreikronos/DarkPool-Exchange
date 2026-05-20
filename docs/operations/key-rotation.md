@@ -31,9 +31,16 @@ prints the SEC1-compressed pubkey to stdout. Capture the pubkey hex —
 you will hand it to the contract in step 2.
 
 Use any `KeySource` URI scheme for storage of record. `file:` is the
-only scheme `generate` writes to directly; for `age:` or `awskms:`
-storage, wrap the resulting file with the appropriate tooling before
-distributing it.
+only scheme `generate` writes to directly; for `age:` storage, wrap the
+resulting file with `age -p` before distributing it and register it as
+`age:/path/...` once `DARKPOOL_KEY_PASSPHRASE` is set on the operator
+host.
+
+> ⚠️ **`awskms:` is scaffold-only.** The URI scheme is reserved and the
+> feature-gated backend returns `not yet implemented`. Do **not** use
+> `awskms:` in a live rotation until the AWS SDK wire-up lands in a
+> follow-up to issue #28 — registration will fail at the URI-resolution
+> step and the rotation will abort with the new key never installed.
 
 ## 2. Publish the new pubkey on-chain
 
