@@ -39,6 +39,10 @@ alloy-rpc-types = "1"
 alloy-transport = "1"
 tonic = "0.12"
 tonic-build = "0.12"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
 prost = "0.13"
 prost-types = "0.13"
 axum = "0.7"
