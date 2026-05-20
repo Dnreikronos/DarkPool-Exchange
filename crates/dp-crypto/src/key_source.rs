@@ -214,6 +214,41 @@ mod tests {
     }
 
     #[test]
+    fn file_uri_wrong_secret_length_errors() {
+        // 16 bytes — half of what secp256k1 expects.
+        let f = write_hex_key(&hex::encode([0u8; 16]));
+        match KeySource::from_uri(&format!("file:{}", f.path().display())) {
+            Err(CryptoError::InvalidKeyFile(msg)) => assert!(msg.contains("32 bytes")),
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn parse_hex_secret_rejects_non_utf8() {
+        let bytes = [0xff_u8, 0xfe, 0x00, 0x80];
+        match parse_hex_secret(&bytes) {
+            Err(CryptoError::KeySource(msg)) => assert!(msg.contains("non-utf8")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_hex_secret_strips_0x_prefix() {
+        let key = [0x77_u8; 32];
+        let s = format!("0x{}", hex::encode(key));
+        let out = parse_hex_secret(s.as_bytes()).unwrap();
+        assert_eq!(out, key);
+    }
+
+    #[test]
+    fn decrypt_age_passphrase_missing_path() {
+        let err = decrypt_age_passphrase(Path::new("/tmp/no_such_file_dp_crypto_test"), "pw")
+            .unwrap_err();
+        assert!(err.contains("read"));
+    }
+
+    #[test]
     fn age_round_trip() {
         // Encrypt a 64-char hex secret with a passphrase, then resolve
         // it back through the `age:` URI scheme. This exercises the

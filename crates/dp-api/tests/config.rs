@@ -18,6 +18,8 @@ fn clear_env() {
         "DARKPOOL_EVENT_LOG",
         "DARKPOOL_EVENT_DB",
         "DARKPOOL_OPERATOR_KEY",
+        "DARKPOOL_OPERATOR_KEY_URIS",
+        "DARKPOOL_SIGNER_KEY_URI",
         "DARKPOOL_AGGREGATOR_BIN",
         "DARKPOOL_AGGREGATOR_TIMEOUT",
         "DARKPOOL_ZK_PROVING_KEY",
@@ -153,6 +155,44 @@ fn pair_seed_json_str_returns_value() {
     std::env::set_var("DARKPOOL_PAIR_SEED_JSON", seed);
     let cfg = Config::try_parse_from(["bin"]).unwrap();
     assert_eq!(cfg.pair_seed_json_str(), Some(seed));
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn operator_key_uris_str_is_none_when_unset() {
+    clear_env();
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.operator_key_uris_str().is_none());
+}
+
+#[test]
+#[serial]
+fn operator_key_uris_str_returns_value() {
+    clear_env();
+    let uris = "file:/etc/dp/active.hex@active,age:/etc/dp/old.age@sunset";
+    std::env::set_var("DARKPOOL_OPERATOR_KEY_URIS", uris);
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(cfg.operator_key_uris_str(), Some(uris));
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn signer_key_uri_str_is_none_when_unset() {
+    clear_env();
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.signer_key_uri_str().is_none());
+}
+
+#[test]
+#[serial]
+fn signer_key_uri_str_returns_value() {
+    clear_env();
+    let uri = "file:/etc/dp/eth.hex";
+    std::env::set_var("DARKPOOL_SIGNER_KEY_URI", uri);
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert_eq!(cfg.signer_key_uri_str(), Some(uri));
     clear_env();
 }
 

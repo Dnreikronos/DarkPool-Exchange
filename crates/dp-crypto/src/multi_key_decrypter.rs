@@ -411,6 +411,56 @@ mod tests {
         assert!(!m.remove("doomed"));
     }
 
+    #[test]
+    fn validate_key_id_rejects_empty() {
+        match validate_key_id("") {
+            Err(CryptoError::KeySource(msg)) => assert!(msg.contains("must not be empty")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_key_id_rejects_too_long() {
+        let id = "a".repeat(MAX_KEY_ID_LEN + 1);
+        match validate_key_id(&id) {
+            Err(CryptoError::KeySource(msg)) => assert!(msg.contains("exceeds")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_key_id_rejects_bad_chars() {
+        match validate_key_id("has space") {
+            Err(CryptoError::KeySource(msg)) => assert!(msg.contains("ASCII")),
+            other => panic!("unexpected: {other:?}"),
+        }
+        match validate_key_id("has/slash") {
+            Err(CryptoError::KeySource(_)) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_key_id_accepts_alphanum_and_punct() {
+        assert!(validate_key_id("eth-2026.q2_v1").is_ok());
+        assert!(validate_key_id("a").is_ok());
+        assert!(validate_key_id(&"x".repeat(MAX_KEY_ID_LEN)).is_ok());
+    }
+
+    #[test]
+    fn key_status_display_lowercase() {
+        assert_eq!(KeyStatus::Active.to_string(), "active");
+        assert_eq!(KeyStatus::Rotating.to_string(), "rotating");
+        assert_eq!(KeyStatus::Sunset.to_string(), "sunset");
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let m = MultiKeyDecrypter::default();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
+
     #[tokio::test]
     async fn span_records_key_id_on_success() {
         use tracing_subscriber::layer::SubscriberExt;

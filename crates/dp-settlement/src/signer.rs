@@ -187,4 +187,97 @@ mod tests {
             Ok(_) => panic!("expected error from scaffolded awskms scheme"),
         }
     }
+
+    #[test]
+    fn local_from_file_reads_hex() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "{TEST_HEX}").unwrap();
+        let signer = LocalTxSigner::from_file(f.path()).unwrap();
+        let expected = Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap();
+        assert_eq!(signer.address(), expected);
+    }
+
+    #[test]
+    fn local_from_file_missing_path_errors() {
+        match LocalTxSigner::from_file("/tmp/nonexistent_dp_signer_test") {
+            Err(SettlementError::Io(_)) => {}
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn local_from_hex_invalid_errors() {
+        match LocalTxSigner::from_hex("not-hex") {
+            Err(SettlementError::Signer(_)) => {}
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn from_uri_file_with_invalid_hex_errors() {
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "garbage-not-hex").unwrap();
+        let uri = format!("file:{}", f.path().display());
+        match from_uri(&uri) {
+            Err(SettlementError::Signer(_)) => {}
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn from_uri_age_without_passphrase_errors() {
+        // Only valid when the env var is unset; bail out if a parent
+        // test or the runner set it.
+        if std::env::var("DARKPOOL_SIGNER_PASSPHRASE").is_ok() {
+            return;
+        }
+        match from_uri("age:/tmp/nonexistent.age") {
+            Err(SettlementError::Signer(msg)) => {
+                assert!(msg.contains("DARKPOOL_SIGNER_PASSPHRASE"), "got: {msg}");
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn from_uri_age_round_trip() {
+        // Build an age-encrypted blob containing the test hex secret,
+        // then resolve it through the `age:` URI scheme. Exercises the
+        // decrypt_age_file path end-to-end without needing KMS.
+        let pass = "signer-rotate-2026";
+
+        let mut encrypted = Vec::new();
+        let encryptor =
+            age::Encryptor::with_user_passphrase(age::secrecy::Secret::new(pass.to_string()));
+        let mut writer = encryptor.wrap_output(&mut encrypted).unwrap();
+        std::io::Write::write_all(&mut writer, TEST_HEX.as_bytes()).unwrap();
+        writer.finish().unwrap();
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(&encrypted).unwrap();
+        f.flush().unwrap();
+
+        // SAFETY: tests touching this env var are single-threaded in
+        // practice for this crate (only this test sets/removes it).
+        unsafe {
+            std::env::set_var("DARKPOOL_SIGNER_PASSPHRASE", pass);
+        }
+        let res = from_uri(&format!("age:{}", f.path().display()));
+        unsafe {
+            std::env::remove_var("DARKPOOL_SIGNER_PASSPHRASE");
+        }
+        let signer = res.expect("age decrypt");
+        let expected = Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap();
+        assert_eq!(signer.address(), expected);
+    }
+
+    #[test]
+    fn decrypt_age_file_missing_path_errors() {
+        let err = decrypt_age_file("/tmp/definitely_not_there_dp_signer", "pw").unwrap_err();
+        assert!(err.contains("read"));
+    }
 }
