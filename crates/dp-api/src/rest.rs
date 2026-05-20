@@ -662,7 +662,17 @@ async fn rest_register_key(
         )));
     }
     let status = parse_status(body.status.as_deref())?;
-    h.upsert(id.clone(), uri, status).map_err(key_admin_err)?;
+    // `upsert` does blocking I/O (file read for `file:`, age decrypt,
+    // and — once wired — an AWS KMS round-trip for `awskms:`). Run it
+    // off the tokio worker so a slow URI cannot stall unrelated
+    // requests sharing the worker pool.
+    let handler = h.clone();
+    let upsert_id = id.clone();
+    let upsert_uri = uri.to_owned();
+    tokio::task::spawn_blocking(move || handler.upsert(upsert_id, &upsert_uri, status))
+        .await
+        .map_err(|e| ApiError(tonic::Status::internal(format!("upsert join error: {e}"))))?
+        .map_err(key_admin_err)?;
     Ok(Json(KeyInfoJson {
         id,
         status: status.to_string(),
