@@ -649,21 +649,22 @@ async fn rest_register_key(
     State(h): State<SharedKeyAdminHandler>,
     Json(body): Json<RegisterKeyJson>,
 ) -> Result<Json<KeyInfoJson>, ApiError> {
-    if body.id.trim().is_empty() {
+    let id = body.id.trim().to_owned();
+    let uri = body.uri.trim();
+    if id.is_empty() {
         return Err(key_admin_err(AdminKeyError::Invalid(
             "id is required".into(),
         )));
     }
-    if body.uri.trim().is_empty() {
+    if uri.is_empty() {
         return Err(key_admin_err(AdminKeyError::Invalid(
             "uri is required".into(),
         )));
     }
     let status = parse_status(body.status.as_deref())?;
-    h.upsert(body.id.clone(), &body.uri, status)
-        .map_err(key_admin_err)?;
+    h.upsert(id.clone(), uri, status).map_err(key_admin_err)?;
     Ok(Json(KeyInfoJson {
-        id: body.id,
+        id,
         status: status.to_string(),
     }))
 }
