@@ -16,9 +16,16 @@ tracing      = "0.1"
 metrics      = { workspace = true }
 parking_lot  = { workspace = true }
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
+age = { version = "0.10", default-features = false, features = ["armor"] }
+
+[features]
+default = []
+# Enable the `awskms:` key URI scheme. Stub-gated; see crate docs.
+aws-kms = []
 
 [dev-dependencies]
 tokio    = { workspace = true }
 k256     = "0.13"
 rand     = "0.8"
 tempfile = "3"
+tracing-subscriber = { workspace = true }

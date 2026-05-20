@@ -1,11 +1,13 @@
 mod decrypted_order;
 mod decrypter;
 mod ecies_decrypter;
+mod key_source;
 mod multi_key_decrypter;
 
 pub use decrypted_order::DecryptedOrder;
 pub use decrypter::{Decrypter, NoopDecrypter};
 pub use ecies_decrypter::{load_operator_key_file, EciesDecrypter};
+pub use key_source::{decrypter_from_uri, KeySource};
 pub use multi_key_decrypter::{KeyEntry, KeyStatus, MultiKeyDecrypter};
 
 #[derive(Debug, thiserror::Error)]
@@ -24,4 +26,7 @@ pub enum CryptoError {
 
     #[error("hex decode error: {0}")]
     HexDecode(#[from] hex::FromHexError),
+
+    #[error("key source error: {0}")]
+    KeySource(String),
 }
