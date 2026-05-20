@@ -106,9 +106,22 @@ fn main() -> ExitCode {
             api_key,
             server,
         } => {
-            let body = format!(r#"{{"id":"{id}","uri":"{uri}","status":"{status}"}}"#);
+            // serde_json escapes quotes/control chars in id/uri/status so
+            // an operator passing a URI with a `"` (legal in `?ciphertext=...`
+            // query strings, after URL-encoding) does not corrupt the JSON
+            // payload pasted into a terminal.
+            let body = serde_json::json!({
+                "id": id,
+                "uri": uri,
+                "status": status,
+            })
+            .to_string();
+            // HEREDOC + --data-binary @- sidesteps shell quoting of the
+            // body entirely. api_key/server are left as raw text because
+            // their defaults (`$OPERATOR_API_KEY`, `http://127.0.0.1:8080`)
+            // are themselves shell tokens the operator expects to evaluate.
             println!(
-                "curl -sS -X POST -H 'x-api-key: {api_key}' \\\n  -H 'content-type: application/json' \\\n  -d '{body}' \\\n  {server}/v1/admin/keys"
+                "curl -sS -X POST -H 'x-api-key: {api_key}' \\\n  -H 'content-type: application/json' \\\n  --data-binary @- \\\n  {server}/v1/admin/keys <<'JSON'\n{body}\nJSON"
             );
             ExitCode::SUCCESS
         }

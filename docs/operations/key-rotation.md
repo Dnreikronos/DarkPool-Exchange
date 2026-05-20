@@ -67,8 +67,10 @@ dp-zk-rotate-key curl-spec --id new-2026q2 \
 ```text
 curl -sS -X POST -H 'x-api-key: $OPERATOR_API_KEY' \
   -H 'content-type: application/json' \
-  -d '{"id":"new-2026q2","uri":"file:/etc/darkpool/keys/new.hex","status":"rotating"}' \
-  https://operator.example.com/v1/admin/keys
+  --data-binary @- \
+  https://operator.example.com/v1/admin/keys <<'JSON'
+{"id":"new-2026q2","status":"rotating","uri":"file:/etc/darkpool/keys/new.hex"}
+JSON
 ```
 
 The new key joins the `MultiKeyDecrypter` set with status `Rotating`.
