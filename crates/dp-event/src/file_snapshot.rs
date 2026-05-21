@@ -182,4 +182,38 @@ mod tests {
         std::fs::write(dir.path().join("00000000000000000099.tmp"), "stale").unwrap();
         assert_eq!(store.list_seqs().unwrap(), vec![7]);
     }
+
+    #[test]
+    fn read_at_missing_seq_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSnapshotStore::open(dir.path()).unwrap();
+        assert!(store.read_at(999).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_at_existing_seq_returns_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSnapshotStore::open(dir.path()).unwrap();
+        store.write(42, b"hello").unwrap();
+        let bytes = store.read_at(42).unwrap().expect("should be Some");
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn delete_before_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSnapshotStore::open(dir.path()).unwrap();
+        store.write(5, b"x").unwrap();
+        store.delete_before(3).unwrap();
+        store.delete_before(3).unwrap();
+        assert_eq!(store.list_seqs().unwrap(), vec![5]);
+    }
+
+    #[test]
+    fn list_seqs_on_nonexistent_subdir_returns_empty() {
+        let base = tempfile::tempdir().unwrap();
+        let missing = base.path().join("does_not_exist");
+        let store = FileSnapshotStore { dir: missing };
+        assert!(store.list_seqs().unwrap().is_empty());
+    }
 }
