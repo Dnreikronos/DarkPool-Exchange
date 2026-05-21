@@ -1,4 +1,4 @@
-import { Shell } from '@/components/trade/Shell'
+import { Shell } from './_components/Shell'
 
 export const metadata = {
   title: 'Trade · DarkPool',
