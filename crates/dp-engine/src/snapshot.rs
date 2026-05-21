@@ -187,7 +187,7 @@ pub(crate) async fn run_snapshotter(
                 let elapsed = last_snapshot_at.elapsed();
                 let event_trigger = now_seq.saturating_sub(last_snapshot_seq) >= config.every_events;
                 let time_trigger = elapsed >= config.interval;
-                if now_seq <= last_snapshot_seq {
+                if now_seq < last_snapshot_seq {
                     continue;
                 }
                 if !event_trigger && !time_trigger {
