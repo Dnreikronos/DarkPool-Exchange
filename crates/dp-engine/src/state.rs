@@ -191,7 +191,7 @@ impl EngineState {
     }
 
     /// Capture the persistable subset of state into a [`SerializableState`].
-    /// Holds no locks of its own (caller owns the [`Mutex<EngineState>`]
+    /// Holds no locks of its own (caller owns the `Mutex<EngineState>`
     /// guard); clones every contained collection so the resulting value
     /// is independent of the live state.
     pub(crate) fn to_serializable(&self) -> SerializableState {
