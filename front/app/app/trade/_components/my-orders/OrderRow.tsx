@@ -22,7 +22,6 @@ const COLS = 'grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_5.5rem]'
 export function OrderRow({ row, onCancel }: OrderRowProps): JSX.Element {
   const { order, status } = row
   const cancellable = status === 'open'
-  const dimmed = status !== 'open'
 
   return (
     <div
@@ -30,7 +29,7 @@ export function OrderRow({ row, onCancel }: OrderRowProps): JSX.Element {
       data-testid="my-order-row"
       data-status={status}
       className={`grid ${COLS} items-center gap-3 border-b border-brand-border px-4 py-3 font-mono text-body-sm tabular-nums ${
-        dimmed ? 'opacity-60' : ''
+        status !== 'open' ? 'opacity-60' : ''
       }`}
     >
       <span className="uppercase tracking-label text-brand-muted">

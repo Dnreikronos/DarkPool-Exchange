@@ -96,28 +96,41 @@ export function useMyOrders(options: UseMyOrdersOptions = {}): UseMyOrdersReturn
   const [afterlife, dispatch] = useReducer(reducer, undefined, emptyAfterlifeState)
 
   // Snapshot held across renders so the SYNC dispatch can diff prev→next.
-  const prevRef = useRef<ReadonlyMap<string, OrderInfo>>(new Map(openOrders.map((o) => [o.id, o])))
+  // Lazy-init: the initializer arg is only used on the very first render,
+  // so eager allocation here would build (then discard) a fresh Map on
+  // every subsequent render.
+  const prevRef = useRef<ReadonlyMap<string, OrderInfo> | null>(null)
+  if (prevRef.current === null) {
+    prevRef.current = new Map(openOrders.map((o) => [o.id, o]))
+  }
 
   useEffect(() => {
     const next = new Map(openOrders.map((o) => [o.id, o]))
-    if (sameIdSet(prevRef.current, next)) return
-    dispatch({ type: 'SYNC', prev: prevRef.current, next, nowMs: now(), ttlMs })
+    if (sameIdSet(prevRef.current!, next)) return
+    dispatch({ type: 'SYNC', prev: prevRef.current!, next, nowMs: now(), ttlMs })
     prevRef.current = next
   }, [openOrders, now, ttlMs])
 
   // Heartbeat prune so cancelled/filled rows fade out even when the
-  // mock store is otherwise quiet. The interval is short enough that
-  // expiry feels punctual without being noisy.
+  // mock store is otherwise quiet. Gated on `afterlife.size` so the
+  // timer doesn't run forever when there's nothing to expire.
+  const afterlifeSize = afterlife.afterlife.size
   useEffect(() => {
+    if (afterlifeSize === 0) return
     const id = setInterval(() => dispatch({ type: 'PRUNE', nowMs: now(), ttlMs }), 1000)
     return () => clearInterval(id)
-  }, [now, ttlMs])
+  }, [afterlifeSize, now, ttlMs])
 
   const cancel = useCallback(
     (orderId: string): boolean => {
       const state = store.getState()
       const order = state.openOrders.find((o) => o.id === orderId)
       if (!order) return false
+      // Invariant: `cancelOrder` finds by the same id we just resolved
+      // from `openOrders.find`, and the store mutation is synchronous,
+      // so the call below cannot fail to remove the row. Dispatching
+      // CANCEL up-front keeps the row in `cancelled` state the moment
+      // the diff effect observes the removal.
       dispatch({ type: 'CANCEL', order, nowMs: now() })
       return state.cancelOrder(orderId)
     },

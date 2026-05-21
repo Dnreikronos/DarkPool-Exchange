@@ -9,6 +9,7 @@
 import * as React from 'react'
 
 import { create } from '@bufbuild/protobuf'
+
 import { Toaster } from '@/components/ui/toaster'
 import { OrderInfoSchema, Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 import type { OrderInfo } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
@@ -16,8 +17,8 @@ import { walletStore } from '@/lib/wallet/mock-store'
 
 import type { UseMyOrdersOptions, UseMyOrdersReturn } from '../../_hooks/my-orders/useMyOrders'
 import type { MyOrderRow } from '../../_lib/my-orders/types'
-import { MyOrdersPanel } from './MyOrdersPanel'
 import { OrderBook } from '../orderbook/OrderBook'
+import { MyOrdersPanel } from './MyOrdersPanel'
 
 function useConnected(connect: boolean) {
   React.useEffect(() => {

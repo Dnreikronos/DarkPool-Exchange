@@ -51,9 +51,10 @@ export function appendFilled(state: AfterlifeState, input: AppendFilledInput): A
   let next: Map<string, AfterlifeEntry> | null = null
   for (const [id, prevOrder] of input.prevOpenOrders) {
     if (input.nextOpenOrders.has(id)) continue
-    const existing = state.afterlife.get(id)
-    if (existing && existing.status === 'cancelled') continue
-    if (existing && existing.status === 'filled') continue
+    // Any pre-existing tombstone — cancelled (user) or filled (earlier
+    // diff) — wins over the one we'd write here, so we don't overwrite
+    // its `removedAtMs` and bump the row back into the active window.
+    if (state.afterlife.has(id)) continue
     if (!next) next = new Map(state.afterlife)
     next.set(id, { order: prevOrder, status: 'filled', removedAtMs: input.nowMs })
   }
