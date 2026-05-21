@@ -28,6 +28,7 @@ metrics = { workspace = true }
 futures-util = "0.3"
 sha2 = { workspace = true }
 hex = { workspace = true }
+bincode = { workspace = true }
 rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 ark-ff = { workspace = true, features = ["std"] }
@@ -39,7 +40,6 @@ tempfile = "3"
 ecies = { workspace = true }
 k256 = "0.13"
 rand = "0.8"
-bincode = { workspace = true }
 alloy-provider = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-sol-types = { workspace = true }

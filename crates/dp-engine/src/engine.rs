@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::Utc;
 use dp_aggregator::{NoopAggregator, ProofAggregator};
 use dp_crypto::{Decrypter, NoopDecrypter};
-use dp_event::{Event, EventData, Store};
+use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_settlement::{NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
 use dp_types::{DarkPoolError, EventType, Order, Side};
@@ -89,6 +89,10 @@ pub(crate) struct Inner {
     pub(crate) auction_interval: Duration,
     pub(crate) salt_nonce: [u8; 32],
     pub(crate) batch_size: usize,
+    /// Persistent home for periodic state snapshots. `None` disables
+    /// the snapshot pipeline — recover then always falls back to full
+    /// event replay. Set at boot via [`Engine::set_snapshot_store`].
+    pub(crate) snapshot_store: RwLock<Option<Arc<dyn SnapshotStore>>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +123,7 @@ impl Engine {
                 auction_interval: interval,
                 salt_nonce,
                 batch_size: 8,
+                snapshot_store: RwLock::new(None),
             }),
         };
         // Suppress the boot warning under `cfg(test)` — every engine test
@@ -146,6 +151,84 @@ impl Engine {
 
     pub fn set_submitter(&self, s: Arc<dyn Submitter>) {
         *self.inner.submitter.write() = s;
+    }
+
+    /// Wire a persistent [`SnapshotStore`]. Subsequent calls to
+    /// [`Engine::recover`] consult it for a starting point before
+    /// touching the event log, and the periodic snapshotter task spawned
+    /// from `main` writes new envelopes into it. Calling this with
+    /// `None` disables snapshot-based recovery without resetting the
+    /// in-memory state.
+    ///
+    /// Note: a `None` set mid-flight does NOT stop a snapshotter task
+    /// already running — `run_snapshotter` clones the `Arc` at startup,
+    /// so the running task keeps the previous store alive until the
+    /// `CancellationToken` fires. Production callers wire the store
+    /// once at boot, so this is purely a footgun for tests / integration
+    /// fixtures that want to swap stores live.
+    pub fn set_snapshot_store(&self, store: Option<Arc<dyn SnapshotStore>>) {
+        *self.inner.snapshot_store.write() = store;
+    }
+
+    /// Clone of the active [`SnapshotStore`], if one is installed. Used
+    /// by the snapshotter task at boot and the recover path when
+    /// loading the latest envelope.
+    pub fn snapshot_store_clone(&self) -> Option<Arc<dyn SnapshotStore>> {
+        self.inner.snapshot_store.read().clone()
+    }
+
+    /// Highest event sequence number observed by the underlying event
+    /// store. Used by the snapshotter to decide when to checkpoint.
+    pub fn store_last_seq(&self) -> u64 {
+        self.inner.store.last_seq()
+    }
+
+    /// Capture the persistable state under the engine's state mutex.
+    /// Returns the cloned subset plus the seq it was captured at
+    /// (the lesser of `seq_hint` and `store.last_seq()` to guarantee
+    /// the snapshot never claims to cover an unwritten event).
+    pub(crate) fn capture_snapshot_state(
+        &self,
+        seq_hint: u64,
+    ) -> (crate::state::SerializableState, u64) {
+        let state = self.inner.state.lock();
+        let snap = state.to_serializable();
+        // last_seq under the lock — pairing the clone with a watermark
+        // outside the lock would race against an `append` landing just
+        // after the clone but before we read last_seq.
+        let store_seq = self.inner.store.last_seq();
+        let seq = seq_hint.min(store_seq);
+        (snap, seq)
+    }
+
+    /// Forward a compaction request to the active event store. Pulled
+    /// onto `Engine` so the snapshotter does not need a borrow into
+    /// `Inner`.
+    pub fn compact_events_before(&self, before_seq: u64) -> Result<(), EventError> {
+        self.inner.store.compact_before(before_seq)
+    }
+
+    /// Replace projection-derived state with `snap`. Locks
+    /// `state.book` (write) under the engine mutex; concurrent reads
+    /// will block briefly. Caller is responsible for ensuring no other
+    /// task is mid-write to the same state (the recover path runs
+    /// before the auction tick / API are spawned, which satisfies this
+    /// today).
+    pub(crate) fn apply_snapshot_state(&self, snap: crate::state::SerializableState) {
+        let mut state = self.inner.state.lock();
+        state.restore_from_serializable(snap);
+    }
+
+    /// Spawn the periodic snapshotter as a background task. Lives in
+    /// `main` alongside the auction tick; cancellation comes from the
+    /// shared [`tokio_util::sync::CancellationToken`]. A no-op when
+    /// `config.enabled` is `false` or no [`SnapshotStore`] is wired.
+    pub async fn run_snapshotter(
+        &self,
+        config: crate::snapshot::SnapshotConfig,
+        cancel: tokio_util::sync::CancellationToken,
+    ) {
+        crate::snapshot::run_snapshotter(self.clone(), config, cancel).await;
     }
 
     pub fn set_submit_timeout(&self, d: Duration) {

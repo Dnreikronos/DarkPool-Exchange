@@ -2,6 +2,7 @@ mod batch;
 mod engine;
 mod error;
 mod recover;
+mod snapshot;
 mod state;
 mod subscribe;
 mod tick;
@@ -14,6 +15,7 @@ mod tests;
 
 pub use engine::Engine;
 pub use error::EngineError;
+pub use snapshot::{SnapshotConfig, SnapshotError};
 pub use state::{PairConfig, PairStatus, PendingBatch};
 pub use subscribe::AuctionNotification;
 
