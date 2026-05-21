@@ -253,6 +253,10 @@ pub(crate) fn take_snapshot(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use dp_event::{MemSnapshotStore, MemStore};
 
     use super::*;
     use crate::state::SerializableState;
@@ -265,6 +269,11 @@ mod tests {
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
         }
+    }
+
+    fn bare_engine() -> crate::engine::Engine {
+        let store = Arc::new(MemStore::new());
+        crate::engine::Engine::new(store, Duration::from_millis(50))
     }
 
     #[test]
@@ -298,6 +307,19 @@ mod tests {
     }
 
     #[test]
+    fn detects_unsupported_version() {
+        let mut env = encode_envelope(&empty_state(), 1).unwrap();
+        // Version sits at bytes 4..8 in big-endian.
+        let bad_ver: u32 = 0xDEAD;
+        env[4..8].copy_from_slice(&bad_ver.to_be_bytes());
+        let err = decode_envelope(&env).unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::UnsupportedVersion(v) if v == bad_ver),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
     fn detects_corruption_in_payload() {
         let mut env = encode_envelope(&empty_state(), 1).unwrap();
         // Mid-payload flip — outside the header, so length and magic
@@ -309,5 +331,43 @@ mod tests {
             matches!(err, SnapshotError::ChecksumMismatch),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn take_snapshot_writes_and_returns_seq() {
+        let engine = bare_engine();
+        let snap_store = MemSnapshotStore::new();
+        let cfg = SnapshotConfig {
+            enabled: true,
+            every_events: 100,
+            interval: Duration::from_secs(300),
+            retain_events: 0,
+            retain_count: 5,
+        };
+        let seq = take_snapshot(&engine, &snap_store, &cfg, 0).unwrap();
+        assert_eq!(seq, 0);
+        assert_eq!(snap_store.list_seqs().unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn take_snapshot_prunes_old_envelopes_beyond_retain_count() {
+        let engine = bare_engine();
+        let snap_store = MemSnapshotStore::new();
+        // Pre-populate 4 old envelopes at seqs 1..4.
+        for s in [1u64, 2, 3, 4] {
+            let env = encode_envelope(&empty_state(), s).unwrap();
+            snap_store.write(s, &env).unwrap();
+        }
+        let cfg = SnapshotConfig {
+            retain_count: 3,
+            retain_events: 0,
+            ..SnapshotConfig::default()
+        };
+        // The bare engine has no events so take_snapshot captures seq=0.
+        // After the write, the store holds seqs [0,1,2,3,4] (5 entries).
+        // retain_count=3 → keep the 3 highest, delete before seqs[2]=2.
+        // Result: [2, 3, 4].
+        take_snapshot(&engine, &snap_store, &cfg, 0).unwrap();
+        assert_eq!(snap_store.list_seqs().unwrap(), vec![2, 3, 4]);
     }
 }
