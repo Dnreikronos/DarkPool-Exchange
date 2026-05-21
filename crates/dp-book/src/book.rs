@@ -30,8 +30,8 @@ struct Inner {
 /// the highest event-sequence number applied. The engine writes this
 /// inside its periodic snapshot envelope and restores it on boot before
 /// replaying events past `seq`. Public so the engine crate can wrap it
-/// in [`SerializableState`], but the fields themselves are
-/// implementation detail.
+/// inside its serializable engine-state struct, but the fields themselves
+/// are implementation detail.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BookSnapshot {
     inner: Inner,
