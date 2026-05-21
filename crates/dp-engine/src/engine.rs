@@ -184,12 +184,15 @@ impl Engine {
     }
 
     /// Capture the persistable state under the engine's state mutex.
-    /// Returns the cloned subset plus the seq it was captured at
-    /// (the lesser of `seq_hint` and `store.last_seq()` to guarantee
-    /// the snapshot never claims to cover an unwritten event).
+    /// Returns the cloned subset plus the seq watermark read from the
+    /// store under the same lock. Reading `store.last_seq()` under the
+    /// state lock ensures the watermark cannot undercount the snapshot:
+    /// any append that races with the capture either lands before the
+    /// lock (and is included in `snap`) or after (and is excluded), so
+    /// `store_seq` always matches exactly what was serialised.
     pub(crate) fn capture_snapshot_state(
         &self,
-        seq_hint: u64,
+        _seq_hint: u64,
     ) -> (crate::state::SerializableState, u64) {
         let state = self.inner.state.lock();
         let snap = state.to_serializable();
@@ -197,8 +200,7 @@ impl Engine {
         // outside the lock would race against an `append` landing just
         // after the clone but before we read last_seq.
         let store_seq = self.inner.store.last_seq();
-        let seq = seq_hint.min(store_seq);
-        (snap, seq)
+        (snap, store_seq)
     }
 
     /// Forward a compaction request to the active event store. Pulled
