@@ -409,11 +409,7 @@ mod tests {
 
     #[test]
     fn snapshot_dir_path_set_returns_some() {
-        let cfg = Config::parse_from([
-            "darkpool-server",
-            "--snapshot-dir",
-            "/var/dp/snaps",
-        ]);
+        let cfg = Config::parse_from(["darkpool-server", "--snapshot-dir", "/var/dp/snaps"]);
         assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
     }
 }

@@ -918,7 +918,7 @@ mod tests {
         let store = MemStore::new();
         let mut evs = vec![placed_event(0), placed_event(0), placed_event(0)];
         store.append(&mut evs).unwrap(); // gets seq 1, 2, 3
-        // after_seq=2 → first event after is seq 3 = 2+1 → continuous
+                                         // after_seq=2 → first event after is seq 3 = 2+1 → continuous
         assert!(event_log_continuous_after(&store, 2).unwrap());
     }
 
@@ -932,7 +932,7 @@ mod tests {
             placed_event(0),
         ];
         store.append(&mut evs).unwrap(); // seq 1..4
-        // Compact away seq 1 and 2 (remove seq < 3).
+                                         // Compact away seq 1 and 2 (remove seq < 3).
         store.compact_before(3).unwrap();
         // after_seq=1 → first retained event is seq 3, not 2 → gap
         assert!(!event_log_continuous_after(&store, 1).unwrap());

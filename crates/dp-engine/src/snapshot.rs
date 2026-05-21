@@ -76,7 +76,10 @@ impl Default for SnapshotConfig {
 /// Encode a [`SerializableState`] + its watermark `seq` into the
 /// on-disk envelope. The blob carries its own SHA-256 so the recover
 /// path can drop corrupted snapshots and fall back to event replay.
-pub(crate) fn encode_envelope(state: &SerializableState, seq: u64) -> Result<Vec<u8>, SnapshotError> {
+pub(crate) fn encode_envelope(
+    state: &SerializableState,
+    seq: u64,
+) -> Result<Vec<u8>, SnapshotError> {
     let blob = bincode::serialize(state)?;
     let blob_len = u32::try_from(blob.len()).map_err(|_| SnapshotError::LengthMismatch {
         declared: u32::MAX as usize,

@@ -1105,8 +1105,8 @@ async fn event_log_size_bytes_routes_to_store() {
 
 #[test]
 fn take_snapshot_for_bench_delegates_to_take_snapshot() {
-    use dp_event::{MemSnapshotStore, SnapshotStore};
     use crate::snapshot::SnapshotConfig;
+    use dp_event::{MemSnapshotStore, SnapshotStore};
     let (engine, _) = make_engine();
     let snap_store = MemSnapshotStore::new();
     let seq = crate::take_snapshot_for_bench(&engine, &snap_store, &SnapshotConfig::default(), 0)
@@ -1458,8 +1458,13 @@ mod snapshot_recover {
         drive_scenario(&engine).await;
 
         let snap_seq = engine.store_last_seq();
-        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), snap_seq)
-            .expect("take snapshot");
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            snap_seq,
+        )
+        .expect("take snapshot");
 
         // Add two more events (tail) then compact the first tail event,
         // creating a gap: snap_seq+1 is missing, snap_seq+2 is present.
@@ -1532,7 +1537,10 @@ mod snapshot_recover {
 
         let restored = wire_engine(store.clone());
         restored.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
-        restored.recover().await.expect("intact log must allow full replay");
+        restored
+            .recover()
+            .await
+            .expect("intact log must allow full replay");
         assert_eq!(public_state_fingerprint(&restored), truth);
     }
 
