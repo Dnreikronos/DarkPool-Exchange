@@ -2221,6 +2221,7 @@ dependencies = [
  "chrono",
  "dp-types",
  "rust_decimal",
+ "serde",
  "uuid",
 ]
 
@@ -2234,6 +2235,7 @@ dependencies = [
  "dp-types",
  "parking_lot",
  "rust_decimal",
+ "serde",
  "serde_json",
  "uuid",
 ]
