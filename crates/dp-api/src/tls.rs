@@ -176,12 +176,19 @@ fn load_cert_chain_from_bytes(
     path_for_error: &Path,
 ) -> Result<Vec<CertificateDer<'static>>, TlsError> {
     let mut reader = pem;
-    rustls_pemfile::certs(&mut reader)
+    let certs = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| TlsError::MalformedPem {
             path: path_for_error.display().to_string(),
             msg: e.to_string(),
-        })
+        })?;
+    if certs.is_empty() {
+        return Err(TlsError::MalformedPem {
+            path: path_for_error.display().to_string(),
+            msg: "no certificates found in PEM".into(),
+        });
+    }
+    Ok(certs)
 }
 
 fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>, TlsError> {
@@ -282,6 +289,19 @@ mod tests {
         std::fs::write(&path, b"not a real pem block\n").unwrap();
         let err = load_ca_bundle(&path).unwrap_err();
         assert!(matches!(err, TlsError::MalformedCa { .. }));
+    }
+
+    #[test]
+    fn load_cert_chain_rejects_empty_pem() {
+        // A PEM file that parses cleanly but contains zero CERTIFICATE
+        // blocks must fail at startup. Without this guard tonic's
+        // boot-time sanity parse passes and the failure surfaces only
+        // when the first TLS handshake is attempted in prod.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.pem");
+        std::fs::write(&path, b"not a real pem block\n").unwrap();
+        let err = load_cert_chain(&path).unwrap_err();
+        assert!(matches!(err, TlsError::MalformedPem { .. }), "got: {err:?}");
     }
 
     #[test]

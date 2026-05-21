@@ -260,7 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let grpc_tls = tls::tonic_server_tls(&tls_mode)?;
     let grpc_tls_enabled = grpc_tls.is_some();
     let grpc_handle = tokio::spawn(async move {
-        info!(addr = %grpc_addr, tls = grpc_tls_enabled, "gRPC server listening");
+        info!(addr = %grpc_addr, tls = grpc_tls_enabled, "gRPC server starting");
         let mut builder = Server::builder();
         if let Some(tls) = grpc_tls {
             builder = builder
@@ -336,7 +336,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let rest_tls_for_reload = rest_tls.clone();
     let rest_tls_enabled = rest_tls.is_some();
     let rest_handle = tokio::spawn(async move {
-        info!(addr = %http_addr, tls = rest_tls_enabled, "REST server listening");
+        info!(addr = %http_addr, tls = rest_tls_enabled, "REST server starting");
         let make_svc = rest_app.into_make_service_with_connect_info::<SocketAddr>();
         let server_handle = axum_server::Handle::new();
         let shutdown_handle = server_handle.clone();
