@@ -400,4 +400,20 @@ mod tests {
         let err = cfg.tls_mode().unwrap_err();
         assert!(err.contains("tls-client-ca"), "msg: {err}");
     }
+
+    #[test]
+    fn snapshot_dir_path_empty_is_none() {
+        let cfg = cfg_with_tls("", "", "");
+        assert!(cfg.snapshot_dir_path().is_none());
+    }
+
+    #[test]
+    fn snapshot_dir_path_set_returns_some() {
+        let cfg = Config::parse_from([
+            "darkpool-server",
+            "--snapshot-dir",
+            "/var/dp/snaps",
+        ]);
+        assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
+    }
 }
