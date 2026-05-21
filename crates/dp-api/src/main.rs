@@ -6,13 +6,14 @@ use clap::Parser;
 use dp_aggregator::SubprocessAggregator;
 use dp_api::admin::{AdminApiHandler, KeyAdminHandler};
 use dp_api::auth::{AuthCore, AuthLayer};
-use dp_api::config::Config;
+use dp_api::config::{Config, TlsMode};
 use dp_api::handler::ApiHandler;
 use dp_api::observability::{self, M_EVENT_LOG_SIZE_BYTES};
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
+use dp_api::tls;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
 };
@@ -33,6 +34,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tracing_guard = observability::init_tracing()?;
 
     let cfg = Config::parse();
+
+    // Resolve the TLS posture up-front: half-configured TLS (cert
+    // without key, etc.) must surface at boot, not when the first
+    // client connects. The plaintext branch logs a loud warning so a
+    // misconfigured prod deploy is never silent — there is no
+    // "default-on" TLS today.
+    let tls_mode = cfg
+        .tls_mode()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    if matches!(tls_mode, TlsMode::Plaintext) {
+        warn!(
+            grpc = %cfg.grpc_addr,
+            rest = %cfg.http_addr,
+            "TLS DISABLED — server is binding plaintext on both listeners. \
+             Set --tls-cert/--tls-key (and optionally --tls-client-ca for mTLS) \
+             before exposing the server to a network you do not control."
+        );
+    }
 
     let store: Arc<dyn Store> = if let Some(url) = cfg.event_db_url() {
         info!(url = %sanitize_db_url(url), "event log: postgres");
@@ -238,9 +257,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // `/v1/admin/*` paths only (gated by the separate operator key set in
     // [`rest::router_with_admin`]). Restoring gRPC admin will require a
     // dedicated listener on its own port with the operator AuthLayer.
+    let grpc_tls = tls::tonic_server_tls(&tls_mode)?;
+    let grpc_tls_enabled = grpc_tls.is_some();
     let grpc_handle = tokio::spawn(async move {
-        info!(addr = %grpc_addr, "gRPC server listening");
-        Server::builder()
+        info!(addr = %grpc_addr, tls = grpc_tls_enabled, "gRPC server starting");
+        let mut builder = Server::builder();
+        if let Some(tls) = grpc_tls {
+            builder = builder
+                .tls_config(tls)
+                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))?;
+        }
+        builder
             .layer(grpc_auth)
             .layer(grpc_rl)
             .add_service(DarkPoolServiceServer::new(handler))
@@ -301,24 +328,99 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
+    let rest_tls = tls::axum_rustls_config(&tls_mode).await?;
+    // Keep a clone alive in main for the SIGHUP reload task — moving
+    // the option into the spawn would orphan the handle from the
+    // reload path. `RustlsConfig` is `Arc<...>` internally so the
+    // clone is cheap.
+    let rest_tls_for_reload = rest_tls.clone();
+    let rest_tls_enabled = rest_tls.is_some();
     let rest_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(http_addr)
-            .await
-            .map_err(|e| {
-                Box::<dyn std::error::Error + Send + Sync>::from(format!(
-                    "bind {}: {}",
-                    http_addr, e
-                ))
-            })?;
-        info!(addr = %http_addr, "REST server listening");
-        axum::serve(
-            listener,
-            rest_app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move { http_cancel.cancelled().await })
-        .await
-        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
+        info!(addr = %http_addr, tls = rest_tls_enabled, "REST server starting");
+        let make_svc = rest_app.into_make_service_with_connect_info::<SocketAddr>();
+        let server_handle = axum_server::Handle::new();
+        let shutdown_handle = server_handle.clone();
+        tokio::spawn(async move {
+            http_cancel.cancelled().await;
+            // Bound the in-flight HTTPS drain at 10s — beyond that
+            // axum_server drops live connections rather than holding
+            // shutdown indefinitely.
+            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
+        });
+        let result = match rest_tls {
+            Some(cfg) => {
+                axum_server::bind_rustls(http_addr, cfg)
+                    .handle(server_handle)
+                    .serve(make_svc)
+                    .await
+            }
+            None => {
+                axum_server::bind(http_addr)
+                    .handle(server_handle)
+                    .serve(make_svc)
+                    .await
+            }
+        };
+        result.map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
     });
+
+    // SIGHUP-driven TLS hot-reload for the REST listener. The gRPC
+    // listener has no in-place reload path in tonic 0.12, so SIGHUP
+    // emits a warn pointing operators at the restart-only flow for the
+    // gRPC cert. Documented asymmetry — see docs/operations/tls-setup.md.
+    #[cfg(unix)]
+    let reload_handle = {
+        let reload_cancel = cancel.clone();
+        let reload_rest_cfg = rest_tls_for_reload.clone();
+        let cfg_for_reload = cfg.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut hup = match signal(SignalKind::hangup()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("failed to install SIGHUP handler — TLS hot-reload disabled: {e}");
+                    return;
+                }
+            };
+            loop {
+                tokio::select! {
+                    _ = reload_cancel.cancelled() => return,
+                    sig = hup.recv() => {
+                        if sig.is_none() {
+                            return;
+                        }
+                        let mode = match cfg_for_reload.tls_mode() {
+                            Ok(m) => m,
+                            Err(e) => {
+                                warn!("SIGHUP: bad TLS config, ignoring reload: {e}");
+                                continue;
+                            }
+                        };
+                        if matches!(mode, TlsMode::Plaintext) {
+                            warn!("SIGHUP received but TLS is disabled — nothing to reload");
+                            continue;
+                        }
+                        if let Some(rest_cfg) = &reload_rest_cfg {
+                            match tls::reload_axum_rustls(rest_cfg, &mode).await {
+                                Ok(()) => info!("SIGHUP: REST TLS material reloaded"),
+                                Err(e) => warn!(
+                                    "SIGHUP: REST TLS reload failed (keeping previous cert): {e}"
+                                ),
+                            }
+                        }
+                        warn!(
+                            "SIGHUP: gRPC listener does not hot-reload TLS — restart the \
+                             process to rotate the gRPC certificate"
+                        );
+                    }
+                }
+            }
+        })
+    };
+    // Silence the unused-variable warning when the SIGHUP task is not
+    // compiled in (non-unix builds — no signal API to listen on).
+    #[cfg(not(unix))]
+    let _ = rest_tls_for_reload;
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => info!("ctrl+c received"),
@@ -332,6 +434,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = grpc_handle.await;
     let _ = rest_handle.await;
     let _ = gauge_handle.await;
+    #[cfg(unix)]
+    let _ = reload_handle.await;
 
     // Flush any in-flight OTLP batches before the process exits.
     tracing_guard.shutdown();

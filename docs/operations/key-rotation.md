@@ -1,5 +1,11 @@
 # Operator key rotation runbook
 
+> 🔐 **Looking for TLS / mTLS cert rotation instead?** See
+> [`docs/operations/tls-setup.md`](./tls-setup.md). That covers the
+> transport-layer material the gRPC and REST listeners present to
+> clients; this runbook covers the ECIES key that decrypts trader
+> order payloads.
+
 A rotation cycles the operator's ECIES decryption key without dropping
 orders that are in-flight at the moment the new key takes effect.
 

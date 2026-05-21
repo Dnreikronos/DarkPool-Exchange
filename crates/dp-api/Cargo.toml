@@ -18,8 +18,11 @@ dp-crypto      = { path = "../dp-crypto" }
 dp-aggregator  = { path = "../dp-aggregator" }
 dp-settlement  = { path = "../dp-settlement" }
 
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls"] }
 prost.workspace = true
+axum-server.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
 alloy-primitives.workspace = true
 axum.workspace = true
 tower.workspace = true
@@ -57,6 +60,9 @@ hex.workspace = true
 http-body-util.workspace = true
 serial_test.workspace = true
 tempfile = "3"
+rcgen = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "json"] }
+tokio-rustls.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
