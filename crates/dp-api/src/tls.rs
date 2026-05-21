@@ -216,10 +216,7 @@ fn load_ca_bundle(path: &Path) -> Result<RootCertStore, TlsError> {
     load_ca_bundle_from_bytes(&pem, path)
 }
 
-fn load_ca_bundle_from_bytes(
-    pem: &[u8],
-    path_for_error: &Path,
-) -> Result<RootCertStore, TlsError> {
+fn load_ca_bundle_from_bytes(pem: &[u8], path_for_error: &Path) -> Result<RootCertStore, TlsError> {
     let mut reader = pem;
     let mut roots = RootCertStore::empty();
     let mut count = 0usize;

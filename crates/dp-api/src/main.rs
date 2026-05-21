@@ -40,9 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // client connects. The plaintext branch logs a loud warning so a
     // misconfigured prod deploy is never silent — there is no
     // "default-on" TLS today.
-    let tls_mode = cfg.tls_mode().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        e.into()
-    })?;
+    let tls_mode = cfg
+        .tls_mode()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     if matches!(tls_mode, TlsMode::Plaintext) {
         warn!(
             grpc = %cfg.grpc_addr,

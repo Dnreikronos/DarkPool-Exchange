@@ -164,7 +164,9 @@ async fn start_rest(mode: &TlsMode) -> RestServer {
     let server_handle = axum_server::Handle::new();
     let shutdown_handle = server_handle.clone();
     let shutdown_cancel = cancel.clone();
-    let tls_cfg = tls::axum_rustls_config(mode).await.expect("rest tls config");
+    let tls_cfg = tls::axum_rustls_config(mode)
+        .await
+        .expect("rest tls config");
     let tls_for_test = tls_cfg.clone();
     let make_svc = app.into_make_service_with_connect_info::<SocketAddr>();
     let task = tokio::spawn(async move {
@@ -260,7 +262,11 @@ fn reqwest_client(ca_pem: &str) -> reqwest::Client {
         .unwrap()
 }
 
-fn reqwest_client_mtls(ca_pem: &str, client_cert_pem: &str, client_key_pem: &str) -> reqwest::Client {
+fn reqwest_client_mtls(
+    ca_pem: &str,
+    client_cert_pem: &str,
+    client_key_pem: &str,
+) -> reqwest::Client {
     let mut bundle = Vec::new();
     bundle.extend_from_slice(client_cert_pem.as_bytes());
     bundle.extend_from_slice(client_key_pem.as_bytes());
@@ -335,7 +341,10 @@ async fn grpc_rejects_plain_client_when_tls_on() {
     })
     .await
     .unwrap_or(true);
-    assert!(outcome, "plaintext client must not succeed against TLS server");
+    assert!(
+        outcome,
+        "plaintext client must not succeed against TLS server"
+    );
 
     server.shutdown().await;
 }
@@ -428,7 +437,10 @@ async fn rest_serves_over_tls() {
     };
     let server = start_rest(&mode).await;
     let client = reqwest_client(&bundle.ca_pem);
-    let url = format!("https://localhost:{}/v1/orderbook?pair=ETH/USDC", server.addr.port());
+    let url = format!(
+        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
+        server.addr.port()
+    );
     wait_rest_ready(&client, &url).await;
     let resp = client.get(&url).send().await.expect("rest GET");
     assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
@@ -445,7 +457,10 @@ async fn rest_mtls_accepts_authorized_client() {
     };
     let server = start_rest(&mode).await;
     let client = reqwest_client_mtls(&bundle.ca_pem, &bundle.client.pem, &bundle.client.key_pem);
-    let url = format!("https://localhost:{}/v1/orderbook?pair=ETH/USDC", server.addr.port());
+    let url = format!(
+        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
+        server.addr.port()
+    );
     wait_rest_ready(&client, &url).await;
     let resp = client.get(&url).send().await.expect("rest mTLS GET");
     assert_eq!(resp.status(), 200);
@@ -503,7 +518,10 @@ async fn rest_reload_swaps_cert_material() {
     };
 
     let server = start_rest(&mode_a).await;
-    let url = format!("https://localhost:{}/v1/orderbook?pair=ETH/USDC", server.addr.port());
+    let url = format!(
+        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
+        server.addr.port()
+    );
 
     let client_a = reqwest_client(&bundle_a.ca_pem);
     wait_rest_ready(&client_a, &url).await;
@@ -559,7 +577,11 @@ async fn rest_mtls_reload_swaps_cert_material() {
         server.addr.port()
     );
 
-    let client_a = reqwest_client_mtls(&bundle_a.ca_pem, &bundle_a.client.pem, &bundle_a.client.key_pem);
+    let client_a = reqwest_client_mtls(
+        &bundle_a.ca_pem,
+        &bundle_a.client.pem,
+        &bundle_a.client.key_pem,
+    );
     wait_rest_ready(&client_a, &url).await;
     assert_eq!(client_a.get(&url).send().await.unwrap().status(), 200);
 
@@ -568,8 +590,16 @@ async fn rest_mtls_reload_swaps_cert_material() {
         .await
         .expect("mTLS reload");
 
-    let client_b = reqwest_client_mtls(&bundle_b.ca_pem, &bundle_b.client.pem, &bundle_b.client.key_pem);
-    let resp = client_b.get(&url).send().await.expect("post-reload mTLS GET");
+    let client_b = reqwest_client_mtls(
+        &bundle_b.ca_pem,
+        &bundle_b.client.pem,
+        &bundle_b.client.key_pem,
+    );
+    let resp = client_b
+        .get(&url)
+        .send()
+        .await
+        .expect("post-reload mTLS GET");
     assert_eq!(resp.status(), 200);
 
     server.shutdown().await;
@@ -596,7 +626,10 @@ async fn rest_reload_to_plaintext_errors() {
 
     let tls_cfg_handle = server.tls_cfg.clone().expect("tls config present");
     let outcome = tls::reload_axum_rustls(&tls_cfg_handle, &TlsMode::Plaintext).await;
-    assert!(outcome.is_err(), "plaintext reload must Err, got {outcome:?}");
+    assert!(
+        outcome.is_err(),
+        "plaintext reload must Err, got {outcome:?}"
+    );
 
     // Old TLS cert still serving.
     assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
@@ -622,7 +655,11 @@ async fn rest_reload_failure_keeps_old_cert() {
         server.addr.port()
     );
 
-    let client_a = reqwest_client_mtls(&bundle_a.ca_pem, &bundle_a.client.pem, &bundle_a.client.key_pem);
+    let client_a = reqwest_client_mtls(
+        &bundle_a.ca_pem,
+        &bundle_a.client.pem,
+        &bundle_a.client.key_pem,
+    );
     wait_rest_ready(&client_a, &url).await;
     assert_eq!(client_a.get(&url).send().await.unwrap().status(), 200);
 
@@ -632,9 +669,21 @@ async fn rest_reload_failure_keeps_old_cert() {
     let garbage_cert = garbage_dir.path().join("cert.pem");
     let garbage_key = garbage_dir.path().join("key.pem");
     let garbage_ca = garbage_dir.path().join("ca.pem");
-    std::fs::write(&garbage_cert, b"-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----\n").unwrap();
-    std::fs::write(&garbage_key, b"-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n").unwrap();
-    std::fs::write(&garbage_ca, b"-----BEGIN CERTIFICATE-----\nnot a ca\n-----END CERTIFICATE-----\n").unwrap();
+    std::fs::write(
+        &garbage_cert,
+        b"-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &garbage_key,
+        b"-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &garbage_ca,
+        b"-----BEGIN CERTIFICATE-----\nnot a ca\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     let bad_mode = TlsMode::Mtls {
         cert: garbage_cert,
         key: garbage_key,
@@ -643,12 +692,23 @@ async fn rest_reload_failure_keeps_old_cert() {
 
     let tls_cfg_handle = server.tls_cfg.clone().expect("tls config present");
     let outcome = tls::reload_axum_rustls(&tls_cfg_handle, &bad_mode).await;
-    assert!(outcome.is_err(), "garbage PEM must surface as reload Err, got {outcome:?}");
+    assert!(
+        outcome.is_err(),
+        "garbage PEM must surface as reload Err, got {outcome:?}"
+    );
 
     // Old material must still serve. Use a fresh reqwest client so the
     // assertion isn't masked by a kept-alive connection from before.
-    let client_a_after = reqwest_client_mtls(&bundle_a.ca_pem, &bundle_a.client.pem, &bundle_a.client.key_pem);
-    let resp = client_a_after.get(&url).send().await.expect("post-failed-reload GET");
+    let client_a_after = reqwest_client_mtls(
+        &bundle_a.ca_pem,
+        &bundle_a.client.pem,
+        &bundle_a.client.key_pem,
+    );
+    let resp = client_a_after
+        .get(&url)
+        .send()
+        .await
+        .expect("post-failed-reload GET");
     assert_eq!(resp.status(), 200);
 
     server.shutdown().await;
