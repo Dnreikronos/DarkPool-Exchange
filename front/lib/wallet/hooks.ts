@@ -14,7 +14,21 @@ export interface UseWalletReturn {
   status: WalletStatus
   isConnected: boolean
   isConnecting: boolean
+  /**
+   * **Mock/test-only.** Calls `walletStore.connect()` synchronously
+   * with `MOCK_ADDRESS`. In production the connection is owned by
+   * RainbowKit + `WagmiWalletBridge`; calling this from real-app code
+   * desyncs the store from wagmi for one tick before the bridge
+   * overwrites it. New code should open RainbowKit's connect modal
+   * (e.g. via `ConnectButton.Custom` or `useConnectModal()`) instead.
+   */
   connect: () => void
+  /**
+   * **Mock/test-only.** Calls `walletStore.disconnect()` synchronously.
+   * In production the connection is owned by RainbowKit + the bridge;
+   * new code should call wagmi's `useDisconnect()` directly so the
+   * bridge sees the transition and clears per-trader caches.
+   */
   disconnect: () => void
 }
 
