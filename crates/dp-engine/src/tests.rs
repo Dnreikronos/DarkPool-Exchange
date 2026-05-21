@@ -445,6 +445,54 @@ async fn recover_from_mem_store() {
 }
 
 #[tokio::test]
+async fn recover_preserves_pair_suspended_status() {
+    let store = Arc::new(MemStore::new());
+    let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine1
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register");
+    engine1.suspend_pair("BTC-USD").expect("suspend");
+
+    let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine2.recover().await.unwrap();
+
+    let pairs = engine2.list_pairs();
+    let status = pairs
+        .iter()
+        .find(|(p, _)| p == "BTC-USD")
+        .map(|(_, c)| c.status)
+        .expect("pair must exist after recovery");
+    assert!(
+        matches!(status, crate::state::PairStatus::Suspended),
+        "recovered pair status must be Suspended, got {status:?}",
+    );
+}
+
+#[tokio::test]
+async fn recover_preserves_pair_delisted_status() {
+    let store = Arc::new(MemStore::new());
+    let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine1
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register");
+    engine1.delist_pair("BTC-USD").expect("delist");
+
+    let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine2.recover().await.unwrap();
+
+    let pairs = engine2.list_pairs();
+    let status = pairs
+        .iter()
+        .find(|(p, _)| p == "BTC-USD")
+        .map(|(_, c)| c.status)
+        .expect("pair must exist after recovery");
+    assert!(
+        matches!(status, crate::state::PairStatus::Delisted),
+        "recovered pair status must be Delisted, got {status:?}",
+    );
+}
+
+#[tokio::test]
 async fn recover_from_file_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.bin");
@@ -1053,6 +1101,18 @@ async fn event_log_size_bytes_routes_to_store() {
     // MemStore inherits the default Store::size_bytes which returns 0,
     // so the engine method should pass that through unchanged.
     assert_eq!(engine.event_log_size_bytes().unwrap(), 0);
+}
+
+#[test]
+fn take_snapshot_for_bench_delegates_to_take_snapshot() {
+    use dp_event::{MemSnapshotStore, SnapshotStore};
+    use crate::snapshot::SnapshotConfig;
+    let (engine, _) = make_engine();
+    let snap_store = MemSnapshotStore::new();
+    let seq = crate::take_snapshot_for_bench(&engine, &snap_store, &SnapshotConfig::default(), 0)
+        .expect("bench snapshot must succeed");
+    assert_eq!(seq, 0);
+    assert!(!snap_store.list_seqs().unwrap().is_empty());
 }
 
 mod snapshot_recover {
