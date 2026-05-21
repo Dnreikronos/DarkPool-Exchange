@@ -1,4 +1,5 @@
 mod event;
+mod file_snapshot;
 mod file_store;
 mod mem_store;
 #[cfg(feature = "postgres")]
@@ -7,6 +8,7 @@ mod snapshot;
 mod store;
 
 pub use event::{Event, EventData};
+pub use file_snapshot::FileSnapshotStore;
 pub use file_store::FileStore;
 pub use mem_store::MemStore;
 #[cfg(feature = "postgres")]
