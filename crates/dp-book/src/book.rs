@@ -5,9 +5,10 @@ use dp_event::{Event, EventData, EventError, Store};
 use dp_types::{Fill, Order, Side};
 use parking_lot::RwLock;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 struct PerPairBook {
     bids: HashMap<Uuid, Order>,
     asks: HashMap<Uuid, Order>,
@@ -19,9 +20,21 @@ impl PerPairBook {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Inner {
     books: HashMap<String, PerPairBook>,
     seq: u64,
+}
+
+/// Persistable snapshot of the order book — every per-pair sub-book plus
+/// the highest event-sequence number applied. The engine writes this
+/// inside its periodic snapshot envelope and restores it on boot before
+/// replaying events past `seq`. Public so the engine crate can wrap it
+/// in [`SerializableState`], but the fields themselves are
+/// implementation detail.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BookSnapshot {
+    inner: Inner,
 }
 
 pub struct OrderBook {
@@ -51,6 +64,31 @@ impl OrderBook {
             }
         }
         Ok(())
+    }
+
+    /// Clone the current book state into a serialisable snapshot. Holds
+    /// the read lock only for the clone — the snapshot is independent
+    /// of the live book after this returns.
+    pub fn to_snapshot(&self) -> BookSnapshot {
+        BookSnapshot {
+            inner: self.inner.read().clone(),
+        }
+    }
+
+    /// Replace the live book state with `snap`. Takes the write lock for
+    /// the swap; subsequent applies / inserts pick up the restored
+    /// state. Used by the engine's recover path immediately after
+    /// loading a snapshot, before replaying events past `applied_seq`.
+    pub fn restore_from(&self, snap: BookSnapshot) {
+        let mut inner = self.inner.write();
+        *inner = snap.inner;
+    }
+
+    /// Highest event sequence number applied to the book. Used by the
+    /// recover path to choose the starting seq for the post-snapshot
+    /// event replay.
+    pub fn applied_seq(&self) -> u64 {
+        self.inner.read().seq
     }
 
     pub fn apply(&self, event: &Event) {

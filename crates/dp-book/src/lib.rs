@@ -1,3 +1,3 @@
 mod book;
 
-pub use book::OrderBook;
+pub use book::{BookSnapshot, OrderBook};
