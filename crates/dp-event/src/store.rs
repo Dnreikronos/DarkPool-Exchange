@@ -29,6 +29,17 @@ pub trait Store: Send + Sync {
     fn size_bytes(&self) -> Result<u64, EventError> {
         Ok(0)
     }
+
+    /// Discard every event with `seq < before_seq`. Callers MUST only
+    /// invoke this after a snapshot covering at least `before_seq` has
+    /// been durably written; the truncated events are unrecoverable. The
+    /// default is a no-op so backends that do not (yet) support
+    /// compaction keep compiling.
+    ///
+    /// Same runtime requirement as [`Store::ping`].
+    fn compact_before(&self, _before_seq: u64) -> Result<(), EventError> {
+        Ok(())
+    }
 }
 
 pub fn assign_seq_and_timestamp(event: &mut Event, seq: &mut u64) {
