@@ -547,4 +547,33 @@ mod tests {
         assert!(ids.contains(&a.id));
         assert!(ids.contains(&b.id));
     }
+
+    #[test]
+    fn snapshot_round_trip_preserves_orders() {
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 3);
+        let ask = make_order(Side::Sell, 100, 2);
+        let bid_id = bid.id;
+        let ask_id = ask.id;
+        book.insert_order(bid);
+        book.insert_order(ask);
+
+        let snap = book.to_snapshot();
+
+        let restored = OrderBook::new();
+        restored.restore_from(snap);
+
+        assert!(restored.has_order(bid_id));
+        assert!(restored.has_order(ask_id));
+        assert_eq!(restored.active_order_count(), 2);
+    }
+
+    #[test]
+    fn snapshot_empty_book_round_trips() {
+        let book = OrderBook::new();
+        let snap = book.to_snapshot();
+        let restored = OrderBook::new();
+        restored.restore_from(snap);
+        assert_eq!(restored.active_order_count(), 0);
+    }
 }

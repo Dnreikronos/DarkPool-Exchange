@@ -269,4 +269,43 @@ mod tests {
         assert!(!PairStatus::Suspended.is_active());
         assert!(!PairStatus::Delisted.is_active());
     }
+
+    #[test]
+    fn to_serializable_captures_pair_tokens() {
+        let mut state = EngineState::new();
+        let base = alloy_primitives::Address::repeat_byte(1);
+        let quote = alloy_primitives::Address::repeat_byte(2);
+        state
+            .pair_tokens
+            .insert("ETH/USDC".into(), PairConfig::new(base, quote));
+
+        let snap = state.to_serializable();
+        assert!(snap.pair_tokens.contains_key("ETH/USDC"));
+        assert_eq!(snap.pair_tokens["ETH/USDC"].base_token, base);
+    }
+
+    #[test]
+    fn restore_from_serializable_overwrites_pair_tokens() {
+        let mut state = EngineState::new();
+        let base = alloy_primitives::Address::repeat_byte(0xAA);
+        let quote = alloy_primitives::Address::repeat_byte(0xBB);
+        state
+            .pair_tokens
+            .insert("BTC/USDC".into(), PairConfig::new(base, quote));
+
+        // Build a snap with a different pair registry.
+        let mut other = EngineState::new();
+        other.pair_tokens.insert(
+            "SOL/USDC".into(),
+            PairConfig::new(
+                alloy_primitives::Address::repeat_byte(0xCC),
+                alloy_primitives::Address::repeat_byte(0xDD),
+            ),
+        );
+        let snap = other.to_serializable();
+
+        state.restore_from_serializable(snap);
+        assert!(!state.pair_tokens.contains_key("BTC/USDC"));
+        assert!(state.pair_tokens.contains_key("SOL/USDC"));
+    }
 }
