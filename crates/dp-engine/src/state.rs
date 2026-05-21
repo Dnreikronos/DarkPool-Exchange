@@ -3,10 +3,11 @@ use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, U256};
 use dp_auction::Match;
-use dp_book::OrderBook;
+use dp_book::{BookSnapshot, OrderBook};
 use dp_settlement::SettlementMatch;
 use dp_types::Order;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{DEFAULT_MAX_BACKOFF, DEFAULT_MIN_BACKOFF, DEFAULT_ORDER_TTL, DEFAULT_SUBMIT_TIMEOUT};
@@ -50,7 +51,7 @@ pub(crate) fn try_build_settlement_row(
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PairStatus {
     Active,
     Suspended,
@@ -63,7 +64,7 @@ impl PairStatus {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairConfig {
     pub base_token: Address,
     pub quote_token: Address,
@@ -100,7 +101,7 @@ impl Default for PairConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingBatch {
     pub batch_id: Uuid,
     pub auction_id: Uuid,
@@ -109,11 +110,21 @@ pub struct PendingBatch {
     pub proof: Vec<u8>,
     pub public_inputs: [U256; 6],
     pub attempts: u32,
+    /// `Instant` has no stable serialised representation; the retry
+    /// scheduler will compute a fresh attempt time the next time the
+    /// batch is considered, so we drop the wall-clock pointer on
+    /// snapshot round-trip and let the recover path fall back to the
+    /// default `None`.
+    #[serde(skip)]
     pub next_attempt: Option<Instant>,
+    /// In-flight submission flag is a transient runtime guard — after a
+    /// snapshot-and-restart there is no in-flight work, so reset to
+    /// `false` instead of trying to round-trip it.
+    #[serde(skip)]
     pub submitting: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct AuctionExecutedRecord {
     pub auction_id: Uuid,
     pub pair: String,
@@ -121,6 +132,20 @@ pub(crate) struct AuctionExecutedRecord {
     pub matched_volume: rust_decimal::Decimal,
     pub match_count: u32,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Persistable subset of [`EngineState`]. Captures every piece of state
+/// that recovery rebuilds from the event stream so a snapshot + the
+/// event tail past `applied_seq` is equivalent to a full replay. The
+/// runtime-only fields (`submit_timeout`, backoff bounds, `recovered`
+/// flag) are intentionally excluded — they come from `Config`, not the
+/// event log.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct SerializableState {
+    pub book: BookSnapshot,
+    pub pair_tokens: HashMap<String, PairConfig>,
+    pub auction_log: Vec<AuctionExecutedRecord>,
+    pub pending_batches: HashMap<Uuid, PendingBatch>,
 }
 
 pub(crate) struct EngineState {
@@ -163,6 +188,29 @@ impl EngineState {
 
     pub fn pair_config(&self, pair: &str) -> Option<&PairConfig> {
         self.pair_tokens.get(pair)
+    }
+
+    /// Capture the persistable subset of state into a [`SerializableState`].
+    /// Holds no locks of its own (caller owns the `Mutex<EngineState>`
+    /// guard); clones every contained collection so the resulting value
+    /// is independent of the live state.
+    pub(crate) fn to_serializable(&self) -> SerializableState {
+        SerializableState {
+            book: self.book.to_snapshot(),
+            pair_tokens: self.pair_tokens.clone(),
+            auction_log: self.auction_log.clone(),
+            pending_batches: self.pending_batches.clone(),
+        }
+    }
+
+    /// Replace the projection-derived fields with the contents of
+    /// `snap`. The runtime-only fields (timeouts, backoff, `recovered`)
+    /// are untouched so the engine's `Config`-supplied values win.
+    pub(crate) fn restore_from_serializable(&mut self, snap: SerializableState) {
+        self.book.restore_from(snap.book);
+        self.pair_tokens = snap.pair_tokens;
+        self.auction_log = snap.auction_log;
+        self.pending_batches = snap.pending_batches;
     }
 }
 
@@ -220,5 +268,44 @@ mod tests {
         assert!(PairStatus::Active.is_active());
         assert!(!PairStatus::Suspended.is_active());
         assert!(!PairStatus::Delisted.is_active());
+    }
+
+    #[test]
+    fn to_serializable_captures_pair_tokens() {
+        let mut state = EngineState::new();
+        let base = alloy_primitives::Address::repeat_byte(1);
+        let quote = alloy_primitives::Address::repeat_byte(2);
+        state
+            .pair_tokens
+            .insert("ETH/USDC".into(), PairConfig::new(base, quote));
+
+        let snap = state.to_serializable();
+        assert!(snap.pair_tokens.contains_key("ETH/USDC"));
+        assert_eq!(snap.pair_tokens["ETH/USDC"].base_token, base);
+    }
+
+    #[test]
+    fn restore_from_serializable_overwrites_pair_tokens() {
+        let mut state = EngineState::new();
+        let base = alloy_primitives::Address::repeat_byte(0xAA);
+        let quote = alloy_primitives::Address::repeat_byte(0xBB);
+        state
+            .pair_tokens
+            .insert("BTC/USDC".into(), PairConfig::new(base, quote));
+
+        // Build a snap with a different pair registry.
+        let mut other = EngineState::new();
+        other.pair_tokens.insert(
+            "SOL/USDC".into(),
+            PairConfig::new(
+                alloy_primitives::Address::repeat_byte(0xCC),
+                alloy_primitives::Address::repeat_byte(0xDD),
+            ),
+        );
+        let snap = other.to_serializable();
+
+        state.restore_from_serializable(snap);
+        assert!(!state.pair_tokens.contains_key("BTC/USDC"));
+        assert!(state.pair_tokens.contains_key("SOL/USDC"));
     }
 }

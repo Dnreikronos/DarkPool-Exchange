@@ -1,15 +1,23 @@
 mod event;
+mod file_snapshot;
 mod file_store;
 mod mem_store;
 #[cfg(feature = "postgres")]
+mod pg_snapshot;
+#[cfg(feature = "postgres")]
 mod pg_store;
+mod snapshot;
 mod store;
 
 pub use event::{Event, EventData};
+pub use file_snapshot::FileSnapshotStore;
 pub use file_store::FileStore;
 pub use mem_store::MemStore;
 #[cfg(feature = "postgres")]
+pub use pg_snapshot::PgSnapshotStore;
+#[cfg(feature = "postgres")]
 pub use pg_store::PgStore;
+pub use snapshot::{MemSnapshotStore, SnapshotStore};
 pub use store::{assign_seq_and_timestamp, index_after, Store};
 
 #[derive(Debug, thiserror::Error)]

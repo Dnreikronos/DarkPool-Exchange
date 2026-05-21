@@ -445,6 +445,54 @@ async fn recover_from_mem_store() {
 }
 
 #[tokio::test]
+async fn recover_preserves_pair_suspended_status() {
+    let store = Arc::new(MemStore::new());
+    let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine1
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register");
+    engine1.suspend_pair("BTC-USD").expect("suspend");
+
+    let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine2.recover().await.unwrap();
+
+    let pairs = engine2.list_pairs();
+    let status = pairs
+        .iter()
+        .find(|(p, _)| p == "BTC-USD")
+        .map(|(_, c)| c.status)
+        .expect("pair must exist after recovery");
+    assert!(
+        matches!(status, crate::state::PairStatus::Suspended),
+        "recovered pair status must be Suspended, got {status:?}",
+    );
+}
+
+#[tokio::test]
+async fn recover_preserves_pair_delisted_status() {
+    let store = Arc::new(MemStore::new());
+    let engine1 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine1
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register");
+    engine1.delist_pair("BTC-USD").expect("delist");
+
+    let engine2 = Engine::new(store.clone(), Duration::from_millis(50));
+    engine2.recover().await.unwrap();
+
+    let pairs = engine2.list_pairs();
+    let status = pairs
+        .iter()
+        .find(|(p, _)| p == "BTC-USD")
+        .map(|(_, c)| c.status)
+        .expect("pair must exist after recovery");
+    assert!(
+        matches!(status, crate::state::PairStatus::Delisted),
+        "recovered pair status must be Delisted, got {status:?}",
+    );
+}
+
+#[tokio::test]
 async fn recover_from_file_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.bin");
@@ -1053,4 +1101,695 @@ async fn event_log_size_bytes_routes_to_store() {
     // MemStore inherits the default Store::size_bytes which returns 0,
     // so the engine method should pass that through unchanged.
     assert_eq!(engine.event_log_size_bytes().unwrap(), 0);
+}
+
+#[test]
+fn take_snapshot_for_bench_delegates_to_take_snapshot() {
+    use crate::snapshot::SnapshotConfig;
+    use dp_event::{MemSnapshotStore, SnapshotStore};
+    let (engine, _) = make_engine();
+    let snap_store = MemSnapshotStore::new();
+    let seq = crate::take_snapshot_for_bench(&engine, &snap_store, &SnapshotConfig::default(), 0)
+        .expect("bench snapshot must succeed");
+    assert_eq!(seq, 0);
+    assert!(!snap_store.list_seqs().unwrap().is_empty());
+}
+
+mod snapshot_recover {
+    //! Verifies that `recover()` produces the same projection state when
+    //! starting from a snapshot+tail as it does when replaying every
+    //! event from seq 0. Drives a deterministic mini-scenario (register
+    //! pair → place orders → tick → snapshot mid-flight → more orders +
+    //! ticks) on two stores, then compares the public-facing engine
+    //! state.
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use alloy_primitives::Address;
+    use dp_event::{MemSnapshotStore, MemStore, SnapshotStore};
+    use dp_types::Side;
+    use rust_decimal::Decimal;
+
+    use crate::snapshot::{take_snapshot, SnapshotConfig};
+    use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
+    use crate::Engine;
+
+    fn dec(n: i64) -> Decimal {
+        Decimal::new(n, 0)
+    }
+
+    fn wire_engine(store: Arc<MemStore>) -> Engine {
+        // Engine::new already installs a NoopDecrypter that parses the
+        // JSON-encoded plaintext payload `place_plaintext_order` builds
+        // — installing a real decrypter here would lose that round-trip.
+        let engine = Engine::new(store, Duration::from_millis(50));
+        engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
+        engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine
+    }
+
+    async fn drive_scenario(engine: &Engine) {
+        engine
+            .register_pair_with_event(
+                "BTC-USD",
+                crate::state::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),
+            )
+            .expect("register pair");
+        for i in 0..5 {
+            place_plaintext_order(
+                engine,
+                "BTC-USD",
+                Side::Buy,
+                dec(100),
+                dec(1),
+                &format!("bid-{i}"),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+            place_plaintext_order(
+                engine,
+                "BTC-USD",
+                Side::Sell,
+                dec(100),
+                dec(1),
+                &format!("ask-{i}"),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        }
+        // First tick: matches a few orders, surfaces AuctionExecuted +
+        // OrderMatched + BatchSubmitted + BatchConfirmed events.
+        engine.run_auction_tick().await;
+    }
+
+    fn public_state_fingerprint(engine: &Engine) -> Fingerprint {
+        let (bids, asks) = engine.get_order_book("BTC-USD");
+        let pairs = engine
+            .list_pairs()
+            .into_iter()
+            .map(|(p, c)| (p, c.status, c.base_token, c.quote_token))
+            .collect::<Vec<_>>();
+        let auction_log_len = engine
+            .get_auction_history(Some("BTC-USD"), 100)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        Fingerprint {
+            active_orders: engine.active_order_count(),
+            pending_batches: engine.pending_batch_count(),
+            bid_ids: bids.iter().map(|o| o.id).collect(),
+            ask_ids: asks.iter().map(|o| o.id).collect(),
+            pairs,
+            auction_log_len,
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Fingerprint {
+        active_orders: usize,
+        pending_batches: usize,
+        bid_ids: Vec<uuid::Uuid>,
+        ask_ids: Vec<uuid::Uuid>,
+        pairs: Vec<(String, crate::state::PairStatus, Address, Address)>,
+        auction_log_len: usize,
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_replay_yield_identical_state() {
+        // Drive the same scenario in two parallel-but-independent worlds:
+        // (A) plain event-replay, (B) snapshot + post-snapshot tail replay.
+        // The post-tick engines are the "ground truth"; the test then
+        // restores fresh engines from the same stores and asserts both
+        // recovery paths converge to the same observable state.
+
+        let store_a = Arc::new(MemStore::new());
+        let engine_a = wire_engine(store_a.clone());
+        drive_scenario(&engine_a).await;
+        let ground_truth = public_state_fingerprint(&engine_a);
+
+        let store_b = Arc::new(MemStore::new());
+        let snap_store_b: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine_b = wire_engine(store_b.clone());
+        engine_b.set_snapshot_store(Some(snap_store_b.clone()));
+        drive_scenario(&engine_b).await;
+        // Snapshot at "quiescence" — after the tick + all async finalize
+        // calls have returned. take_snapshot uses the engine's current
+        // store_last_seq as the watermark cap.
+        let now_seq = engine_b.store_last_seq();
+        take_snapshot(
+            &engine_b,
+            snap_store_b.as_ref(),
+            &SnapshotConfig::default(),
+            now_seq,
+        )
+        .expect("take snapshot");
+
+        // Apply additional events post-snapshot so the post-snapshot tail
+        // is non-empty — exercises the replay-past-snapshot path.
+        place_plaintext_order(
+            &engine_b,
+            "BTC-USD",
+            Side::Buy,
+            dec(95),
+            dec(2),
+            "tail-bid",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        place_plaintext_order(
+            &engine_b,
+            "BTC-USD",
+            Side::Sell,
+            dec(95),
+            dec(2),
+            "tail-ask",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        engine_b.run_auction_tick().await;
+        let tail_truth = public_state_fingerprint(&engine_b);
+
+        // Sanity check: the post-snapshot run should differ from the
+        // first scenario's fingerprint (more orders + another tick).
+        assert_ne!(
+            ground_truth, tail_truth,
+            "scenario b should have applied more events than a",
+        );
+
+        // Restore from snapshot + replay tail.
+        let store_b_restore = store_b.clone();
+        let snap_store_b_restore = snap_store_b.clone();
+        let engine_b_restored = wire_engine(store_b_restore);
+        engine_b_restored.set_snapshot_store(Some(snap_store_b_restore));
+        engine_b_restored.recover().await.expect("recover b");
+        let restored_fp = public_state_fingerprint(&engine_b_restored);
+        assert_eq!(
+            restored_fp, tail_truth,
+            "snapshot-based recovery must reproduce post-tail state",
+        );
+
+        // Restore from full event replay (no snapshot store wired).
+        let engine_b_full = wire_engine(store_b.clone());
+        // intentionally NO snapshot store, so recover() falls back to
+        // event-only replay.
+        engine_b_full.recover().await.expect("recover full");
+        let full_fp = public_state_fingerprint(&engine_b_full);
+        assert_eq!(
+            full_fp, tail_truth,
+            "full-replay recovery must match the live engine's state",
+        );
+    }
+
+    #[tokio::test]
+    async fn corrupt_snapshot_falls_back_to_full_replay() {
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+        let truth = public_state_fingerprint(&engine);
+
+        // Write a *deliberately garbage* envelope at a sensible seq —
+        // recover() should drop it and replay the full event log
+        // instead of bricking on the bad bytes.
+        snap_store
+            .write(engine.store_last_seq(), b"not a real envelope, just trash")
+            .unwrap();
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.recover().await.expect("recover with bad snap");
+        let restored_fp = public_state_fingerprint(&restored);
+        assert_eq!(
+            restored_fp, truth,
+            "corrupt snapshot must fall back transparently to full replay",
+        );
+    }
+
+    #[tokio::test]
+    async fn corrupt_latest_falls_back_to_older_snapshot() {
+        // With `retain_count=3` the snapshotter keeps multiple
+        // envelopes. If the latest is corrupt but an older one is
+        // intact, recover() must walk the list descending and use the
+        // older snapshot rather than redoing a full replay (which would
+        // be wrong if the log is compacted).
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+        let truth_after_scenario = public_state_fingerprint(&engine);
+
+        // Snapshot 1: covers the whole scenario. Good.
+        let seq1 = engine.store_last_seq();
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq1,
+        )
+        .expect("take snapshot 1");
+
+        // Add a couple of events so the next snapshot covers a strictly
+        // greater seq — then plant a corrupt envelope at that seq so
+        // read_latest decode fails and the walk falls back to snap 1.
+        place_plaintext_order(
+            &engine,
+            "BTC-USD",
+            Side::Buy,
+            dec(80),
+            dec(1),
+            "tail-1",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        let seq2 = engine.store_last_seq();
+        snap_store
+            .write(seq2, b"corrupt latest envelope, must be rejected")
+            .unwrap();
+
+        // Restore: latest is garbage, but seq1's envelope is intact and
+        // the event log past seq1 (just one OrderPlaced) is also intact,
+        // so the resulting fingerprint must include that tail order.
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.recover().await.expect("recover with bad latest");
+
+        // Truth includes one extra placed order from the tail.
+        let restored_fp = public_state_fingerprint(&restored);
+        assert_eq!(
+            restored_fp.pairs, truth_after_scenario.pairs,
+            "older snapshot must preserve pair registry",
+        );
+        assert_eq!(
+            restored_fp.active_orders,
+            truth_after_scenario.active_orders + 1,
+            "tail order placed after the corrupt latest must replay on top of the older snapshot",
+        );
+    }
+
+    #[tokio::test]
+    async fn all_corrupt_and_compacted_log_refuses_boot() {
+        // The pathological case the hardening is for: every snapshot
+        // envelope on disk is bad AND the event log has been compacted
+        // past seq 1. Replaying from seq 0 would silently rebuild a
+        // partial book; recover() must refuse to boot instead.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        // Compact the event log so seq 1 is no longer present.
+        let last = engine.store_last_seq();
+        engine.compact_events_before(last).expect("compact");
+
+        // Plant a garbage envelope; this is the only snapshot the
+        // store has, and it cannot decode.
+        snap_store.write(last, b"garbage").unwrap();
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("must refuse boot on corrupt-snap + compacted-log");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    /// A SnapshotStore that always errors on `list_seqs`, triggering the
+    /// `StoreError` branch of `recover()`.
+    struct AlwaysFailSnapshotStore;
+    impl dp_event::SnapshotStore for AlwaysFailSnapshotStore {
+        fn write(&self, _seq: u64, _envelope: &[u8]) -> Result<(), dp_event::EventError> {
+            Ok(())
+        }
+        fn read_latest(&self) -> Result<Option<(u64, Vec<u8>)>, dp_event::EventError> {
+            Err(dp_event::EventError::Io(std::io::Error::other("injected")))
+        }
+        fn read_at(&self, _seq: u64) -> Result<Option<Vec<u8>>, dp_event::EventError> {
+            Ok(None)
+        }
+        fn list_seqs(&self) -> Result<Vec<u64>, dp_event::EventError> {
+            Err(dp_event::EventError::Io(std::io::Error::other("injected")))
+        }
+        fn delete_before(&self, _before_seq: u64) -> Result<(), dp_event::EventError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn restored_snapshot_with_tail_gap_refuses_boot() {
+        // Build an engine, place events, take a snapshot, then compact
+        // the first tail event to manufacture a gap between the snapshot
+        // watermark and the retained log.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        let snap_seq = engine.store_last_seq();
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            snap_seq,
+        )
+        .expect("take snapshot");
+
+        // Add two more events (tail) then compact the first tail event,
+        // creating a gap: snap_seq+1 is missing, snap_seq+2 is present.
+        engine
+            .register_pair_with_event(
+                "ETH-USDC",
+                crate::state::PairConfig::new(
+                    alloy_primitives::Address::repeat_byte(0xAA),
+                    alloy_primitives::Address::repeat_byte(0xBB),
+                ),
+            )
+            .unwrap();
+        engine
+            .register_pair_with_event(
+                "SOL-USDC",
+                crate::state::PairConfig::new(
+                    alloy_primitives::Address::repeat_byte(0xCC),
+                    alloy_primitives::Address::repeat_byte(0xDD),
+                ),
+            )
+            .unwrap();
+
+        let gap_before = snap_seq + 2; // removes snap_seq+1, keeps snap_seq+2
+        engine.compact_events_before(gap_before).expect("compact");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("gap in tail must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn store_error_with_compacted_log_refuses_boot() {
+        // snapshot store always errors; event log has been compacted so
+        // full replay from seq 1 is impossible → must refuse.
+        let store = Arc::new(MemStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        drive_scenario(&engine).await;
+
+        let last = engine.store_last_seq();
+        engine.compact_events_before(last).expect("compact");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("store error + compacted log must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn store_error_with_intact_log_falls_back_to_full_replay() {
+        // snapshot store always errors; event log starts at seq 1 →
+        // full replay is safe, recover() must succeed.
+        let store = Arc::new(MemStore::new());
+        let engine = wire_engine(store.clone());
+        drive_scenario(&engine).await;
+        let truth = public_state_fingerprint(&engine);
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        restored
+            .recover()
+            .await
+            .expect("intact log must allow full replay");
+        assert_eq!(public_state_fingerprint(&restored), truth);
+    }
+
+    #[tokio::test]
+    async fn all_corrupt_and_empty_log_refuses_boot() {
+        // Pathological variant of the above: the event log is entirely
+        // empty (e.g. operator wiped the event store but left the
+        // snapshot dir in place). recover() must refuse rather than
+        // silently boot the projection-empty state implied by an empty
+        // event log — that would contradict the (now-unreadable)
+        // snapshot history.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+
+        // Plant a garbage envelope at a non-zero seq so list_seqs is
+        // non-empty and read_latest decode fails. No events ever land
+        // in the store.
+        snap_store.write(42, b"garbage").unwrap();
+
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        let err = engine
+            .recover()
+            .await
+            .expect_err("must refuse boot on corrupt-snap + empty-log");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+}
+
+/// Property-based crash-recovery tests. Randomises the shape of the
+/// event stream (mix of bid / ask placements, tick cadence, snapshot
+/// timing, optional latest-envelope corruption) and asserts the live
+/// engine, a snapshot-based recovery, and a full-replay recovery all
+/// converge to the same observable state.
+///
+/// Each case runs through a fresh single-thread tokio runtime — proptest
+/// strategies aren't async, so we drive `Engine::recover` and the
+/// scenario via `block_on`. Cases are kept small (low order counts,
+/// short tail) so a full proptest sweep finishes inside the standard
+/// test budget; the fixed-seed deterministic config is documented next
+/// to the strategy.
+#[cfg(test)]
+mod snapshot_recover_prop {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use alloy_primitives::Address;
+    use dp_event::{MemSnapshotStore, MemStore, SnapshotStore};
+    use dp_types::Side;
+    use proptest::prelude::*;
+    use rust_decimal::Decimal;
+
+    use crate::snapshot::{take_snapshot, SnapshotConfig};
+    use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
+    use crate::Engine;
+
+    /// One mutation the property test can apply to the engine.
+    #[derive(Debug, Clone)]
+    enum Step {
+        PlaceBid,
+        PlaceAsk,
+        Tick,
+    }
+
+    /// Wired engine using the plain-text decrypter `place_plaintext_order`
+    /// expects.
+    fn wire_engine(store: Arc<MemStore>) -> Engine {
+        let engine = Engine::new(store, Duration::from_millis(50));
+        engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
+        engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine
+    }
+
+    async fn register_pair(engine: &Engine) {
+        engine
+            .register_pair_with_event(
+                "BTC-USD",
+                crate::state::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),
+            )
+            .expect("register pair");
+    }
+
+    /// Apply a single [`Step`] to `engine`. `seq` disambiguates the
+    /// commitment key so each placement is unique within the scenario.
+    async fn apply_step(engine: &Engine, step: &Step, seq: usize) {
+        match step {
+            Step::PlaceBid => {
+                place_plaintext_order(
+                    engine,
+                    "BTC-USD",
+                    Side::Buy,
+                    Decimal::new(100, 0),
+                    Decimal::new(1, 0),
+                    &format!("bid-{seq}"),
+                    Duration::from_secs(60),
+                )
+                .await
+                .unwrap();
+            }
+            Step::PlaceAsk => {
+                place_plaintext_order(
+                    engine,
+                    "BTC-USD",
+                    Side::Sell,
+                    Decimal::new(100, 0),
+                    Decimal::new(1, 0),
+                    &format!("ask-{seq}"),
+                    Duration::from_secs(60),
+                )
+                .await
+                .unwrap();
+            }
+            Step::Tick => {
+                let _ = engine.run_auction_tick().await;
+            }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Fingerprint {
+        active_orders: usize,
+        pending_batches: usize,
+        bid_ids: Vec<uuid::Uuid>,
+        ask_ids: Vec<uuid::Uuid>,
+        auction_log_len: usize,
+    }
+
+    fn fingerprint(engine: &Engine) -> Fingerprint {
+        let (bids, asks) = engine.get_order_book("BTC-USD");
+        let auction_log_len = engine
+            .get_auction_history(Some("BTC-USD"), 100)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        Fingerprint {
+            active_orders: engine.active_order_count(),
+            pending_batches: engine.pending_batch_count(),
+            bid_ids: bids.iter().map(|o| o.id).collect(),
+            ask_ids: asks.iter().map(|o| o.id).collect(),
+            auction_log_len,
+        }
+    }
+
+    fn step_strategy() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            4 => Just(Step::PlaceBid),
+            4 => Just(Step::PlaceAsk),
+            1 => Just(Step::Tick),
+        ]
+    }
+
+    /// Scenario: a stream of steps, a snapshot point (index into the
+    /// stream), and a flag indicating whether to corrupt the latest
+    /// envelope after snapshotting (forces the descending walk back to
+    /// an earlier good envelope or, when none, to a full replay).
+    fn scenario_strategy() -> impl Strategy<Value = (Vec<Step>, usize, bool)> {
+        prop::collection::vec(step_strategy(), 2..16).prop_flat_map(|steps| {
+            let len = steps.len();
+            (
+                Just(steps),
+                // snapshot point must leave at least one step on
+                // each side so both pre- and post-snapshot replay
+                // paths get exercised.
+                1usize..len,
+                any::<bool>(),
+            )
+        })
+    }
+
+    proptest! {
+        // Keep the case count modest so the full proptest sweep finishes
+        // inside the standard cargo test budget. Each case spawns a
+        // tokio runtime, places several orders, runs ticks, and exercises
+        // two recovery paths — significantly more expensive than a
+        // pure-CPU property.
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn recovery_converges_across_random_streams(
+            (steps, snap_at, corrupt_latest) in scenario_strategy(),
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let outcome = rt.block_on(async move {
+                let store = Arc::new(MemStore::new());
+                let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+                let engine = wire_engine(store.clone());
+                engine.set_snapshot_store(Some(snap_store.clone()));
+                register_pair(&engine).await;
+
+                // Phase 1: pre-snapshot steps.
+                for (i, s) in steps.iter().take(snap_at).enumerate() {
+                    apply_step(&engine, s, i).await;
+                }
+
+                // Take a good snapshot covering everything so far.
+                let good_seq = engine.store_last_seq();
+                take_snapshot(
+                    &engine,
+                    snap_store.as_ref(),
+                    &SnapshotConfig::default(),
+                    good_seq,
+                )
+                .expect("take snapshot");
+
+                // Phase 2: post-snapshot steps. The tail replay must
+                // pick these up on top of the snapshot state.
+                for (j, s) in steps.iter().enumerate().skip(snap_at) {
+                    apply_step(&engine, s, j).await;
+                }
+
+                // Optionally plant a corrupt envelope at the latest seq
+                // so read_latest decode fails and recover() must walk
+                // back to the good snapshot. The event tail past `good_seq`
+                // is still on disk so the older-snapshot path must
+                // produce the same fingerprint as the live engine.
+                if corrupt_latest {
+                    let latest = engine.store_last_seq();
+                    if latest != good_seq {
+                        snap_store
+                            .write(latest, b"proptest corrupted envelope")
+                            .unwrap();
+                    }
+                }
+
+                let truth = fingerprint(&engine);
+
+                // Recovery A: snapshot + tail (the path we're stressing).
+                let restore_a = wire_engine(store.clone());
+                restore_a.set_snapshot_store(Some(snap_store.clone()));
+                restore_a.recover().await.expect("recover snapshot path");
+                let fp_a = fingerprint(&restore_a);
+
+                // Recovery B: full replay (no snapshot store wired).
+                let restore_b = wire_engine(store.clone());
+                restore_b.recover().await.expect("recover full");
+                let fp_b = fingerprint(&restore_b);
+
+                (truth, fp_a, fp_b)
+            });
+
+            let (truth, fp_a, fp_b) = outcome;
+            prop_assert_eq!(&fp_a, &truth, "snapshot-based recovery diverged from live engine");
+            prop_assert_eq!(&fp_b, &truth, "full-replay recovery diverged from live engine");
+        }
+    }
 }

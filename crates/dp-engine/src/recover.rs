@@ -4,14 +4,148 @@ use std::time::Duration;
 use alloy_primitives::U256;
 use chrono::{DateTime, Utc};
 use dp_crypto::Decrypter;
-use dp_event::{Event, EventData};
+use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_types::{EventType, Order, Pair};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::engine::Engine;
 use crate::error::EngineError;
+use crate::snapshot::decode_envelope;
 use crate::state::{try_build_settlement_row, AuctionExecutedRecord, PairConfig, PendingBatch};
+
+/// Result of the snapshot recovery probe. Drives the recover() control
+/// flow without leaking the multi-arm match through the caller.
+enum SnapshotRecoveryOutcome {
+    /// One of the envelopes decoded cleanly; `after_seq` is set to its
+    /// covered sequence.
+    Restored(u64),
+    /// `list_seqs` is empty — there is no snapshot to try.
+    NoneAvailable,
+    /// Every envelope on the store failed to decode. Caller must check
+    /// whether the event log is still complete before falling back to a
+    /// full replay.
+    AllCorrupt,
+    /// The store itself errored (I/O, db). Caller logs and falls back
+    /// to a full replay, mirroring pre-hardening behaviour.
+    StoreError(EventError),
+}
+
+/// Apply a decoded snapshot and populate `placed_orders` from the restored
+/// book. Logs whether this was a first-attempt or fallback recovery, and
+/// warns when the envelope's self-reported seq disagrees with the store key
+/// (the envelope value is authoritative because it is checksum-covered).
+fn apply_and_log_snapshot(
+    engine: &Engine,
+    placed_orders: &mut HashMap<Uuid, Order>,
+    snap_state: crate::state::SerializableState,
+    decoded_seq: u64,
+    store_key: u64,
+    attempts: usize,
+) {
+    engine.apply_snapshot_state(snap_state);
+    for o in engine.inner.state.lock().book.iter_all() {
+        placed_orders.insert(o.id, o);
+    }
+    if attempts == 1 {
+        tracing::info!(seq = decoded_seq, "recovered from snapshot");
+    } else {
+        tracing::warn!(
+            seq = decoded_seq,
+            attempts,
+            "recovered from older snapshot — newer envelopes were corrupt"
+        );
+    }
+    if decoded_seq != store_key {
+        tracing::warn!(
+            envelope_seq = decoded_seq,
+            store_key,
+            "snapshot envelope seq disagrees with store key — \
+             trusting envelope (checksum-covered)"
+        );
+    }
+}
+
+/// Probe the snapshot store for the most-recent decodable envelope.
+/// Walks `list_seqs` descending so a single corrupt latest does not
+/// strand recovery when older envelopes are retained.
+fn try_restore_from_snapshots(
+    engine: &Engine,
+    snap_store: &dyn SnapshotStore,
+    placed_orders: &mut HashMap<Uuid, Order>,
+) -> SnapshotRecoveryOutcome {
+    let seqs = match snap_store.list_seqs() {
+        Ok(s) => s,
+        Err(e) => return SnapshotRecoveryOutcome::StoreError(e),
+    };
+    if seqs.is_empty() {
+        return SnapshotRecoveryOutcome::NoneAvailable;
+    }
+    let mut attempts = 0usize;
+    for &seq in seqs.iter().rev() {
+        let bytes = match snap_store.read_at(seq) {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(error = ?e, seq, "snapshot read_at failed; trying older envelope");
+                continue;
+            }
+        };
+        attempts += 1;
+        match decode_envelope(&bytes) {
+            Ok((decoded_seq, snap_state)) => {
+                apply_and_log_snapshot(
+                    engine,
+                    placed_orders,
+                    snap_state,
+                    decoded_seq,
+                    seq,
+                    attempts,
+                );
+                return SnapshotRecoveryOutcome::Restored(decoded_seq);
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, seq, "snapshot envelope corrupt; trying older");
+                // `decode_envelope` is pure and runs before
+                // `apply_snapshot_state`, so the engine's state was never
+                // touched on this iteration. No reset needed — `placed_orders`
+                // is also untouched on this branch for the same reason.
+            }
+        }
+    }
+    SnapshotRecoveryOutcome::AllCorrupt
+}
+
+/// True iff the event log can produce a complete from-scratch replay —
+/// i.e. its first event has seq 1. False if the log was compacted
+/// (first seq > 1) OR is entirely empty while snapshots claim history
+/// existed. Both cases are unsafe to silently boot from when every
+/// snapshot envelope is corrupt: the empty-log case would yield an
+/// empty engine that contradicts the (now-unreadable) snapshot
+/// history, and the compacted case would rebuild a partial book.
+///
+/// Couples to [`dp_event::assign_seq_and_timestamp`], which increments
+/// from 0 → 1 on the first write. If that ever changes, this check
+/// must move in lockstep — searching for `e.seq == 1` finds both
+/// sites.
+fn event_log_covers_seq_one(store: &dyn Store) -> Result<bool, EngineError> {
+    let first = store.read_from(0, 1)?;
+    Ok(first.first().is_some_and(|e| e.seq == 1))
+}
+
+/// True iff the event log has no gap immediately after `after_seq`.
+/// After a successful snapshot restore, tail events must form a
+/// continuous run: the first readable event must be `after_seq + 1`
+/// or the log must be empty past that point (nothing to replay).
+/// A gap means compaction removed events that are not covered by the
+/// snapshot, which would produce a partial projection on boot.
+fn event_log_continuous_after(store: &dyn Store, after_seq: u64) -> Result<bool, EngineError> {
+    let next = store.read_from(after_seq, 1)?;
+    Ok(match next.first() {
+        Some(e) => e.seq == after_seq + 1,
+        None => true,
+    })
+}
 
 const RECOVER_BATCH: usize = 1024;
 
@@ -57,6 +191,61 @@ impl Engine {
         let mut matches_by_auction: HashMap<Uuid, Vec<OrphanMatch>> = HashMap::new();
         let mut auction_timestamps: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
         let mut placed_orders: HashMap<Uuid, Order> = HashMap::new();
+
+        // Snapshot fast-path. When a snapshot store is installed and an
+        // envelope decodes cleanly, restore the projection-derived state
+        // and skip the event-replay loop ahead to its sequence.
+        //
+        // Corruption is handled in layers:
+        //   1. `read_latest` decode failure → walk `list_seqs` descending
+        //      and try each older envelope. The periodic snapshotter
+        //      keeps `retain_count` (default 3) envelopes precisely so a
+        //      bad latest does not strand recovery — without this walk
+        //      the older envelopes were dead weight.
+        //   2. If every snapshot fails AND the event log cannot
+        //      reproduce history from seq 1 (compacted past it, or
+        //      entirely empty while snapshots existed), refuse to boot.
+        //      Either case would silently boot state that contradicts
+        //      the (now-unreadable) snapshot history — exactly the
+        //      "wrong state on restart" failure mode the snapshotter
+        //      is supposed to prevent.
+        //   3. Only when the event log still starts at seq 1 do we fall
+        //      back to a full replay.
+        if let Some(snap_store) = self.inner.snapshot_store.read().clone() {
+            let restored =
+                try_restore_from_snapshots(self, snap_store.as_ref(), &mut placed_orders);
+            match restored {
+                SnapshotRecoveryOutcome::Restored(seq) => {
+                    if !event_log_continuous_after(store.as_ref(), seq)? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    after_seq = seq;
+                }
+                SnapshotRecoveryOutcome::NoneAvailable => {
+                    tracing::info!("no snapshot present, full replay");
+                }
+                SnapshotRecoveryOutcome::AllCorrupt => {
+                    // Every envelope on the store failed to decode.
+                    // Full replay is only safe when the event log can
+                    // genuinely reproduce history from seq 1 onward —
+                    // otherwise we'd silently boot wrong state.
+                    if !event_log_covers_seq_one(store.as_ref())? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    tracing::warn!(
+                        "every snapshot envelope corrupt; event log intact from seq 1 — full replay"
+                    );
+                    self.inner.state.lock().reset_projection();
+                }
+                SnapshotRecoveryOutcome::StoreError(e) => {
+                    tracing::warn!(error = ?e, "snapshot store read failed; falling back to full replay");
+                    if !event_log_covers_seq_one(store.as_ref())? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    self.inner.state.lock().reset_projection();
+                }
+            }
+        }
 
         loop {
             let events = store.read_from(after_seq, RECOVER_BATCH)?;
@@ -308,6 +497,19 @@ impl Engine {
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
 
+                // Snapshot-aware insert: if recovery loaded a snapshot
+                // that already carried this batch, do not overwrite it
+                // with a freshly-rebuilt one. The snapshot's record has
+                // the original `matches` / `settlement_matches` /
+                // `public_inputs`; rebuilding from a post-snapshot
+                // replay can only produce empty matches (the
+                // corresponding OrderMatched events were
+                // pre-snapshot), which would defeat the purpose of
+                // keeping the snapshot in the first place.
+                if state.pending_batches.contains_key(batch_id) {
+                    return Ok(());
+                }
+
                 let settlement_matches =
                     build_recovery_settlement_matches(&matches, placed_orders, &state.pair_tokens);
                 // FUTURE: persist `public_inputs` in the `BatchSubmitted`
@@ -495,7 +697,8 @@ fn finalize_public_inputs<T>(
 mod tests {
     use alloy_primitives::Address;
     use chrono::Utc;
-    use dp_types::{Fill, Order, Side};
+    use dp_event::{EventData, MemStore};
+    use dp_types::{EventType, Fill, Order, Side};
     use rust_decimal::Decimal;
 
     use super::*;
@@ -707,5 +910,53 @@ mod tests {
         }];
         let out = build_recovery_settlement_matches(&matches, &placed, &pair_tokens);
         assert_eq!(out.len(), 1, "snapshot must survive book removal");
+    }
+
+    fn placed_event(seq: u64) -> dp_event::Event {
+        dp_event::Event {
+            seq,
+            event_type: EventType::OrderPlaced,
+            timestamp: Utc::now(),
+            data: EventData::OrderPlaced {
+                order_id: Uuid::new_v4(),
+                commitment: vec![],
+                proof: vec![],
+                ciphertext: vec![],
+                salt_nonce: vec![0u8; 32],
+            },
+        }
+    }
+
+    #[test]
+    fn continuous_after_empty_tail_is_ok() {
+        let store = MemStore::new();
+        // No events at all — nothing to replay, continuity holds.
+        assert!(event_log_continuous_after(&store, 0).unwrap());
+        assert!(event_log_continuous_after(&store, 99).unwrap());
+    }
+
+    #[test]
+    fn continuous_after_next_is_exactly_seq_plus_one() {
+        let store = MemStore::new();
+        let mut evs = vec![placed_event(0), placed_event(0), placed_event(0)];
+        store.append(&mut evs).unwrap(); // gets seq 1, 2, 3
+                                         // after_seq=2 → first event after is seq 3 = 2+1 → continuous
+        assert!(event_log_continuous_after(&store, 2).unwrap());
+    }
+
+    #[test]
+    fn continuous_after_detects_gap() {
+        let store = MemStore::new();
+        let mut evs = vec![
+            placed_event(0),
+            placed_event(0),
+            placed_event(0),
+            placed_event(0),
+        ];
+        store.append(&mut evs).unwrap(); // seq 1..4
+                                         // Compact away seq 1 and 2 (remove seq < 3).
+        store.compact_before(3).unwrap();
+        // after_seq=1 → first retained event is seq 3, not 2 → gap
+        assert!(!event_log_continuous_after(&store, 1).unwrap());
     }
 }

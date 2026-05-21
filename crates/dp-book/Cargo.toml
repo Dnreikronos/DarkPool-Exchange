@@ -10,6 +10,7 @@ uuid = { workspace = true }
 rust_decimal = { workspace = true }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 alloy-primitives = { workspace = true }

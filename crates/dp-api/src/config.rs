@@ -70,6 +70,44 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_EVENT_DB", default_value = "")]
     pub event_db: String,
 
+    /// Enable / disable the periodic state-snapshot task. Enabled by
+    /// default — disable only when the operator wants a pure
+    /// event-replay recovery path (e.g. for forensic reproduction of
+    /// historical state).
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_ENABLED", default_value = "true")]
+    pub snapshot_enabled: bool,
+
+    /// Directory (file backend) or empty (DB backend / memory) for the
+    /// snapshot store. Required when `--event-log` is in use and
+    /// snapshots are enabled. Ignored for the postgres backend, which
+    /// stores snapshots in the same DB as events.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_DIR", default_value = "")]
+    pub snapshot_dir: String,
+
+    /// Snapshot whenever this many events have accrued since the last
+    /// snapshot. Lower values shorten replay time at the cost of more
+    /// writes; defaults to 10k which keeps cold-start under a second
+    /// for the in-memory engine.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_EVERY_EVENTS", default_value = "10000")]
+    pub snapshot_every_events: u64,
+
+    /// Force a snapshot if this long has elapsed even when the
+    /// event-count threshold has not been crossed.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_INTERVAL", default_value = "300s", value_parser = parse_duration)]
+    pub snapshot_interval: Duration,
+
+    /// After a snapshot is written, compact event-log entries whose
+    /// seq is at least this far behind the new snapshot's seq. Keeping
+    /// a tail buys forensic visibility into the most recent activity
+    /// even after compaction.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_RETAIN_EVENTS", default_value = "1024")]
+    pub snapshot_retain_events: u64,
+
+    /// Number of snapshot envelopes to keep in the store. Older
+    /// snapshots are pruned via `SnapshotStore::delete_before`.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_RETAIN_COUNT", default_value = "3")]
+    pub snapshot_retain_count: usize,
+
     #[arg(long, env = "DARKPOOL_OPERATOR_KEY", default_value = "")]
     pub operator_key: String,
 
@@ -149,6 +187,10 @@ impl Config {
 
     pub fn event_log_path(&self) -> Option<&str> {
         opt(&self.event_log)
+    }
+
+    pub fn snapshot_dir_path(&self) -> Option<&str> {
+        opt(&self.snapshot_dir)
     }
 
     pub fn operator_key_path(&self) -> Option<&str> {
@@ -357,5 +399,17 @@ mod tests {
         let cfg = cfg_with_tls("", "", "/srv/ca.pem");
         let err = cfg.tls_mode().unwrap_err();
         assert!(err.contains("tls-client-ca"), "msg: {err}");
+    }
+
+    #[test]
+    fn snapshot_dir_path_empty_is_none() {
+        let cfg = cfg_with_tls("", "", "");
+        assert!(cfg.snapshot_dir_path().is_none());
+    }
+
+    #[test]
+    fn snapshot_dir_path_set_returns_some() {
+        let cfg = Config::parse_from(["darkpool-server", "--snapshot-dir", "/var/dp/snaps"]);
+        assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
     }
 }

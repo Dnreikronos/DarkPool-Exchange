@@ -59,4 +59,11 @@ pub enum EngineError {
          batch is poisoned and will not be retried automatically. Manual replay required."
     )]
     RecoveredBatchPublicInputsMissing { batch_id: uuid::Uuid },
+
+    #[error(
+        "recover: every retained snapshot failed to decode and the event log cannot reproduce history from seq 1 \
+         (compacted or empty); booting would silently rebuild contradictory state. \
+         Restore a known-good snapshot or wipe state."
+    )]
+    SnapshotsCorruptAndLogTruncated,
 }

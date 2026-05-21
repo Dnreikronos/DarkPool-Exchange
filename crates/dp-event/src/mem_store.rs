@@ -54,6 +54,15 @@ impl Store for MemStore {
     fn last_seq(&self) -> u64 {
         self.inner.read().seq
     }
+
+    fn compact_before(&self, before_seq: u64) -> Result<(), EventError> {
+        if before_seq == 0 {
+            return Ok(());
+        }
+        let mut inner = self.inner.write();
+        inner.events.retain(|e| e.seq >= before_seq);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -142,5 +151,26 @@ mod tests {
     fn default_size_bytes_is_zero() {
         let store: Box<dyn Store> = Box::new(MemStore::new());
         assert_eq!(store.size_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn compact_drops_events_before_seq() {
+        let store = MemStore::new();
+        let mut events = vec![placed_event(), placed_event(), placed_event()];
+        store.append(&mut events).unwrap();
+        store.compact_before(3).unwrap();
+        let read = store.read_from(0, 10).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].seq, 3);
+        assert_eq!(store.last_seq(), 3);
+    }
+
+    #[test]
+    fn compact_zero_is_noop() {
+        let store = MemStore::new();
+        let mut events = vec![placed_event(), placed_event()];
+        store.append(&mut events).unwrap();
+        store.compact_before(0).unwrap();
+        assert_eq!(store.read_from(0, 10).unwrap().len(), 2);
     }
 }
