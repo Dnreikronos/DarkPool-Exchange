@@ -675,7 +675,8 @@ fn finalize_public_inputs<T>(
 mod tests {
     use alloy_primitives::Address;
     use chrono::Utc;
-    use dp_types::{Fill, Order, Side};
+    use dp_event::{EventData, MemStore};
+    use dp_types::{EventType, Fill, Order, Side};
     use rust_decimal::Decimal;
 
     use super::*;
@@ -887,5 +888,53 @@ mod tests {
         }];
         let out = build_recovery_settlement_matches(&matches, &placed, &pair_tokens);
         assert_eq!(out.len(), 1, "snapshot must survive book removal");
+    }
+
+    fn placed_event(seq: u64) -> dp_event::Event {
+        dp_event::Event {
+            seq,
+            event_type: EventType::OrderPlaced,
+            timestamp: Utc::now(),
+            data: EventData::OrderPlaced {
+                order_id: Uuid::new_v4(),
+                commitment: vec![],
+                proof: vec![],
+                ciphertext: vec![],
+                salt_nonce: vec![0u8; 32],
+            },
+        }
+    }
+
+    #[test]
+    fn continuous_after_empty_tail_is_ok() {
+        let store = MemStore::new();
+        // No events at all — nothing to replay, continuity holds.
+        assert!(event_log_continuous_after(&store, 0).unwrap());
+        assert!(event_log_continuous_after(&store, 99).unwrap());
+    }
+
+    #[test]
+    fn continuous_after_next_is_exactly_seq_plus_one() {
+        let store = MemStore::new();
+        let mut evs = vec![placed_event(0), placed_event(0), placed_event(0)];
+        store.append(&mut evs).unwrap(); // gets seq 1, 2, 3
+        // after_seq=2 → first event after is seq 3 = 2+1 → continuous
+        assert!(event_log_continuous_after(&store, 2).unwrap());
+    }
+
+    #[test]
+    fn continuous_after_detects_gap() {
+        let store = MemStore::new();
+        let mut evs = vec![
+            placed_event(0),
+            placed_event(0),
+            placed_event(0),
+            placed_event(0),
+        ];
+        store.append(&mut evs).unwrap(); // seq 1..4
+        // Compact away seq 1 and 2 (remove seq < 3).
+        store.compact_before(3).unwrap();
+        // after_seq=1 → first retained event is seq 3, not 2 → gap
+        assert!(!event_log_continuous_after(&store, 1).unwrap());
     }
 }

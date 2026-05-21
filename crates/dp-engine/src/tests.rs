@@ -1365,6 +1365,117 @@ mod snapshot_recover {
         );
     }
 
+    /// A SnapshotStore that always errors on `list_seqs`, triggering the
+    /// `StoreError` branch of `recover()`.
+    struct AlwaysFailSnapshotStore;
+    impl dp_event::SnapshotStore for AlwaysFailSnapshotStore {
+        fn write(&self, _seq: u64, _envelope: &[u8]) -> Result<(), dp_event::EventError> {
+            Ok(())
+        }
+        fn read_latest(&self) -> Result<Option<(u64, Vec<u8>)>, dp_event::EventError> {
+            Err(dp_event::EventError::Io(std::io::Error::other("injected")))
+        }
+        fn read_at(&self, _seq: u64) -> Result<Option<Vec<u8>>, dp_event::EventError> {
+            Ok(None)
+        }
+        fn list_seqs(&self) -> Result<Vec<u64>, dp_event::EventError> {
+            Err(dp_event::EventError::Io(std::io::Error::other("injected")))
+        }
+        fn delete_before(&self, _before_seq: u64) -> Result<(), dp_event::EventError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn restored_snapshot_with_tail_gap_refuses_boot() {
+        // Build an engine, place events, take a snapshot, then compact
+        // the first tail event to manufacture a gap between the snapshot
+        // watermark and the retained log.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        let snap_seq = engine.store_last_seq();
+        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), snap_seq)
+            .expect("take snapshot");
+
+        // Add two more events (tail) then compact the first tail event,
+        // creating a gap: snap_seq+1 is missing, snap_seq+2 is present.
+        engine
+            .register_pair_with_event(
+                "ETH-USDC",
+                crate::state::PairConfig::new(
+                    alloy_primitives::Address::repeat_byte(0xAA),
+                    alloy_primitives::Address::repeat_byte(0xBB),
+                ),
+            )
+            .unwrap();
+        engine
+            .register_pair_with_event(
+                "SOL-USDC",
+                crate::state::PairConfig::new(
+                    alloy_primitives::Address::repeat_byte(0xCC),
+                    alloy_primitives::Address::repeat_byte(0xDD),
+                ),
+            )
+            .unwrap();
+
+        let gap_before = snap_seq + 2; // removes snap_seq+1, keeps snap_seq+2
+        engine.compact_events_before(gap_before).expect("compact");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("gap in tail must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn store_error_with_compacted_log_refuses_boot() {
+        // snapshot store always errors; event log has been compacted so
+        // full replay from seq 1 is impossible → must refuse.
+        let store = Arc::new(MemStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        drive_scenario(&engine).await;
+
+        let last = engine.store_last_seq();
+        engine.compact_events_before(last).expect("compact");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("store error + compacted log must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn store_error_with_intact_log_falls_back_to_full_replay() {
+        // snapshot store always errors; event log starts at seq 1 →
+        // full replay is safe, recover() must succeed.
+        let store = Arc::new(MemStore::new());
+        let engine = wire_engine(store.clone());
+        drive_scenario(&engine).await;
+        let truth = public_state_fingerprint(&engine);
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(Arc::new(AlwaysFailSnapshotStore)));
+        restored.recover().await.expect("intact log must allow full replay");
+        assert_eq!(public_state_fingerprint(&restored), truth);
+    }
+
     #[tokio::test]
     async fn all_corrupt_and_empty_log_refuses_boot() {
         // Pathological variant of the above: the event log is entirely
