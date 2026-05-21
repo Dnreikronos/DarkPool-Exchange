@@ -139,6 +139,23 @@ impl Store for PgStore {
         })
     }
 
+    fn compact_before(&self, before_seq: u64) -> Result<(), EventError> {
+        if before_seq == 0 {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let cutoff = before_seq as i64;
+        tokio::task::block_in_place(|| {
+            self.handle.block_on(async {
+                sqlx::query("DELETE FROM events WHERE seq < $1")
+                    .bind(cutoff)
+                    .execute(&pool)
+                    .await?;
+                Ok::<_, EventError>(())
+            })
+        })
+    }
+
     fn size_bytes(&self) -> Result<u64, EventError> {
         // Bind the table name through a parameter + ::regclass cast so the
         // value is never spliced into the SQL text. Today `EVENTS_TABLE` is
