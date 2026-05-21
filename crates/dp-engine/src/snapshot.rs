@@ -257,6 +257,7 @@ mod tests {
     use std::time::Duration;
 
     use dp_event::{MemSnapshotStore, MemStore};
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::state::SerializableState;
@@ -369,5 +370,78 @@ mod tests {
         // Result: [2, 3, 4].
         take_snapshot(&engine, &snap_store, &cfg, 0).unwrap();
         assert_eq!(snap_store.list_seqs().unwrap(), vec![2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn run_snapshotter_writes_snapshot_on_event_trigger() {
+        let engine = bare_engine();
+        let snap_store = Arc::new(MemSnapshotStore::new());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+
+        let cfg = SnapshotConfig {
+            enabled: true,
+            // Fire on every event (0 means always ≥ threshold).
+            every_events: 0,
+            // Long interval so only event_trigger drives the first fire.
+            interval: Duration::from_secs(300),
+            retain_events: 0,
+            retain_count: 10,
+        };
+
+        let cancel = CancellationToken::new();
+        let cancel2 = cancel.clone();
+        let engine_clone = engine.clone();
+
+        let handle = tokio::spawn(async move {
+            run_snapshotter(engine_clone, cfg, cancel2).await;
+        });
+
+        // Allow up to 500 ms for at least one snapshot to land.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        while snap_store.list_seqs().unwrap().is_empty() {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        cancel.cancel();
+        let _ = tokio::time::timeout(Duration::from_millis(200), handle).await;
+
+        assert!(
+            !snap_store.list_seqs().unwrap().is_empty(),
+            "run_snapshotter must write at least one snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_snapshotter_exits_immediately_when_disabled() {
+        let engine = bare_engine();
+        let cfg = SnapshotConfig {
+            enabled: false,
+            ..SnapshotConfig::default()
+        };
+        let cancel = CancellationToken::new();
+        // Should return promptly without hanging.
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            run_snapshotter(engine, cfg, cancel),
+        )
+        .await
+        .expect("disabled snapshotter must return immediately");
+    }
+
+    #[tokio::test]
+    async fn run_snapshotter_exits_when_no_snapshot_store() {
+        let engine = bare_engine();
+        // No snapshot store set — task must exit cleanly.
+        let cfg = SnapshotConfig::default();
+        let cancel = CancellationToken::new();
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            run_snapshotter(engine, cfg, cancel),
+        )
+        .await
+        .expect("snapshotter without store must return immediately");
     }
 }
