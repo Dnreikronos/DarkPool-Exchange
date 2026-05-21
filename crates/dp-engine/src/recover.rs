@@ -4,14 +4,112 @@ use std::time::Duration;
 use alloy_primitives::U256;
 use chrono::{DateTime, Utc};
 use dp_crypto::Decrypter;
-use dp_event::{Event, EventData};
+use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_types::{EventType, Order, Pair};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::engine::Engine;
 use crate::error::EngineError;
+use crate::snapshot::decode_envelope;
 use crate::state::{try_build_settlement_row, AuctionExecutedRecord, PairConfig, PendingBatch};
+
+/// Result of the snapshot recovery probe. Drives the recover() control
+/// flow without leaking the multi-arm match through the caller.
+enum SnapshotRecoveryOutcome {
+    /// One of the envelopes decoded cleanly; `after_seq` is set to its
+    /// covered sequence.
+    Restored(u64),
+    /// `list_seqs` is empty — there is no snapshot to try.
+    NoneAvailable,
+    /// Every envelope on the store failed to decode. Caller must check
+    /// whether the event log is still complete before falling back to a
+    /// full replay.
+    AllCorrupt,
+    /// The store itself errored (I/O, db). Caller logs and falls back
+    /// to a full replay, mirroring pre-hardening behaviour.
+    StoreError(EventError),
+}
+
+/// Probe the snapshot store for the most-recent decodable envelope.
+/// Walks `list_seqs` descending so a single corrupt latest does not
+/// strand recovery when older envelopes are retained.
+fn try_restore_from_snapshots(
+    engine: &Engine,
+    snap_store: &dyn SnapshotStore,
+    placed_orders: &mut HashMap<Uuid, Order>,
+) -> SnapshotRecoveryOutcome {
+    let seqs = match snap_store.list_seqs() {
+        Ok(s) => s,
+        Err(e) => return SnapshotRecoveryOutcome::StoreError(e),
+    };
+    if seqs.is_empty() {
+        return SnapshotRecoveryOutcome::NoneAvailable;
+    }
+    let mut attempts = 0usize;
+    for &seq in seqs.iter().rev() {
+        let bytes = match snap_store.read_at(seq) {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(error = ?e, seq, "snapshot read_at failed; trying older envelope");
+                continue;
+            }
+        };
+        attempts += 1;
+        match decode_envelope(&bytes) {
+            Ok((decoded_seq, snap_state)) => {
+                engine.apply_snapshot_state(snap_state);
+                for o in engine.inner.state.lock().book.iter_all() {
+                    placed_orders.insert(o.id, o);
+                }
+                if attempts == 1 {
+                    tracing::info!(seq = decoded_seq, "recovered from snapshot");
+                } else {
+                    tracing::warn!(
+                        seq = decoded_seq,
+                        attempts,
+                        "recovered from older snapshot — newer envelopes were corrupt"
+                    );
+                }
+                if decoded_seq != seq {
+                    tracing::warn!(
+                        envelope_seq = decoded_seq,
+                        store_key = seq,
+                        "snapshot envelope seq disagrees with store key — \
+                         trusting envelope (checksum-covered)"
+                    );
+                }
+                return SnapshotRecoveryOutcome::Restored(decoded_seq);
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, seq, "snapshot envelope corrupt; trying older");
+                // `decode_envelope` is pure and runs before
+                // `apply_snapshot_state`, so the engine's state was never
+                // touched on this iteration. No reset needed — `placed_orders`
+                // is also untouched on this branch for the same reason.
+            }
+        }
+    }
+    SnapshotRecoveryOutcome::AllCorrupt
+}
+
+/// True iff the event log can produce a complete from-scratch replay —
+/// i.e. its first event has seq 1. False if the log was compacted
+/// (first seq > 1) OR is entirely empty while snapshots claim history
+/// existed. Both cases are unsafe to silently boot from when every
+/// snapshot envelope is corrupt: the empty-log case would yield an
+/// empty engine that contradicts the (now-unreadable) snapshot
+/// history, and the compacted case would rebuild a partial book.
+///
+/// Couples to [`dp_event::assign_seq_and_timestamp`], which increments
+/// from 0 → 1 on the first write. If that ever changes, this check
+/// must move in lockstep — searching for `e.seq == 1` finds both
+/// sites.
+fn event_log_covers_seq_one(store: &dyn Store) -> Result<bool, EngineError> {
+    let first = store.read_from(0, 1)?;
+    Ok(first.first().is_some_and(|e| e.seq == 1))
+}
 
 const RECOVER_BATCH: usize = 1024;
 
@@ -57,6 +155,52 @@ impl Engine {
         let mut matches_by_auction: HashMap<Uuid, Vec<OrphanMatch>> = HashMap::new();
         let mut auction_timestamps: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
         let mut placed_orders: HashMap<Uuid, Order> = HashMap::new();
+
+        // Snapshot fast-path. When a snapshot store is installed and an
+        // envelope decodes cleanly, restore the projection-derived state
+        // and skip the event-replay loop ahead to its sequence.
+        //
+        // Corruption is handled in layers:
+        //   1. `read_latest` decode failure → walk `list_seqs` descending
+        //      and try each older envelope. The periodic snapshotter
+        //      keeps `retain_count` (default 3) envelopes precisely so a
+        //      bad latest does not strand recovery — without this walk
+        //      the older envelopes were dead weight.
+        //   2. If every snapshot fails AND the event log cannot
+        //      reproduce history from seq 1 (compacted past it, or
+        //      entirely empty while snapshots existed), refuse to boot.
+        //      Either case would silently boot state that contradicts
+        //      the (now-unreadable) snapshot history — exactly the
+        //      "wrong state on restart" failure mode the snapshotter
+        //      is supposed to prevent.
+        //   3. Only when the event log still starts at seq 1 do we fall
+        //      back to a full replay.
+        if let Some(snap_store) = self.inner.snapshot_store.read().clone() {
+            let restored =
+                try_restore_from_snapshots(self, snap_store.as_ref(), &mut placed_orders);
+            match restored {
+                SnapshotRecoveryOutcome::Restored(seq) => after_seq = seq,
+                SnapshotRecoveryOutcome::NoneAvailable => {
+                    tracing::info!("no snapshot present, full replay");
+                }
+                SnapshotRecoveryOutcome::AllCorrupt => {
+                    // Every envelope on the store failed to decode.
+                    // Full replay is only safe when the event log can
+                    // genuinely reproduce history from seq 1 onward —
+                    // otherwise we'd silently boot wrong state.
+                    if !event_log_covers_seq_one(store.as_ref())? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    tracing::warn!(
+                        "every snapshot envelope corrupt; event log intact from seq 1 — full replay"
+                    );
+                    self.inner.state.lock().reset_projection();
+                }
+                SnapshotRecoveryOutcome::StoreError(e) => {
+                    tracing::warn!(error = ?e, "snapshot store read failed, full replay");
+                }
+            }
+        }
 
         loop {
             let events = store.read_from(after_seq, RECOVER_BATCH)?;
@@ -307,6 +451,19 @@ impl Engine {
                     .collect();
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
+
+                // Snapshot-aware insert: if recovery loaded a snapshot
+                // that already carried this batch, do not overwrite it
+                // with a freshly-rebuilt one. The snapshot's record has
+                // the original `matches` / `settlement_matches` /
+                // `public_inputs`; rebuilding from a post-snapshot
+                // replay can only produce empty matches (the
+                // corresponding OrderMatched events were
+                // pre-snapshot), which would defeat the purpose of
+                // keeping the snapshot in the first place.
+                if state.pending_batches.contains_key(batch_id) {
+                    return Ok(());
+                }
 
                 let settlement_matches =
                     build_recovery_settlement_matches(&matches, placed_orders, &state.pair_tokens);
