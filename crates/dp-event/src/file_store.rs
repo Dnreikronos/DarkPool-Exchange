@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use parking_lot::RwLock;
 
@@ -13,6 +13,12 @@ struct FileInner {
     writer: BufWriter<File>,
     events: Vec<Event>,
     seq: u64,
+    /// Captured at open time so [`Store::compact_before`] can rewrite
+    /// the log atomically without needing the caller to re-supply the
+    /// path. Holding the path on the struct keeps the file handle, the
+    /// in-memory cache, and the on-disk file in lockstep across the
+    /// rewrite.
+    path: PathBuf,
 }
 
 pub struct FileStore {
@@ -21,12 +27,13 @@ pub struct FileStore {
 
 impl FileStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EventError> {
+        let path = path.as_ref().to_path_buf();
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(path.as_ref())?;
+            .open(&path)?;
 
         let (events, seq, good_end) = load_and_truncate(&mut file)?;
 
@@ -41,6 +48,7 @@ impl FileStore {
                 writer,
                 events,
                 seq,
+                path,
             }),
         })
     }
@@ -140,6 +148,70 @@ impl Store for FileStore {
     fn size_bytes(&self) -> Result<u64, EventError> {
         let inner = self.inner.read();
         Ok(inner.file.metadata()?.len())
+    }
+
+    fn compact_before(&self, before_seq: u64) -> Result<(), EventError> {
+        // Holds the inner write lock for the duration of the rewrite +
+        // fs::rename. At MVP scale (a few thousand retained events,
+        // ~MB of bincode) this is sub-second and the auction tick's
+        // append simply blocks behind it; if event-log growth ever
+        // pushes compaction into multi-second territory, chunk the
+        // rewrite (e.g. drop the lock between batches and re-acquire
+        // for the final atomic publish) instead of widening this
+        // window further.
+        if before_seq == 0 {
+            return Ok(());
+        }
+        let mut inner = self.inner.write();
+
+        // Flush any buffered appends to the live file before we rewrite —
+        // otherwise the post-rename handle would be missing the tail of
+        // events the caller had appended just before compacting.
+        inner.writer.flush()?;
+        inner.file.sync_all()?;
+
+        let tmp_path = inner.path.with_extension("compact.tmp");
+        {
+            let tmp = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)?;
+            let mut tmp_writer = BufWriter::new(tmp);
+            for evt in inner.events.iter().filter(|e| e.seq >= before_seq) {
+                let payload = bincode::serialize(evt)?;
+                let length = payload.len() as u32;
+                tmp_writer.write_all(&length.to_be_bytes())?;
+                tmp_writer.write_all(&payload)?;
+            }
+            tmp_writer.flush()?;
+            let tmp_file = tmp_writer
+                .into_inner()
+                .map_err(|e| EventError::Io(e.into_error()))?;
+            tmp_file.sync_all()?;
+        }
+
+        // Atomic publish. On Linux `rename` is atomic when source and
+        // destination live on the same filesystem — temp file is in the
+        // same directory as the log to guarantee that.
+        std::fs::rename(&tmp_path, &inner.path)?;
+
+        // Re-open the live handle on the rewritten file; the old handle
+        // still points at the now-orphaned inode. seek to EOF and rebuild
+        // the writer so subsequent appends land in the right place.
+        let mut new_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&inner.path)?;
+        let end = new_file.seek(SeekFrom::End(0))?;
+        new_file.seek(SeekFrom::Start(end))?;
+        let new_writer = BufWriter::new(new_file.try_clone()?);
+
+        inner.file = new_file;
+        inner.writer = new_writer;
+        inner.events.retain(|e| e.seq >= before_seq);
+        Ok(())
     }
 }
 
@@ -277,5 +349,49 @@ mod tests {
         let after = store.size_bytes().unwrap();
 
         assert!(after > empty, "size {after} should exceed empty {empty}");
+    }
+
+    #[test]
+    fn compact_rewrites_file_and_preserves_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.bin");
+        let store = FileStore::open(&path).unwrap();
+        let mut events = vec![placed_event(), placed_event(), placed_event()];
+        store.append(&mut events).unwrap();
+        let before = store.size_bytes().unwrap();
+
+        store.compact_before(3).unwrap();
+
+        let after = store.size_bytes().unwrap();
+        assert!(
+            after < before,
+            "compacted file {after} not smaller than original {before}"
+        );
+        let read = store.read_from(0, 10).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].seq, 3);
+        store.close().unwrap();
+    }
+
+    #[test]
+    fn compact_then_append_then_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.bin");
+        {
+            let store = FileStore::open(&path).unwrap();
+            let mut events = vec![placed_event(), placed_event(), placed_event()];
+            store.append(&mut events).unwrap();
+            store.compact_before(3).unwrap();
+            let mut more = vec![placed_event()];
+            store.append(&mut more).unwrap();
+            assert_eq!(more[0].seq, 4);
+            store.close().unwrap();
+        }
+        let store = FileStore::open(&path).unwrap();
+        let read = store.read_from(0, 10).unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].seq, 3);
+        assert_eq!(read[1].seq, 4);
+        store.close().unwrap();
     }
 }
