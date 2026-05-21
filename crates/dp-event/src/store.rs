@@ -54,5 +54,5 @@ pub fn index_after(events: &[Event], after_seq: u64) -> usize {
     if after_seq == 0 {
         return 0;
     }
-    (after_seq as usize).min(events.len())
+    events.partition_point(|e| e.seq <= after_seq)
 }
