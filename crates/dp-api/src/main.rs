@@ -17,8 +17,11 @@ use dp_api::tls;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
 };
-use dp_engine::{Engine, PairConfig, PairStatus};
-use dp_event::{FileStore, MemStore, PgStore, Store};
+use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
+use dp_event::{
+    FileSnapshotStore, FileStore, MemSnapshotStore, MemStore, PgSnapshotStore, PgStore,
+    SnapshotStore, Store,
+};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;
@@ -64,7 +67,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::new(MemStore::new())
     };
 
+    // Snapshot backend selection mirrors the event-log backend. The
+    // postgres store keeps snapshots in the same database so a single
+    // backup-and-restore captures both; file mode writes envelopes to
+    // a dedicated directory; in-memory mode falls back to an in-memory
+    // snapshot store (useful for tests, no durability).
+    let snapshot_store: Option<Arc<dyn SnapshotStore>> = if !cfg.snapshot_enabled {
+        info!("snapshots disabled — recover() will always do full event replay");
+        None
+    } else if let Some(url) = cfg.event_db_url() {
+        info!(url = %sanitize_db_url(url), "snapshot store: postgres");
+        Some(Arc::new(PgSnapshotStore::connect(url).await?))
+    } else if let Some(dir) = cfg.snapshot_dir_path() {
+        info!(dir = %dir, "snapshot store: file");
+        Some(Arc::new(FileSnapshotStore::open(dir)?))
+    } else if cfg.event_log_path().is_some() {
+        warn!(
+            "DARKPOOL_EVENT_LOG is set but DARKPOOL_SNAPSHOT_DIR is empty — \
+             snapshots disabled. Set --snapshot-dir for periodic checkpoints."
+        );
+        None
+    } else {
+        info!("snapshot store: in-memory (not durable)");
+        Some(Arc::new(MemSnapshotStore::new()))
+    };
+
     let engine = Engine::new(store.clone(), cfg.auction_interval);
+    engine.set_snapshot_store(snapshot_store.clone());
 
     // Always construct a MultiKeyDecrypter and wire it to the engine
     // so admin-time rotation does not require restarting the process.
@@ -223,6 +252,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let engine_handle = tokio::spawn(async move {
         engine_tick.start(tick_cancel).await;
     });
+
+    // Spawn the periodic state snapshotter when a SnapshotStore is wired.
+    // The task owns its own `tokio::time::interval`; cancellation flows
+    // through the shared `CancellationToken` so shutdown is in lockstep
+    // with the auction tick and REST/gRPC servers.
+    // `snapshot_store` is None whenever `cfg.snapshot_enabled` is false
+    // (see the construction block above), so `is_some()` is the only
+    // check needed here.
+    let snapshot_handle = if snapshot_store.is_some() {
+        let snapshot_cfg = SnapshotConfig {
+            enabled: true,
+            every_events: cfg.snapshot_every_events,
+            interval: cfg.snapshot_interval,
+            retain_events: cfg.snapshot_retain_events,
+            retain_count: cfg.snapshot_retain_count,
+        };
+        let engine_snap = engine.clone();
+        let snap_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            engine_snap.run_snapshotter(snapshot_cfg, snap_cancel).await;
+        }))
+    } else {
+        None
+    };
 
     let auth_core = AuthCore::new(cfg.api_keys());
     let operator_keys = cfg.operator_api_keys();
@@ -434,6 +487,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = grpc_handle.await;
     let _ = rest_handle.await;
     let _ = gauge_handle.await;
+    if let Some(h) = snapshot_handle {
+        // Surface task panics — silently dropping the JoinError would
+        // hide a snapshotter crash from the operator.
+        if let Err(e) = h.await {
+            if e.is_panic() {
+                tracing::error!(error = ?e, "snapshotter task panicked");
+            } else {
+                tracing::warn!(error = ?e, "snapshotter task join error");
+            }
+        }
+    }
     #[cfg(unix)]
     let _ = reload_handle.await;
 
