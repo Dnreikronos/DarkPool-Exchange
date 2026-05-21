@@ -2,9 +2,10 @@ use std::collections::BTreeSet;
 
 use dp_types::{Fill, Order};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuctionResult {
     pub auction_id: Uuid,
     pub pair: String,
@@ -13,7 +14,7 @@ pub struct AuctionResult {
     pub matches: Vec<Match>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Match {
     pub bid: Fill,
     pub ask: Fill,

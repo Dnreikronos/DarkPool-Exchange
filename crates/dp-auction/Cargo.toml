@@ -7,6 +7,7 @@ edition = "2021"
 dp-types = { path = "../dp-types" }
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 alloy-primitives = { workspace = true }

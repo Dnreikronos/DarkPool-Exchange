@@ -14,10 +14,11 @@ pub use watcher::{BatchSink, Watcher};
 
 use alloy_primitives::{Address, U256};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::io;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct SettlementMatch {
     pub bid_order_id: Uuid,
