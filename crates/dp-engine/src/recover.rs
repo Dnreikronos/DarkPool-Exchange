@@ -111,6 +111,20 @@ fn event_log_covers_seq_one(store: &dyn Store) -> Result<bool, EngineError> {
     Ok(first.first().is_some_and(|e| e.seq == 1))
 }
 
+/// True iff the event log has no gap immediately after `after_seq`.
+/// After a successful snapshot restore, tail events must form a
+/// continuous run: the first readable event must be `after_seq + 1`
+/// or the log must be empty past that point (nothing to replay).
+/// A gap means compaction removed events that are not covered by the
+/// snapshot, which would produce a partial projection on boot.
+fn event_log_continuous_after(store: &dyn Store, after_seq: u64) -> Result<bool, EngineError> {
+    let next = store.read_from(after_seq, 1)?;
+    Ok(match next.first() {
+        Some(e) => e.seq == after_seq + 1,
+        None => true,
+    })
+}
+
 const RECOVER_BATCH: usize = 1024;
 
 #[derive(Clone)]
@@ -179,7 +193,12 @@ impl Engine {
             let restored =
                 try_restore_from_snapshots(self, snap_store.as_ref(), &mut placed_orders);
             match restored {
-                SnapshotRecoveryOutcome::Restored(seq) => after_seq = seq,
+                SnapshotRecoveryOutcome::Restored(seq) => {
+                    if !event_log_continuous_after(store.as_ref(), seq)? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    after_seq = seq;
+                }
                 SnapshotRecoveryOutcome::NoneAvailable => {
                     tracing::info!("no snapshot present, full replay");
                 }
@@ -197,7 +216,11 @@ impl Engine {
                     self.inner.state.lock().reset_projection();
                 }
                 SnapshotRecoveryOutcome::StoreError(e) => {
-                    tracing::warn!(error = ?e, "snapshot store read failed, full replay");
+                    tracing::warn!(error = ?e, "snapshot store read failed; falling back to full replay");
+                    if !event_log_covers_seq_one(store.as_ref())? {
+                        return Err(EngineError::SnapshotsCorruptAndLogTruncated);
+                    }
+                    self.inner.state.lock().reset_projection();
                 }
             }
         }
