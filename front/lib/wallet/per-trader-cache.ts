@@ -2,13 +2,12 @@
  * Per-trader localStorage entries we clear on disconnect so that the
  * next address starts from a clean slate.
  *
- * Two namespaces are dropped:
- *   - the `dp:` prefix: anything the trading app intentionally writes
- *     under a darkpool-owned key,
- *   - `wagmi.*`: wagmi's own storage. Wagmi already clears its own
- *     session token on disconnect, but cached `recentConnectorId` etc
- *     can keep referencing a stale account; nuking the namespace is
- *     the safest call when the user explicitly disconnects.
+ * We drop the `dp:` namespace — anything the trading app intentionally
+ * writes under a darkpool-owned key. We deliberately do NOT touch
+ * `wagmi.*`: wagmi manages its own persistence (session token,
+ * recent-connector id, …) through its own storage adapter and clears
+ * what it needs to on disconnect. Bulk-deleting that namespace would
+ * fight with wagmi's state machine.
  */
 const PER_TRADER_PREFIXES = ['dp:'] as const
 

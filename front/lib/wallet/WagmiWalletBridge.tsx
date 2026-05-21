@@ -21,6 +21,14 @@ import type { Address } from './types'
  *   - connected → disconnected: clear caches
  *   - account switch (A → B while staying connected): clear caches
  *   - first connect (null → A) or reconnect with same address: no clear
+ *
+ * Scope of the cache clear: only the `QueryClient` provided by
+ * `WalletProviders` (the closest ancestor via context). Any descendant
+ * that spins up its *own* `QueryClientProvider` — currently
+ * `app/trade/_components/orderbook/OrderBook.tsx` — owns a separate
+ * cache the bridge does not see. Hoisting OrderBook onto the shared
+ * client is a Wave-4 follow-up; until then, scoped descendants are
+ * responsible for their own per-trader invalidation.
  */
 export function WagmiWalletBridge() {
   const { address, status } = useAccount()
@@ -28,7 +36,10 @@ export function WagmiWalletBridge() {
   const previousAddressRef = useRef<Address | null>(null)
 
   useEffect(() => {
-    const nextAddress = (address ?? null) as Address | null
+    // wagmi types `address` as `\`0x${string}\` | undefined` which is
+    // structurally identical to our local `Address`; just narrow
+    // undefined → null for the reducer.
+    const nextAddress: Address | null = address ?? null
     const action = computeBridgeAction(
       previousAddressRef.current,
       status as WagmiAccountStatus,
