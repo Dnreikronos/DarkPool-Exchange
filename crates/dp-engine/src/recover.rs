@@ -31,6 +31,41 @@ enum SnapshotRecoveryOutcome {
     StoreError(EventError),
 }
 
+/// Apply a decoded snapshot and populate `placed_orders` from the restored
+/// book. Logs whether this was a first-attempt or fallback recovery, and
+/// warns when the envelope's self-reported seq disagrees with the store key
+/// (the envelope value is authoritative because it is checksum-covered).
+fn apply_and_log_snapshot(
+    engine: &Engine,
+    placed_orders: &mut HashMap<Uuid, Order>,
+    snap_state: crate::state::SerializableState,
+    decoded_seq: u64,
+    store_key: u64,
+    attempts: usize,
+) {
+    engine.apply_snapshot_state(snap_state);
+    for o in engine.inner.state.lock().book.iter_all() {
+        placed_orders.insert(o.id, o);
+    }
+    if attempts == 1 {
+        tracing::info!(seq = decoded_seq, "recovered from snapshot");
+    } else {
+        tracing::warn!(
+            seq = decoded_seq,
+            attempts,
+            "recovered from older snapshot — newer envelopes were corrupt"
+        );
+    }
+    if decoded_seq != store_key {
+        tracing::warn!(
+            envelope_seq = decoded_seq,
+            store_key,
+            "snapshot envelope seq disagrees with store key — \
+             trusting envelope (checksum-covered)"
+        );
+    }
+}
+
 /// Probe the snapshot store for the most-recent decodable envelope.
 /// Walks `list_seqs` descending so a single corrupt latest does not
 /// strand recovery when older envelopes are retained.
@@ -59,27 +94,14 @@ fn try_restore_from_snapshots(
         attempts += 1;
         match decode_envelope(&bytes) {
             Ok((decoded_seq, snap_state)) => {
-                engine.apply_snapshot_state(snap_state);
-                for o in engine.inner.state.lock().book.iter_all() {
-                    placed_orders.insert(o.id, o);
-                }
-                if attempts == 1 {
-                    tracing::info!(seq = decoded_seq, "recovered from snapshot");
-                } else {
-                    tracing::warn!(
-                        seq = decoded_seq,
-                        attempts,
-                        "recovered from older snapshot — newer envelopes were corrupt"
-                    );
-                }
-                if decoded_seq != seq {
-                    tracing::warn!(
-                        envelope_seq = decoded_seq,
-                        store_key = seq,
-                        "snapshot envelope seq disagrees with store key — \
-                         trusting envelope (checksum-covered)"
-                    );
-                }
+                apply_and_log_snapshot(
+                    engine,
+                    placed_orders,
+                    snap_state,
+                    decoded_seq,
+                    seq,
+                    attempts,
+                );
                 return SnapshotRecoveryOutcome::Restored(decoded_seq);
             }
             Err(e) => {
