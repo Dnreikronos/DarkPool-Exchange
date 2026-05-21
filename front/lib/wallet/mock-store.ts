@@ -73,11 +73,15 @@ class MockWalletStore {
     }
   }
 
-  connect = (): void => {
-    if (this.state.status === 'connected') return
+  // `address` defaults to `MOCK_ADDRESS` so existing callers
+  // (`walletStore.connect()` with no args) keep their byte-identical
+  // commitment-key projection. The real-wallet bridge passes the
+  // wagmi-derived address explicitly.
+  connect = (address: Address = MOCK_ADDRESS): void => {
+    if (this.state.status === 'connected' && this.state.address === address) return
     this.setWalletState({
       status: 'connected',
-      address: MOCK_ADDRESS,
+      address,
       walletBalances: { ...INITIAL_WALLET_BALANCES },
       internalBalances: { ...ZERO_BALANCES },
     })

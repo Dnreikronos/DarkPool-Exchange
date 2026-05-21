@@ -8,3 +8,5 @@ export {
   type UseWalletReturn,
 } from './hooks'
 export type { Address, Balances, TokenSymbol, WalletState, WalletStatus } from './types'
+export { WalletProviders } from './WalletProviders'
+export { targetChain } from './wagmi-config'
