@@ -21,6 +21,12 @@ export interface OrderBookProps {
    * its hover/focus affordances but is otherwise a no-op.
    */
   onPriceSelect?: (price: string, side: Side.BUY | Side.SELL) => void
+  /**
+   * Prices the connected trader has open orders at. F1.10 (#77) sources
+   * this from the my-orders panel so the book can mark the trader's own
+   * levels with a hairline edge marker on the matching row.
+   */
+  userPrices?: ReadonlySet<string>
   /** Override polling cadence for Storybook / tests. */
   refetchIntervalMs?: number
 }
@@ -34,12 +40,13 @@ export interface OrderBookProps {
  * with a `QueryClientProvider` should render `OrderBookContent` directly
  * — it sees the ancestor's client and uses the shared cache.
  */
-export function OrderBook({ pair, onPriceSelect, refetchIntervalMs }: OrderBookProps) {
+export function OrderBook({ pair, onPriceSelect, userPrices, refetchIntervalMs }: OrderBookProps) {
   return (
     <QueryClientProvider client={getScopedClient()}>
       <OrderBookContent
         pair={pair}
         onPriceSelect={onPriceSelect}
+        userPrices={userPrices}
         refetchIntervalMs={refetchIntervalMs}
       />
     </QueryClientProvider>
@@ -54,6 +61,7 @@ export function OrderBook({ pair, onPriceSelect, refetchIntervalMs }: OrderBookP
 export function OrderBookContent({
   pair,
   onPriceSelect,
+  userPrices,
   refetchIntervalMs,
 }: OrderBookProps): JSX.Element {
   const effectivePair = pair ?? DEFAULT_PAIR
@@ -96,9 +104,20 @@ export function OrderBookContent({
     body = (
       <div className="flex flex-col">
         <ColumnHeader />
-        <DepthTable rows={depth.asks} side={Side.SELL} reverse onSelect={handleSelect} />
+        <DepthTable
+          rows={depth.asks}
+          side={Side.SELL}
+          reverse
+          userPrices={userPrices}
+          onSelect={handleSelect}
+        />
         <SpreadRow bestBid={bestBid} bestAsk={bestAsk} />
-        <DepthTable rows={depth.bids} side={Side.BUY} onSelect={handleSelect} />
+        <DepthTable
+          rows={depth.bids}
+          side={Side.BUY}
+          userPrices={userPrices}
+          onSelect={handleSelect}
+        />
       </div>
     )
   }
