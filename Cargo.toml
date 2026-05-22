@@ -75,4 +75,18 @@ ark-r1cs-std = { version = "0.5", default-features = false }
 ark-snark = { version = "0.5", default-features = false }
 ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
 ark-groth16 = { version = "0.5", default-features = false }
-ark-crypto-primitives = { version = "0.5", default-features = false, features = ["sponge", "r1cs"] }
+ark-crypto-primitives = { version = "0.5", default-features = false, features = ["sponge", "constraints"] }
+ark-grumpkin = { version = "0.5", default-features = false }
+folding-schemes = { git = "https://github.com/privacy-scaling-explorations/sonobe", rev = "63f2930d363150d4490ce2c4be8e0c25c2e1d92c" }
+
+[patch.crates-io]
+ark-groth16 = { path = "vendor/ark-groth16" }
+ark-relations = { git = "https://github.com/arkworks-rs/snark" }
+ark-snark = { git = "https://github.com/arkworks-rs/snark" }
+ark-crypto-primitives = { git = "https://github.com/flyingnobita/crypto-primitives", rev = "f559264" }
+ark-r1cs-std = { git = "https://github.com/flyingnobita/r1cs-std_yelhousni", rev = "b4bab0c" }
+ark-std = { git = "https://github.com/arkworks-rs/std" }
+ark-poly-commit = { git = "https://github.com/arkworks-rs/poly-commit" }
+
+[patch."https://github.com/arkworks-rs/crypto-primitives.git"]
+ark-crypto-primitives = { git = "https://github.com/flyingnobita/crypto-primitives", rev = "f559264" }
