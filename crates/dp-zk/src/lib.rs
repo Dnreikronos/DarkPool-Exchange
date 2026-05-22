@@ -51,4 +51,4 @@ pub enum ZkError {
 }
 
 /// Bumped any time the IVC circuit constraints change.
-pub const CIRCUIT_VERSION: &str = "v2";
+pub const CIRCUIT_VERSION: &str = "v3-hypernova";

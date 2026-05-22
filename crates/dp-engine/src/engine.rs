@@ -161,10 +161,10 @@ impl Engine {
     /// on-chain every `n` fold steps per pair. Takes effect eventually
     /// on some future tick (Relaxed store; no cross-thread ordering guarantee).
     pub fn set_finalize_every(&self, n: u64) {
-        assert!(
-            n > 0,
-            "finalize_every must be > 0 (division by zero in tick loop)"
-        );
+        if n == 0 {
+            warn!("ignoring finalize_every=0; keeping previous value");
+            return;
+        }
         self.inner
             .finalize_every
             .store(n, std::sync::atomic::Ordering::Relaxed);

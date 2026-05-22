@@ -87,14 +87,8 @@ async fn subprocess_aggregator_returns_result() {
     let result = agg
         .aggregate(batch_id, auction_id, &matches, &witness)
         .await;
-    // IVC stub: subprocess returns an empty proof. If it fails (e.g. the
-    // binary was compiled before Phase G), skip gracefully.
-    match result {
-        Ok(_proof) => {}
-        Err(e) => {
-            eprintln!(
-                "subprocess_aggregator_returns_result: subprocess error (binary may be stale): {e:?}; skipping"
-            );
-        }
-    }
+    assert!(
+        result.is_err(),
+        "IVC proving is not yet implemented in dp-zk-cli; aggregate should return an error"
+    );
 }
