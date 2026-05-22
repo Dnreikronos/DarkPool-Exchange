@@ -117,9 +117,9 @@ impl OrderLegWitness {
         signed_to_scalar(p)
     }
     /// Map the commitment-key string to an Fr via `from_be_bytes_mod_order`.
-    /// Mirrors `pedersen::derive_trader_id`'s input projection.
+    /// Mirrors `commitment::derive_trader_id`'s input projection.
     pub fn commitment_key_scalar(&self) -> Fr {
-        crate::pedersen::bytes_to_scalar(self.commitment_key.as_bytes())
+        crate::commitment::bytes_to_scalar(self.commitment_key.as_bytes())
     }
 }
 

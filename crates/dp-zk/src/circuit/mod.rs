@@ -41,7 +41,7 @@ use ark_snark::SNARK;
 use ark_std::rand::{CryptoRng, RngCore};
 
 use crate::encoding::{decimal_to_scalar, SCALE_FACTOR_I128};
-use crate::pedersen::{commit_native, hash_root_native, poseidon_config, OrderCommitmentInput};
+use crate::commitment::{commit_native, hash_root_native, poseidon_config, OrderCommitmentInput};
 use crate::witness::{BatchWitness, MatchWitness};
 use crate::ZkError;
 
@@ -256,22 +256,22 @@ fn build_match(
     match_price: rust_decimal::Decimal,
     match_size: rust_decimal::Decimal,
 ) -> Result<CircuitMatch, ZkError> {
-    let bid_trader = crate::pedersen::bytes_to_scalar(
+    let bid_trader = crate::commitment::bytes_to_scalar(
         &m.bid
             .trader_id_bytes()
             .map_err(|e| ZkError::Witness(format!("bid trader_id: {e}")))?,
     );
-    let bid_salt = crate::pedersen::bytes_to_scalar(
+    let bid_salt = crate::commitment::bytes_to_scalar(
         &m.bid
             .salt_bytes()
             .map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?,
     );
-    let ask_trader = crate::pedersen::bytes_to_scalar(
+    let ask_trader = crate::commitment::bytes_to_scalar(
         &m.ask
             .trader_id_bytes()
             .map_err(|e| ZkError::Witness(format!("ask trader_id: {e}")))?,
     );
-    let ask_salt = crate::pedersen::bytes_to_scalar(
+    let ask_salt = crate::commitment::bytes_to_scalar(
         &m.ask
             .salt_bytes()
             .map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?,

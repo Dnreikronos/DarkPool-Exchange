@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use ark_std::rand::rngs::StdRng;
 use ark_std::rand::SeedableRng;
-use dp_zk::pedersen::derive_trader_id_bytes;
+use dp_zk::commitment::derive_trader_id_bytes;
 use dp_zk::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
 use dp_zk::{prove, BatchProofCircuit};
 use rust_decimal::Decimal;
