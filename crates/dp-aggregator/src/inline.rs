@@ -84,7 +84,12 @@ impl ProofAggregator for InlineFoldingAggregator {
         _matches: &'a [Match],
         _witness: &'a BatchWitness,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
-        Box::pin(async move { Ok(vec![]) })
+        Box::pin(async move {
+            Err(AggregatorError::Zk(
+                "aggregate is not supported for InlineFoldingAggregator; use fold_step/finalize"
+                    .into(),
+            ))
+        })
     }
 
     fn fold_step<'a>(
