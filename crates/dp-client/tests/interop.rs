@@ -3,7 +3,7 @@
 //!
 //!  - `dp_crypto::EciesDecrypter` must successfully decrypt the client's
 //!    ciphertext into the engine's `DecryptedOrder`.
-//!  - `dp_zk::pedersen` Poseidon commitments / trader-id derivations must
+//!  - `dp_zk::commitment` Poseidon commitments / trader-id derivations must
 //!    equal the client's copy field-element-for-field-element.
 //!  - `dp_zk::encoding::decimal_to_scalar` must equal the client's encoder
 //!    over the legal range.
@@ -22,7 +22,7 @@ use dp_client::payload::{OrderPayload, Side};
 
 use dp_crypto::{Decrypter, EciesDecrypter};
 use dp_zk::encoding::decimal_to_scalar as zk_decimal_to_scalar;
-use dp_zk::pedersen::{
+use dp_zk::commitment::{
     commit_native as zk_commit, derive_trader_id as zk_derive_trader_id,
     OrderCommitmentInput as ZkCommitmentInput,
 };

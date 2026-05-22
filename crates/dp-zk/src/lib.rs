@@ -6,8 +6,7 @@
 //! - [`encoding`]: deterministic Decimal ↔ scalar conversion.
 //! - [`witness`]: serializable witness types shared with `dp-zk-cli`.
 //! - [`keys`]: ark-serialize wrappers over proving/verifying keys + metadata.
-//! - [`pedersen`]: native + in-circuit Poseidon commitment helpers (the
-//!   `pedersen` name is kept for spec parity; implementation is Poseidon).
+//! - [`commitment`]: native + in-circuit Poseidon commitment helpers.
 //!
 //! Order commitments in DarkPool are unified on Poseidon: the engine
 //! derives the canonical Poseidon commitment after decryption (see
@@ -16,15 +15,15 @@
 //! SHA256 commitment.
 
 pub mod circuit;
+pub mod commitment;
 pub mod encoding;
 pub mod keys;
-pub mod pedersen;
 pub mod witness;
 
 pub use circuit::{compute_public_inputs, prove, verify, BatchProofCircuit, ProofBytes};
+pub use commitment::{commit_native, OrderCommitmentInput};
 pub use encoding::{decimal_to_scalar, fr_to_bytes32, EncodingError};
 pub use keys::{KeyMetadata, ProvingKeyBytes, VerifyingKeyBytes};
-pub use pedersen::{commit_native, OrderCommitmentInput};
 pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
 
 #[derive(Debug, thiserror::Error)]

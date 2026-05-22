@@ -1,9 +1,8 @@
-//! Native + in-circuit commitment helper.
+//! Native + in-circuit Poseidon commitment helper over BN254 Fr.
 //!
-//! Despite the module name (kept for spec parity), the implementation is
-//! Poseidon-as-hash-commitment over BN254 Fr. This is hiding+binding under
-//! the random-oracle assumption and is ~20x cheaper in-circuit than a
-//! literal Pedersen commitment over Jubjub.
+//! Hiding + binding under the random-oracle assumption. ~20× cheaper
+//! in-circuit than Pedersen over Jubjub, making it practical for the
+//! batch Groth16 prover.
 
 use ark_bn254::Fr;
 use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, PoseidonSponge};

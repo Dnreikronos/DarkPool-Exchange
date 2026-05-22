@@ -1,5 +1,5 @@
 use super::*;
-use crate::pedersen::derive_trader_id;
+use crate::commitment::derive_trader_id;
 use crate::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
 use ark_ff::BigInteger;
 use ark_ff::PrimeField;
