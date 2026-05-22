@@ -12,8 +12,9 @@ ark-relations = { workspace = true, features = ["std"] }
 ark-r1cs-std = { workspace = true, features = ["std"] }
 ark-snark = { workspace = true }
 ark-bn254 = { workspace = true, features = ["std"] }
-ark-groth16 = { workspace = true, features = ["std", "parallel"] }
-ark-crypto-primitives = { workspace = true, features = ["std", "sponge", "r1cs"] }
+ark-grumpkin = { workspace = true }
+ark-crypto-primitives = { workspace = true, features = ["std", "sponge", "constraints"] }
+folding-schemes = { workspace = true }
 
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
@@ -30,6 +31,6 @@ dp-auction = { path = "../dp-auction" }
 tempfile = "3"
 
 [[test]]
-name = "perf"
-path = "tests/perf.rs"
+name = "ivc"
+path = "tests/ivc.rs"
 harness = true
