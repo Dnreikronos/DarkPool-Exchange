@@ -549,9 +549,9 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             let ask_derived = ask_id_sponge.squeeze_field_elements(1)?[0].clone();
             ((&ask_derived - &ask_trader) * &is_active).enforce_equal(&zero)?;
 
-            all_leaves.push(bid_commit);
-            all_leaves.push(ask_commit);
-            all_notionals.push(notional);
+            all_leaves.push(&bid_commit * &is_active);
+            all_leaves.push(&ask_commit * &is_active);
+            all_notionals.push(&notional * &is_active);
             active_count = &active_count + &is_active;
         }
 
