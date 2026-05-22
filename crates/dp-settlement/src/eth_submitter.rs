@@ -9,11 +9,11 @@ use alloy_provider::Provider;
 use alloy_rpc_types::BlockNumberOrTag;
 use tracing::Instrument;
 
-use crate::abi::{DarkPool, SolMatch, MAX_MATCHES_PER_BATCH};
-use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
+use crate::abi::{DarkPool, MAX_MATCHES_PER_BATCH};
+use crate::helpers::{settlement_match_to_sol, uuid_to_bytes32};
 use crate::signer::TxSigner;
 use crate::submitter::Submitter;
-use crate::{SettlementError, SettlementMatch, SubmitBatchParams};
+use crate::{SettlementError, SubmitBatchParams};
 
 pub struct EthSubmitterConfig {
     pub rpc_url: String,
@@ -67,26 +67,15 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
     }
 }
 
-fn build_sol_matches(params: &SubmitBatchParams) -> Result<Vec<SolMatch>, SettlementError> {
+fn build_sol_matches(
+    params: &SubmitBatchParams,
+) -> Result<Vec<crate::abi::SolMatch>, SettlementError> {
     if params.matches.len() > MAX_MATCHES_PER_BATCH {
         return Err(SettlementError::TooManyMatches {
             count: params.matches.len(),
         });
     }
     params.matches.iter().map(settlement_match_to_sol).collect()
-}
-
-fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
-    Ok(SolMatch {
-        bidOrderId: uuid_to_bytes32(m.bid_order_id),
-        askOrderId: uuid_to_bytes32(m.ask_order_id),
-        bidTrader: m.bid_trader,
-        askTrader: m.ask_trader,
-        baseToken: m.base_token,
-        quoteToken: m.quote_token,
-        price: decimal_to_wei(m.price)?,
-        size: decimal_to_wei(m.size)?,
-    })
 }
 
 /// Build the tracing span for a single `submit` call. Extracted so
@@ -280,6 +269,7 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SettlementMatch;
     use alloy_primitives::{address, U256};
     use rust_decimal::Decimal;
     use uuid::Uuid;
