@@ -59,9 +59,9 @@ contract DeployScript is Script {
         Groth16Verifier verifier = new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
         console.log("Groth16Verifier:", address(verifier));
 
-        VerifierProxy proxy = new VerifierProxy(address(verifier), governor);
+        VerifierProxy proxy = new VerifierProxy(address(verifier), deployer);
         console.log("VerifierProxy:", address(proxy));
-        console.log("VerifierProxy owner:", governor);
+        console.log("VerifierProxy owner (interim):", deployer);
 
         DarkPool pool = new DarkPool(address(proxy), feeRecipient, operatorPubkey);
         console.log("DarkPool:", address(pool));
@@ -74,6 +74,11 @@ contract DeployScript is Script {
         proxy.setIvcVerifier(address(hypernova));
         pool.setIvcVerifier(address(proxy));
         console.log("IVC verifier set on DarkPool via VerifierProxy");
+
+        if (governor != deployer) {
+            proxy.transferOwnership(governor);
+            console.log("VerifierProxy ownership transferred to governor:", governor);
+        }
 
         vm.stopBroadcast();
     }
