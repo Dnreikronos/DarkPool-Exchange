@@ -28,10 +28,8 @@ pub type HN = HyperNova<
 >;
 pub type HnPP = <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::ProverParam;
 pub type HnVP = <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::VerifierParam;
-type HnPrep =
-    <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::PreprocessorParam;
-pub type HnIVCProof =
-    <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::IVCProof;
+type HnPrep = <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::PreprocessorParam;
+pub type HnIVCProof = <HN as FoldingScheme<Projective, Projective2, AuctionStepCircuit>>::IVCProof;
 
 // --- Public types ---------------------------------------------------------
 
@@ -85,7 +83,11 @@ pub fn init_accumulator(
     let params_tuple = (params.prover.clone(), params.verifier.clone());
     let hn = HN::init(&params_tuple, circuit, z_0.to_vec())
         .map_err(|e| ZkError::Ivc(format!("init: {e}")))?;
-    Ok(FoldingAccumulator { hn, z_0, n_steps: 0 })
+    Ok(FoldingAccumulator {
+        hn,
+        z_0,
+        n_steps: 0,
+    })
 }
 
 /// Fold one auction round into the accumulator.
@@ -104,11 +106,12 @@ pub fn fold_step<R: RngCore + CryptoRng>(
 /// Finalize the IVC chain into a serialized proof.
 pub fn compress_and_finalize(acc: &FoldingAccumulator) -> Result<FinalProof, ZkError> {
     let ivc_proof = acc.hn.ivc_proof();
-    let z_n: [Fr; 3] = ivc_proof
-        .z_i
-        .as_slice()
-        .try_into()
-        .map_err(|_| ZkError::Ivc(format!("z_i has wrong length (got {})", ivc_proof.z_i.len())))?;
+    let z_n: [Fr; 3] = ivc_proof.z_i.as_slice().try_into().map_err(|_| {
+        ZkError::Ivc(format!(
+            "z_i has wrong length (got {})",
+            ivc_proof.z_i.len()
+        ))
+    })?;
     let policy_hash = z_n[2];
 
     let mut proof_bytes = Vec::new();
@@ -116,14 +119,17 @@ pub fn compress_and_finalize(acc: &FoldingAccumulator) -> Result<FinalProof, ZkE
         .serialize_with_mode(&mut proof_bytes, Compress::Yes)
         .map_err(|e| ZkError::Serialize(e.to_string()))?;
 
-    Ok(FinalProof { proof_bytes, z_0: acc.z_0, z_n, n_steps: acc.n_steps, policy_hash })
+    Ok(FinalProof {
+        proof_bytes,
+        z_0: acc.z_0,
+        z_n,
+        n_steps: acc.n_steps,
+        policy_hash,
+    })
 }
 
 /// Verify a finalized proof.
-pub fn verify_final(
-    params: &HyperNovaPublicParams,
-    proof: &FinalProof,
-) -> Result<(), ZkError> {
+pub fn verify_final(params: &HyperNovaPublicParams, proof: &FinalProof) -> Result<(), ZkError> {
     let ivc_proof = HnIVCProof::deserialize_with_mode(
         proof.proof_bytes.as_slice(),
         Compress::Yes,

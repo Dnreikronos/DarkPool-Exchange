@@ -54,8 +54,8 @@ pub fn save(
         sha256: sha256.clone(),
         batch_size,
     };
-    let meta_json = serde_json::to_string_pretty(&meta)
-        .map_err(|e| ZkError::Serialize(e.to_string()))?;
+    let meta_json =
+        serde_json::to_string_pretty(&meta).map_err(|e| ZkError::Serialize(e.to_string()))?;
     fs::write(dir.join(META_FILE), meta_json)?;
 
     Ok(meta)

@@ -127,9 +127,17 @@ fn fold_single_step_verifies() {
     assert_eq!(proof.n_steps, 1);
     assert_eq!(proof.z_0, z_0);
     // state_hash should have changed from the initial zero
-    assert_ne!(proof.z_n[0], Fr::zero(), "state_hash must change after folding");
+    assert_ne!(
+        proof.z_n[0],
+        Fr::zero(),
+        "state_hash must change after folding"
+    );
     // round_nonce should be 1
-    assert_eq!(proof.z_n[1], Fr::from(1u64), "round_nonce must be 1 after one step");
+    assert_eq!(
+        proof.z_n[1],
+        Fr::from(1u64),
+        "round_nonce must be 1 after one step"
+    );
     // policy_hash must be invariant
     assert_eq!(proof.z_n[2], z_0[2], "policy_hash must remain invariant");
 }
@@ -150,7 +158,11 @@ fn fold_n_steps_correct_state() {
     assert_eq!(acc.n_steps, n);
     let proof = compress_and_finalize(&acc).expect("compress_and_finalize");
     // round_nonce == number of folds performed
-    assert_eq!(proof.z_n[1], Fr::from(n), "round_nonce must equal step count");
+    assert_eq!(
+        proof.z_n[1],
+        Fr::from(n),
+        "round_nonce must equal step count"
+    );
 }
 
 #[test]
@@ -188,6 +200,10 @@ fn fold_sixty_steps_acceptance() {
     assert_eq!(acc.n_steps, n);
     let proof = compress_and_finalize(&acc).expect("compress_and_finalize");
     verify_final(&params, &proof).expect("verify_final");
-    assert_eq!(proof.z_n[1], Fr::from(n), "round_nonce must equal 60 after 60 steps");
+    assert_eq!(
+        proof.z_n[1],
+        Fr::from(n),
+        "round_nonce must equal 60 after 60 steps"
+    );
     assert_eq!(proof.z_n[2], z_0[2], "policy_hash invariant after 60 steps");
 }

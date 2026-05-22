@@ -604,7 +604,9 @@ impl Engine {
                     cfg.status = crate::state::PairStatus::Delisted;
                 }
             }
-            EventData::BatchFolded { round_index, pair, .. } => {
+            EventData::BatchFolded {
+                round_index, pair, ..
+            } => {
                 // Rebuild the per-pair round counter so the finalization
                 // boundary fires at the right offset after a restart.
                 let mut map = self.inner.ivc_round.lock();

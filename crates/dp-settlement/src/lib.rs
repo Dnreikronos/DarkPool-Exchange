@@ -7,9 +7,9 @@ mod watcher;
 
 pub use abi::DarkPool;
 pub use eth_submitter::{EthSubmitter, EthSubmitterConfig};
-pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
 #[cfg(feature = "hypernova")]
 pub use helpers::compute_matches_hash;
+pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
 pub use signer::{LocalTxSigner, TxSigner};
 pub use submitter::{NoopSubmitter, Submitter};
 pub use watcher::{BatchSink, Watcher};

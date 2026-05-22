@@ -122,8 +122,7 @@ impl Engine {
             )
         };
 
-        let (auction_id, settlement_matches, proof, public_inputs, ivc_payload, timeout) =
-            snapshot;
+        let (auction_id, settlement_matches, proof, public_inputs, ivc_payload, timeout) = snapshot;
 
         // Poison check: a recovered `BatchSubmitted` event loses its
         // public_inputs (the witness secrets are wiped on restart). Submitting

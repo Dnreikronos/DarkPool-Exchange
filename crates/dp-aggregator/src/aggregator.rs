@@ -40,8 +40,9 @@ pub trait ProofAggregator: Send + Sync {
     fn finalize<'a>(
         &'a self,
         pair: String,
-    ) -> Pin<Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>,
+    > {
         let _ = pair;
         Box::pin(async move {
             Err(AggregatorError::Zk(
@@ -75,8 +76,9 @@ impl ProofAggregator for NoopAggregator {
     fn finalize<'a>(
         &'a self,
         _pair: String,
-    ) -> Pin<Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             use ark_bn254::Fr;
             use ark_ff::Zero;

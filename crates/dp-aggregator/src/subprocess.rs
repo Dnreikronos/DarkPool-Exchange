@@ -177,11 +177,13 @@ impl ProofAggregator for SubprocessAggregator {
         &'a self,
         _pair: String,
         _external_inputs: dp_zk::step_circuit::AuctionExternalInputs,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AggregatorError>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AggregatorError>> + Send + 'a>>
+    {
         Box::pin(async move {
             Err(AggregatorError::Zk(
                 "SubprocessAggregator does not support IVC fold_step; \
-                 switch to InlineFoldingAggregator for the HyperNova path".into(),
+                 switch to InlineFoldingAggregator for the HyperNova path"
+                    .into(),
             ))
         })
     }
@@ -189,11 +191,18 @@ impl ProofAggregator for SubprocessAggregator {
     fn finalize<'a>(
         &'a self,
         _pair: String,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
             Err(AggregatorError::Zk(
                 "SubprocessAggregator does not support IVC finalize; \
-                 switch to InlineFoldingAggregator for the HyperNova path".into(),
+                 switch to InlineFoldingAggregator for the HyperNova path"
+                    .into(),
             ))
         })
     }

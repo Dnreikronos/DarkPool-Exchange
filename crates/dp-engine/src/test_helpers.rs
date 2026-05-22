@@ -120,8 +120,9 @@ impl ProofAggregator for StubAggregator {
     fn finalize<'a>(
         &'a self,
         _pair: String,
-    ) -> Pin<Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>,
+    > {
         let proof_bytes = self.proof.clone();
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
@@ -211,8 +212,9 @@ impl ProofAggregator for BlockingAggregator {
     fn finalize<'a>(
         &'a self,
         _pair: String,
-    ) -> Pin<Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             Ok(dp_zk::folding::FinalProof {
                 proof_bytes: vec![0u8; 32],

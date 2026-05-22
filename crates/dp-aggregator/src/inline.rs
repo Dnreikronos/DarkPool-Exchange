@@ -59,11 +59,7 @@ impl InlineFoldingAggregator {
     /// * `batch_size` — circuit batch size; must match the `batch_size` used
     ///   when generating `params`.
     /// * `finalize_every` — advisory cadence (in rounds) for finalization.
-    pub fn new(
-        params: Arc<HyperNovaPublicParams>,
-        batch_size: usize,
-        finalize_every: u64,
-    ) -> Self {
+    pub fn new(params: Arc<HyperNovaPublicParams>, batch_size: usize, finalize_every: u64) -> Self {
         Self {
             params,
             state: Arc::new(Mutex::new(HashMap::new())),
@@ -110,7 +106,10 @@ impl ProofAggregator for InlineFoldingAggregator {
                     std::collections::hash_map::Entry::Vacant(e) => {
                         let acc = init_accumulator(&params, batch_size, z_0)
                             .map_err(|e| AggregatorError::Zk(format!("init_accumulator: {e}")))?;
-                        e.insert(IvcRoundState { acc, round_index: 0 })
+                        e.insert(IvcRoundState {
+                            acc,
+                            round_index: 0,
+                        })
                     }
                 };
                 // TODO(production): seed StdRng from OsRng or a hardware source
@@ -135,11 +134,10 @@ impl ProofAggregator for InlineFoldingAggregator {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let guard = state.lock();
-                let entry = guard.get(&pair).ok_or_else(|| {
-                    AggregatorError::Zk(format!("no IVC state for pair {pair}"))
-                })?;
-                compress_and_finalize(&entry.acc)
-                    .map_err(|e| AggregatorError::Zk(e.to_string()))
+                let entry = guard
+                    .get(&pair)
+                    .ok_or_else(|| AggregatorError::Zk(format!("no IVC state for pair {pair}")))?;
+                compress_and_finalize(&entry.acc).map_err(|e| AggregatorError::Zk(e.to_string()))
             })
             .await
             .map_err(|e| AggregatorError::Zk(format!("spawn_blocking: {e}")))?

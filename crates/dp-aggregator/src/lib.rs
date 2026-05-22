@@ -1,10 +1,10 @@
 mod aggregator;
-mod subprocess;
 mod inline;
+mod subprocess;
 
 pub use aggregator::{NoopAggregator, ProofAggregator};
-pub use subprocess::SubprocessAggregator;
 pub use inline::InlineFoldingAggregator;
+pub use subprocess::SubprocessAggregator;
 
 use std::io;
 use std::path::PathBuf;

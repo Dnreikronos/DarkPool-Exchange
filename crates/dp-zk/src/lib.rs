@@ -16,19 +16,19 @@
 //! SHA256 commitment.
 
 pub mod encoding;
-pub mod pedersen;
-pub mod witness;
-pub mod step_circuit;
 pub mod folding;
 pub mod params;
+pub mod pedersen;
+pub mod step_circuit;
+pub mod witness;
 
 pub use encoding::{decimal_to_scalar, fr_to_bytes32, EncodingError};
+pub use folding::{
+    compress_and_finalize, fold_step, generate_params, init_accumulator, verify_final, FinalProof,
+    FoldingAccumulator, HyperNovaPublicParams,
+};
 pub use pedersen::{commit_native, OrderCommitmentInput};
 pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
-pub use folding::{
-    compress_and_finalize, fold_step, generate_params, init_accumulator, verify_final,
-    FinalProof, FoldingAccumulator, HyperNovaPublicParams,
-};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZkError {

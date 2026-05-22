@@ -7,8 +7,8 @@ use ark_ff::{One, Zero};
 use ark_r1cs_std::alloc::{AllocVar, AllocationMode};
 use ark_r1cs_std::eq::EqGadget;
 use ark_r1cs_std::fields::fp::FpVar;
-use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::prelude::ToBitsGadget;
+use ark_r1cs_std::prelude::*;
 use ark_relations::gr1cs::{ConstraintSystemRef, Namespace, SynthesisError};
 use folding_schemes::{frontend::FCircuit, Error};
 
@@ -114,9 +114,7 @@ impl AuctionExternalInputs {
                 batch_size
             )));
         }
-        if witness.matches.len() != match_prices.len()
-            || match_prices.len() != match_sizes.len()
-        {
+        if witness.matches.len() != match_prices.len() || match_prices.len() != match_sizes.len() {
             return Err(ZkError::Witness(
                 "match_prices/match_sizes length mismatch".into(),
             ));
@@ -238,27 +236,18 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
         let ns = cs.into();
         let cs = ns.cs();
 
-        let native = f()
-            .map(|v| v.borrow().clone())
-            .unwrap_or_default();
+        let native = f().map(|v| v.borrow().clone()).unwrap_or_default();
 
-        let min_size =
-            FpVar::new_variable(cs.clone(), || Ok(native.min_size), mode)?;
-        let min_price =
-            FpVar::new_variable(cs.clone(), || Ok(native.min_price), mode)?;
-        let position_limit =
-            FpVar::new_variable(cs.clone(), || Ok(native.position_limit), mode)?;
+        let min_size = FpVar::new_variable(cs.clone(), || Ok(native.min_size), mode)?;
+        let min_price = FpVar::new_variable(cs.clone(), || Ok(native.min_price), mode)?;
+        let position_limit = FpVar::new_variable(cs.clone(), || Ok(native.position_limit), mode)?;
 
         let mut matches = Vec::with_capacity(native.matches.len());
         for cm in &native.matches {
             matches.push(CircuitMatchVar {
                 bid_trader: FpVar::new_variable(cs.clone(), || Ok(cm.bid_trader), mode)?,
                 bid_salt: FpVar::new_variable(cs.clone(), || Ok(cm.bid_salt), mode)?,
-                bid_limit_price: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.bid_limit_price),
-                    mode,
-                )?,
+                bid_limit_price: FpVar::new_variable(cs.clone(), || Ok(cm.bid_limit_price), mode)?,
                 bid_side: FpVar::new_variable(cs.clone(), || Ok(cm.bid_side), mode)?,
                 bid_balance: FpVar::new_variable(cs.clone(), || Ok(cm.bid_balance), mode)?,
                 bid_position: FpVar::new_variable(cs.clone(), || Ok(cm.bid_position), mode)?,
@@ -267,18 +256,10 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
                     || Ok(cm.bid_commitment_key),
                     mode,
                 )?,
-                bid_order_size: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.bid_order_size),
-                    mode,
-                )?,
+                bid_order_size: FpVar::new_variable(cs.clone(), || Ok(cm.bid_order_size), mode)?,
                 ask_trader: FpVar::new_variable(cs.clone(), || Ok(cm.ask_trader), mode)?,
                 ask_salt: FpVar::new_variable(cs.clone(), || Ok(cm.ask_salt), mode)?,
-                ask_limit_price: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.ask_limit_price),
-                    mode,
-                )?,
+                ask_limit_price: FpVar::new_variable(cs.clone(), || Ok(cm.ask_limit_price), mode)?,
                 ask_side: FpVar::new_variable(cs.clone(), || Ok(cm.ask_side), mode)?,
                 ask_balance: FpVar::new_variable(cs.clone(), || Ok(cm.ask_balance), mode)?,
                 ask_position: FpVar::new_variable(cs.clone(), || Ok(cm.ask_position), mode)?,
@@ -287,11 +268,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
                     || Ok(cm.ask_commitment_key),
                     mode,
                 )?,
-                ask_order_size: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.ask_order_size),
-                    mode,
-                )?,
+                ask_order_size: FpVar::new_variable(cs.clone(), || Ok(cm.ask_order_size), mode)?,
                 match_price: FpVar::new_variable(cs.clone(), || Ok(cm.match_price), mode)?,
                 match_size: FpVar::new_variable(cs.clone(), || Ok(cm.match_size), mode)?,
                 is_active: FpVar::new_variable(cs.clone(), || Ok(cm.is_active), mode)?,
@@ -515,24 +492,18 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             // ── Family 7: solvency ────────────────────────────────────────────
             enforce_range_60(&bid_balance)?;
             enforce_range_60(&ask_balance)?;
-            let bid_solvency_diff =
-                (&bid_balance * &scale_factor - &notional) * &is_active;
+            let bid_solvency_diff = (&bid_balance * &scale_factor - &notional) * &is_active;
             enforce_range_n(&bid_solvency_diff, SOLVENCY_DIFF_BITS)?;
-            let ask_solvency_diff =
-                (&ask_balance * &scale_factor - &notional) * &is_active;
+            let ask_solvency_diff = (&ask_balance * &scale_factor - &notional) * &is_active;
             enforce_range_n(&ask_solvency_diff, SOLVENCY_DIFF_BITS)?;
 
             // ── Family 8: position limit (two-sided) ──────────────────────────
             let bid_new_pos = &bid_position + &m_size;
             let ask_new_pos = &ask_position - &m_size;
-            let bid_pos_lo =
-                (&external_inputs.position_limit - &bid_new_pos) * &is_active;
-            let bid_pos_hi =
-                (&external_inputs.position_limit + &bid_new_pos) * &is_active;
-            let ask_pos_lo =
-                (&external_inputs.position_limit - &ask_new_pos) * &is_active;
-            let ask_pos_hi =
-                (&external_inputs.position_limit + &ask_new_pos) * &is_active;
+            let bid_pos_lo = (&external_inputs.position_limit - &bid_new_pos) * &is_active;
+            let bid_pos_hi = (&external_inputs.position_limit + &bid_new_pos) * &is_active;
+            let ask_pos_lo = (&external_inputs.position_limit - &ask_new_pos) * &is_active;
+            let ask_pos_hi = (&external_inputs.position_limit + &ask_new_pos) * &is_active;
             enforce_range_60(&bid_pos_lo)?;
             enforce_range_60(&bid_pos_hi)?;
             enforce_range_60(&ask_pos_lo)?;
@@ -604,13 +575,13 @@ fn enforce_range_n(value: &FpVar<Fr>, n: usize) -> Result<(), SynthesisError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
-    use ark_crypto_primitives::sponge::CryptographicSponge;
-    use ark_relations::gr1cs::ConstraintSystem;
     use crate::pedersen::derive_trader_id;
     use crate::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
+    use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
+    use ark_crypto_primitives::sponge::CryptographicSponge;
     use ark_ff::BigInteger;
     use ark_ff::PrimeField;
+    use ark_relations::gr1cs::ConstraintSystem;
     use rust_decimal::Decimal;
     use uuid::Uuid;
 
@@ -706,7 +677,10 @@ mod tests {
         let z_0 = initial_z(&ext);
         let circuit = AuctionStepCircuit::new(2).unwrap();
         let (satisfied, _) = run_step(&circuit, z_0, ext);
-        assert!(!satisfied, "expected constraint system to be unsatisfied (same side)");
+        assert!(
+            !satisfied,
+            "expected constraint system to be unsatisfied (same side)"
+        );
     }
 
     #[test]
@@ -719,7 +693,10 @@ mod tests {
         let z_0 = initial_z(&ext);
         let circuit = AuctionStepCircuit::new(2).unwrap();
         let (satisfied, _) = run_step(&circuit, z_0, ext);
-        assert!(!satisfied, "expected constraint system to be unsatisfied (price above bid limit)");
+        assert!(
+            !satisfied,
+            "expected constraint system to be unsatisfied (price above bid limit)"
+        );
     }
 
     #[test]
@@ -731,7 +708,10 @@ mod tests {
         let z_0 = initial_z(&ext);
         let circuit = AuctionStepCircuit::new(2).unwrap();
         let (satisfied, _) = run_step(&circuit, z_0, ext);
-        assert!(!satisfied, "expected constraint system to be unsatisfied (insufficient balance)");
+        assert!(
+            !satisfied,
+            "expected constraint system to be unsatisfied (insufficient balance)"
+        );
     }
 
     #[test]
@@ -743,7 +723,10 @@ mod tests {
         let z_0 = initial_z(&ext);
         let circuit = AuctionStepCircuit::new(2).unwrap();
         let (satisfied, _) = run_step(&circuit, z_0, ext);
-        assert!(!satisfied, "expected constraint system to be unsatisfied (forged trader id)");
+        assert!(
+            !satisfied,
+            "expected constraint system to be unsatisfied (forged trader id)"
+        );
     }
 
     #[test]

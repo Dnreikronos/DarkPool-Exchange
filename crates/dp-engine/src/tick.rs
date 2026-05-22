@@ -109,7 +109,10 @@ impl Engine {
                 );
             }
 
-            let finalize_every = self.inner.finalize_every.load(std::sync::atomic::Ordering::Relaxed);
+            let finalize_every = self
+                .inner
+                .finalize_every
+                .load(std::sync::atomic::Ordering::Relaxed);
             if round_index % finalize_every == 0 {
                 let final_proof = match aggregator.finalize(p.pair.clone()).await {
                     Ok(fp) => fp,
@@ -535,8 +538,8 @@ mod tests {
 mod ivc_tests {
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use alloy_primitives::Address;
@@ -548,9 +551,9 @@ mod ivc_tests {
     use rust_decimal::Decimal;
     use uuid::Uuid;
 
-    use crate::Engine;
     use crate::state::PairConfig;
     use crate::test_helpers::place_plaintext_order;
+    use crate::Engine;
 
     /// A mock aggregator that tracks fold_step / finalize calls and returns
     /// dummy successful results. Does not perform any real IVC computation.
@@ -599,8 +602,13 @@ mod ivc_tests {
         fn finalize<'a>(
             &'a self,
             _pair: String,
-        ) -> Pin<Box<dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>> + Send + 'a>>
-        {
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
             self.finalize_calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {
                 use ark_bn254::Fr;
@@ -621,21 +629,34 @@ mod ivc_tests {
         let engine = Engine::new(store.clone(), Duration::from_millis(50));
         let base = Address::repeat_byte(0xAA);
         let quote = Address::repeat_byte(0xBB);
-        engine.register_pair_without_event(
-            "ETH/USDC".into(),
-            PairConfig::new(base, quote),
-        );
+        engine.register_pair_without_event("ETH/USDC".into(), PairConfig::new(base, quote));
         (engine, store)
     }
 
     async fn place_matching_orders(engine: &Engine) {
         let ttl = Duration::from_secs(60);
-        place_plaintext_order(engine, "ETH/USDC", Side::Buy, Decimal::from(100), Decimal::ONE, "key_bid", ttl)
-            .await
-            .unwrap();
-        place_plaintext_order(engine, "ETH/USDC", Side::Sell, Decimal::from(100), Decimal::ONE, "key_ask", ttl)
-            .await
-            .unwrap();
+        place_plaintext_order(
+            engine,
+            "ETH/USDC",
+            Side::Buy,
+            Decimal::from(100),
+            Decimal::ONE,
+            "key_bid",
+            ttl,
+        )
+        .await
+        .unwrap();
+        place_plaintext_order(
+            engine,
+            "ETH/USDC",
+            Side::Sell,
+            Decimal::from(100),
+            Decimal::ONE,
+            "key_ask",
+            ttl,
+        )
+        .await
+        .unwrap();
     }
 
     /// With `finalize_every = 3`, running 2 ticks (each with one matching
@@ -655,7 +676,11 @@ mod ivc_tests {
         place_matching_orders(&engine).await;
         engine.run_auction_tick().await;
 
-        assert_eq!(agg.finalize_calls(), 0, "finalize must not fire before boundary");
+        assert_eq!(
+            agg.finalize_calls(),
+            0,
+            "finalize must not fire before boundary"
+        );
         assert_eq!(engine.pending_batch_count(), 0, "no batches finalized yet");
     }
 

@@ -26,4 +26,4 @@ pub use IDarkPool::Match as SolMatch;
 
 #[cfg(feature = "hypernova")]
 #[allow(unused_imports)]
-pub use DarkPool::{submitSessionCall, settleAuctionCall, SessionSubmitted, AuctionSettled};
+pub use DarkPool::{settleAuctionCall, submitSessionCall, AuctionSettled, SessionSubmitted};

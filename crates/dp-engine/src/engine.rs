@@ -161,8 +161,13 @@ impl Engine {
     /// on-chain every `n` fold steps per pair. Takes effect eventually
     /// on some future tick (Relaxed store; no cross-thread ordering guarantee).
     pub fn set_finalize_every(&self, n: u64) {
-        assert!(n > 0, "finalize_every must be > 0 (division by zero in tick loop)");
-        self.inner.finalize_every.store(n, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            n > 0,
+            "finalize_every must be > 0 (division by zero in tick loop)"
+        );
+        self.inner
+            .finalize_every
+            .store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn set_submitter(&self, s: Arc<dyn Submitter>) {
