@@ -69,11 +69,15 @@ contract DeployScript is Script {
 
         HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
         console.log("HyperNovaDeciderVerifier:", address(hypernova));
+        require(
+            block.chainid != 1,
+            "stub IVC verifier cannot be deployed on mainnet; use a real Decider verifier"
+        );
         // Route IVC verification through the proxy so key rotation only
         // requires proxy.setIvcVerifier(newImpl) — no DarkPool redeployment.
         proxy.setIvcVerifier(address(hypernova));
         pool.setIvcVerifier(address(proxy));
-        console.log("IVC verifier set on DarkPool via VerifierProxy");
+        console.log("IVC verifier set on DarkPool via VerifierProxy (stub)");
 
         if (governor != deployer) {
             proxy.transferOwnership(governor);
