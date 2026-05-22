@@ -202,7 +202,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint64 nSteps,
         bytes32 policyHash,
         bytes32 matchesHash
-    ) external onlyOperator {
+    ) external onlyOperator whenNotPaused {
         require(!sessionSubmitted[sessionId], "session already submitted");
         require(address(ivcVerifier) != address(0), "ivc verifier not set");
         require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
@@ -225,7 +225,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         bytes32 sessionId,
         bytes32 auctionId,
         IDarkPool.Match[] calldata matches
-    ) external onlyOperator {
+    ) external onlyOperator whenNotPaused {
         require(sessionSubmitted[sessionId], "session not submitted");
         require(!settled[auctionId], "auction already settled");
         // Defense in depth: once an auction is bound to a session, only that
