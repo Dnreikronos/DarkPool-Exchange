@@ -72,6 +72,48 @@ describe('walletStore', () => {
     unsubscribe()
   })
 
+  it('connect(address) uses the supplied address verbatim', () => {
+    const real = '0xabcdef0123456789abcdef0123456789abcdef01' as const
+    walletStore.connect(real)
+    expect(walletStore.getState().address).toBe(real)
+  })
+
+  it('connect(otherAddress) re-seeds when the connected account switches', () => {
+    const a = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const
+    const b = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const
+    walletStore.connect(a)
+    // Move some funds so we can assert the switch reseeds.
+    walletStore.approve('USDC', '500')
+    walletStore.deposit('USDC', '100')
+    expect(walletStore.getState().internalBalances.usdc).toBe('100')
+
+    let fires = 0
+    const unsubscribe = walletStore.subscribe(() => {
+      fires += 1
+    })
+    walletStore.connect(b)
+    expect(walletStore.getState().address).toBe(b)
+    expect(walletStore.getState().walletBalances).toEqual({ weth: '1', usdc: '1000' })
+    expect(walletStore.getState().internalBalances).toEqual({ weth: '0', usdc: '0' })
+    expect(fires).toBe(1)
+    unsubscribe()
+  })
+
+  it('connect(sameAddress) is idempotent (no re-notify, balances preserved)', () => {
+    const real = '0xcccccccccccccccccccccccccccccccccccccccc' as const
+    walletStore.connect(real)
+    walletStore.approve('USDC', '500')
+    walletStore.deposit('USDC', '100')
+    let fires = 0
+    const unsubscribe = walletStore.subscribe(() => {
+      fires += 1
+    })
+    walletStore.connect(real)
+    expect(fires).toBe(0)
+    expect(walletStore.getState().internalBalances.usdc).toBe('100')
+    unsubscribe()
+  })
+
   describe('tx state (F1.5)', () => {
     it('defaults to unpaused with zero allowances', () => {
       const tx = walletStore.getTxState()

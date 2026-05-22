@@ -1,74 +1,58 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { ConnectButton as RainbowKitConnectButton } from '@rainbow-me/rainbowkit'
+
 import { WalletIcon } from '@/app/app/_shell/icons'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import type { Address } from '@/lib/wallet'
-import { useWallet } from '@/lib/wallet'
-
-const MOCK_PROVIDERS = ['METAMASK', 'RAINBOW', 'WALLETCONNECT'] as const
 
 const HEADER_BUTTON_CLASS = 'h-10 px-4'
 
-function truncateAddress(address: Address): string {
-  return `${address.slice(0, 6)}…${address.slice(-4)}`
-}
-
+/**
+ * Header connect button. Wraps RainbowKit's `ConnectButton.Custom` so
+ * the chrome stays inside the DESIGN.md brutalist system (ghost
+ * button, mono uppercase, no border radius), while RainbowKit handles
+ * the wallet picker modal, EIP-1193 transport, and account
+ * persistence.
+ *
+ * Wrong-network state is *not* surfaced here — `WrongNetworkModal`
+ * (mounted inside `WalletProviders`) intercepts that case
+ * application-wide.
+ */
 export function ConnectButton() {
-  const { isConnected, address, connect, disconnect } = useWallet()
-  const [pickerOpen, setPickerOpen] = useState(false)
-
-  const handlePick = useCallback(() => {
-    connect()
-    setPickerOpen(false)
-  }, [connect])
-
-  if (isConnected && address) {
-    return (
-      <Button
-        variant="ghost"
-        onClick={disconnect}
-        aria-label={`Disconnect wallet ${address}`}
-        className={HEADER_BUTTON_CLASS}
-      >
-        <WalletIcon className="mr-3 text-brand-fg" />
-        {truncateAddress(address)}
-      </Button>
-    )
-  }
-
   return (
-    <>
-      <Button
-        variant="ghost"
-        onClick={() => setPickerOpen(true)}
-        aria-haspopup="dialog"
-        aria-expanded={pickerOpen}
-        className={HEADER_BUTTON_CLASS}
-      >
-        <WalletIcon className="mr-3 text-brand-muted" />
-        CONNECT
-      </Button>
-      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogTitle className="mb-6 !font-mono !text-label-md !uppercase !tracking-[0.2em] !text-brand-muted">
-            CONNECT WALLET
-          </DialogTitle>
-          <ul className="flex flex-col gap-2">
-            {MOCK_PROVIDERS.map((provider) => (
-              <li key={provider}>
-                <Button variant="ghost" onClick={handlePick} className="w-full justify-start">
-                  {provider}
-                </Button>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-6 font-mono text-label-md uppercase text-brand-muted/60">
-            MOCK · INJECTS 0X1111…1111
-          </p>
-        </DialogContent>
-      </Dialog>
-    </>
+    <RainbowKitConnectButton.Custom>
+      {({ account, openAccountModal, openConnectModal, mounted }) => {
+        const ready = mounted
+        const connected = ready && Boolean(account)
+        return (
+          <div
+            aria-hidden={!ready}
+            style={{ opacity: ready ? 1 : 0, pointerEvents: ready ? 'auto' : 'none' }}
+          >
+            {connected && account ? (
+              <Button
+                variant="ghost"
+                onClick={openAccountModal}
+                aria-label={`Wallet ${account.address}`}
+                className={HEADER_BUTTON_CLASS}
+              >
+                <WalletIcon className="mr-3 text-brand-fg" />
+                {account.displayName}
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                onClick={openConnectModal}
+                aria-haspopup="dialog"
+                className={HEADER_BUTTON_CLASS}
+              >
+                <WalletIcon className="mr-3 text-brand-muted" />
+                CONNECT
+              </Button>
+            )}
+          </div>
+        )
+      }}
+    </RainbowKitConnectButton.Custom>
   )
 }

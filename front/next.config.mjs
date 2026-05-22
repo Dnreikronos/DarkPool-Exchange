@@ -25,6 +25,20 @@ const nextConfig = {
       ...(config.resolve.extensionAlias ?? {}),
       '.js': ['.js', '.ts', '.tsx'],
     };
+    // wagmi v2 / RainbowKit transitively pull in connectors (MetaMask
+    // SDK, WalletConnect) that reference Node- or React-Native-only
+    // modules behind optional `try { require(...) }` guards. Webpack
+    // still tries to resolve them at build time; stubbing them to
+    // `false` tells webpack to replace each with an empty module and
+    // lets the production build succeed. See:
+    // https://www.rainbowkit.com/docs/installation#additional-build-tooling-setup
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      '@react-native-async-storage/async-storage': false,
+      'pino-pretty': false,
+      encoding: false,
+      lokijs: false,
+    };
     return config;
   },
 };

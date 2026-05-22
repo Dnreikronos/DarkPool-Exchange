@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { WalletProviders } from '@/lib/wallet'
 import { ConnectButton } from './_components/ConnectButton'
 import { AuctionStrip } from './_shell/AuctionStrip'
 import { ArbitrumHex } from './_shell/icons'
@@ -7,25 +8,27 @@ import { Rail } from './_shell/Rail'
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative min-h-screen bg-brand-bg text-brand-fg">
-      {/* Scope-out the landing's global crosshair cursor inside /app
-          routes. Higher specificity (`body *`) + `!important` beats the
-          `* { cursor: crosshair !important }` rule in
-          front/app/globals.css. */}
-      <style
-        dangerouslySetInnerHTML={{
-          __html:
-            'body{cursor:default !important}' +
-            'body *{cursor:inherit !important}' +
-            'body a[href],body button,body summary,body [role=button],body [role=link],body [role=option],body [role=tab]{cursor:pointer !important}' +
-            'body button[disabled],body [aria-disabled=true]{cursor:not-allowed !important}' +
-            'body input,body textarea,body [contenteditable=true]{cursor:text !important}',
-        }}
-      />
-      <Banner />
-      <Rail />
-      <main className="pt-16 lg:pl-56">{children}</main>
-    </div>
+    <WalletProviders>
+      <div className="relative min-h-screen bg-brand-bg text-brand-fg">
+        {/* Scope-out the landing's global crosshair cursor inside /app
+            routes. Higher specificity (`body *`) + `!important` beats
+            the `* { cursor: crosshair !important }` rule in
+            front/app/globals.css. */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html:
+              'body{cursor:default !important}' +
+              'body *{cursor:inherit !important}' +
+              'body a[href],body button,body summary,body [role=button],body [role=link],body [role=option],body [role=tab]{cursor:pointer !important}' +
+              'body button[disabled],body [aria-disabled=true]{cursor:not-allowed !important}' +
+              'body input,body textarea,body [contenteditable=true]{cursor:text !important}',
+          }}
+        />
+        <Banner />
+        <Rail />
+        <main className="pt-16 lg:pl-56">{children}</main>
+      </div>
+    </WalletProviders>
   )
 }
 

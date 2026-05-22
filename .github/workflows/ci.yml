@@ -146,6 +146,18 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
-      - run: npm run build
+      - name: Build (Next.js)
+        # front/lib/config.ts validates NEXT_PUBLIC_* env at module
+        # load. The wallet provider chain pulls it into the page-data
+        # collection step, so the build needs the dev defaults from
+        # front/.env.local.example. Values are non-secret and mirror
+        # the example file.
+        env:
+          NEXT_PUBLIC_USE_MOCKS: 'true'
+          NEXT_PUBLIC_DARKPOOL_API_URL: 'http://localhost:8080'
+          NEXT_PUBLIC_DARKPOOL_API_KEY: 'darkpool-dev-key'
+          NEXT_PUBLIC_CHAIN_ID: '31337'
+          NEXT_PUBLIC_OPERATOR_PUBKEY_URL: 'http://localhost:8080/v1/operator/pubkey'
+        run: npm run build
       - name: Run vitest unit tests
         run: npm test -- --reporter=default
