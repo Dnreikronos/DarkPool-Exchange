@@ -93,6 +93,12 @@ pub(crate) struct Inner {
     /// the snapshot pipeline — recover then always falls back to full
     /// event replay. Set at boot via [`Engine::set_snapshot_store`].
     pub(crate) snapshot_store: RwLock<Option<Arc<dyn SnapshotStore>>>,
+    /// Per-pair IVC round counter: how many fold steps have been
+    /// executed for each pair since the last `finalize`.
+    pub(crate) ivc_round: Mutex<std::collections::HashMap<String, u64>>,
+    /// How many IVC rounds to fold before finalizing and submitting
+    /// on-chain. Default: 60.
+    pub(crate) finalize_every: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone)]
@@ -124,6 +130,8 @@ impl Engine {
                 salt_nonce,
                 batch_size: 8,
                 snapshot_store: RwLock::new(None),
+                ivc_round: Mutex::new(std::collections::HashMap::new()),
+                finalize_every: std::sync::atomic::AtomicU64::new(60),
             }),
         };
         // Suppress the boot warning under `cfg(test)` — every engine test
@@ -147,6 +155,14 @@ impl Engine {
 
     pub fn set_aggregator(&self, a: Arc<dyn ProofAggregator>) {
         *self.inner.aggregator.write() = a;
+    }
+
+    /// Override the IVC finalization cadence. The tick loop submits
+    /// on-chain every `n` fold steps per pair. Takes effect eventually
+    /// on some future tick (Relaxed store; no cross-thread ordering guarantee).
+    pub fn set_finalize_every(&self, n: u64) {
+        assert!(n > 0, "finalize_every must be > 0 (division by zero in tick loop)");
+        self.inner.finalize_every.store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn set_submitter(&self, s: Arc<dyn Submitter>) {

@@ -10,7 +10,7 @@ dp-event = { path = "../dp-event" }
 dp-book = { path = "../dp-book" }
 dp-auction = { path = "../dp-auction" }
 dp-aggregator = { path = "../dp-aggregator" }
-dp-settlement = { path = "../dp-settlement" }
+dp-settlement = { path = "../dp-settlement", features = ["hypernova"] }
 dp-zk = { path = "../dp-zk" }
 
 uuid = { workspace = true }
@@ -32,6 +32,7 @@ bincode = { workspace = true }
 rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 ark-ff = { workspace = true, features = ["std"] }
+ark-bn254 = { workspace = true }
 alloy-primitives = { workspace = true }
 
 [dev-dependencies]
