@@ -81,6 +81,13 @@ folding-schemes = { git = "https://github.com/privacy-scaling-explorations/sonob
 
 [patch.crates-io]
 ark-groth16 = { path = "vendor/ark-groth16" }
+# These four patches MUST stay unpinned (no `rev`). Sonobe's transitive deps
+# pull the same repos without `rev`; adding one here creates a duplicate source
+# in Cargo's resolver → compile failure. Cargo.lock is the effective pin.
+# Expected locked SHAs (see VERSIONS.md):
+#   ark-relations/ark-snark: 845ce9d50bbe535792f04b44db78b009ee402ed7
+#   ark-std:                 1693bc56d2ca6657b623f33a3f0b009d0ffeb892
+#   ark-poly-commit:         a05ec99d0d3e46c8ba0d6d3592980777bc2847e8
 ark-relations = { git = "https://github.com/arkworks-rs/snark" }
 ark-snark = { git = "https://github.com/arkworks-rs/snark" }
 ark-crypto-primitives = { git = "https://github.com/flyingnobita/crypto-primitives", rev = "f559264" }
