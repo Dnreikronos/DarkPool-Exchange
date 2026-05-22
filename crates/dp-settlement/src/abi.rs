@@ -23,3 +23,7 @@ pub use DarkPool::BatchSettled;
 // references inputs as `struct IDarkPool.Match[]`. If the ABI is ever changed
 // to inline the struct, update this path.
 pub use IDarkPool::Match as SolMatch;
+
+#[cfg(feature = "hypernova")]
+#[allow(unused_imports)]
+pub use DarkPool::{submitSessionCall, settleAuctionCall, SessionSubmitted, AuctionSettled};

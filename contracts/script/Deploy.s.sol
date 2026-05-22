@@ -6,6 +6,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {VerifierProxy} from "../src/VerifierProxy.sol";
+import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
 
 contract DeployScript is Script {
     using stdJson for string;
@@ -65,6 +66,14 @@ contract DeployScript is Script {
         DarkPool pool = new DarkPool(address(proxy), feeRecipient, operatorPubkey);
         console.log("DarkPool:", address(pool));
         console.log("OperatorPubkey bytes:", operatorPubkey.length);
+
+        HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
+        console.log("HyperNovaDeciderVerifier:", address(hypernova));
+        // Route IVC verification through the proxy so key rotation only
+        // requires proxy.setIvcVerifier(newImpl) — no DarkPool redeployment.
+        proxy.setIvcVerifier(address(hypernova));
+        pool.setIvcVerifier(address(proxy));
+        console.log("IVC verifier set on DarkPool via VerifierProxy");
 
         vm.stopBroadcast();
     }

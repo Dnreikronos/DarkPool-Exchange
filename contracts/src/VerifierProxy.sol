@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
+import {IDeciderVerifier} from "./interfaces/IDeciderVerifier.sol";
 
 /// @title Governance-swappable router in front of an immutable Groth16Verifier.
 /// @notice DarkPool talks to this proxy via a fixed address; the proxy holds a
@@ -17,8 +18,10 @@ import {IVerifier} from "./interfaces/IVerifier.sol";
 ///         Ownable2Step.transferOwnership(timelock).
 contract VerifierProxy is IVerifier, Ownable2Step {
     IVerifier public verifier;
+    IDeciderVerifier public ivcVerifier;
 
     event VerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
+    event IvcVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
 
     constructor(address initialVerifier, address initialOwner) Ownable(initialOwner) {
         _setVerifier(initialVerifier, address(0));
@@ -43,6 +46,25 @@ contract VerifierProxy is IVerifier, Ownable2Step {
         require(newVerifier.code.length > 0, "verifier has no code");
         verifier = IVerifier(newVerifier);
         emit VerifierUpdated(old, newVerifier);
+    }
+
+    function setIvcVerifier(address newIvcVerifier) external onlyOwner {
+        require(newIvcVerifier != address(0), "zero verifier");
+        require(newIvcVerifier != address(this), "self verifier");
+        require(newIvcVerifier.code.length > 0, "verifier has no code");
+        address old = address(ivcVerifier);
+        ivcVerifier = IDeciderVerifier(newIvcVerifier);
+        emit IvcVerifierUpdated(old, newIvcVerifier);
+    }
+
+    function verifyIvcProof(
+        bytes calldata proof,
+        uint256[3] calldata z0,
+        uint256[3] calldata zN,
+        uint64 nSteps
+    ) external view returns (bool) {
+        require(address(ivcVerifier) != address(0), "ivc verifier not set");
+        return ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps);
     }
 
     function verifyProof(

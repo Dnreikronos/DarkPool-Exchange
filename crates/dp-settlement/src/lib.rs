@@ -8,6 +8,8 @@ mod watcher;
 pub use abi::DarkPool;
 pub use eth_submitter::{EthSubmitter, EthSubmitterConfig};
 pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
+#[cfg(feature = "hypernova")]
+pub use helpers::compute_matches_hash;
 pub use signer::{LocalTxSigner, TxSigner};
 pub use submitter::{NoopSubmitter, Submitter};
 pub use watcher::{BatchSink, Watcher};
@@ -37,6 +39,22 @@ pub struct SubmitBatchParams {
     pub auction_id: Uuid,
     pub proof: Vec<u8>,
     pub public_inputs: [U256; 6],
+    pub matches: Vec<SettlementMatch>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubmitSessionParams {
+    pub session_id: Uuid,
+    pub proof: Vec<u8>,
+    pub z_0: [alloy_primitives::U256; 3],
+    pub z_n: [alloy_primitives::U256; 3],
+    pub n_steps: u64,
+    pub policy_hash: alloy_primitives::B256,
+    /// keccak256(abi.encode(auctionId, matches)) — the operator's pre-commitment
+    /// to the exact matches array that `settle_auction` will replay. The on-chain
+    /// `settleAuction` re-derives this and rejects any substitution.
+    pub matches_hash: alloy_primitives::B256,
+    pub auction_id: Uuid,
     pub matches: Vec<SettlementMatch>,
 }
 
