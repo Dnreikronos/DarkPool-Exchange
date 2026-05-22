@@ -4,6 +4,8 @@ import { type ComponentType, type ReactNode, type SVGProps } from 'react'
 import { ChartGlyph, EntryGlyph, OrderbookGlyph, TapeGlyph } from '@/app/app/_shell/icons'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 
+import { MyOrdersPanel } from './my-orders'
+
 type Glyph = ComponentType<SVGProps<SVGSVGElement>>
 
 export function Shell() {
@@ -18,21 +20,26 @@ export function Shell() {
 
 function DesktopLayout() {
   return (
-    <div className="hidden lg:grid lg:grid-cols-[1fr_2fr_1fr] lg:min-h-[calc(100vh-4rem)]">
-      <section aria-label="Order book" className="border-r border-brand-border">
-        <OrderbookPanel />
-      </section>
-      <section
-        aria-label="Market chart and order entry"
-        className="grid grid-rows-[2fr_1fr] border-r border-brand-border"
-      >
-        <ChartPanel />
-        <div className="border-t border-brand-border">
-          <OrderEntryPanel />
-        </div>
-      </section>
-      <section aria-label="Auction tape">
-        <TapePanel />
+    <div className="hidden lg:flex lg:min-h-[calc(100vh-4rem)] lg:flex-col">
+      <div className="grid flex-1 grid-cols-[1fr_2fr_1fr]">
+        <section aria-label="Order book" className="border-r border-brand-border">
+          <OrderbookPanel />
+        </section>
+        <section
+          aria-label="Market chart and order entry"
+          className="grid grid-rows-[2fr_1fr] border-r border-brand-border"
+        >
+          <ChartPanel />
+          <div className="border-t border-brand-border">
+            <OrderEntryPanel />
+          </div>
+        </section>
+        <section aria-label="Auction tape">
+          <TapePanel />
+        </section>
+      </div>
+      <section aria-label="My orders" className="border-t border-brand-border">
+        <MyOrdersPanel />
       </section>
     </div>
   )
@@ -47,8 +54,11 @@ function MobileLayout() {
       <section aria-label="Market chart" className="border-b border-brand-border">
         <ChartPanel />
       </section>
-      <section aria-label="Auction tape">
+      <section aria-label="Auction tape" className="border-b border-brand-border">
         <TapePanel />
+      </section>
+      <section aria-label="My orders">
+        <MyOrdersPanel />
       </section>
     </div>
   )

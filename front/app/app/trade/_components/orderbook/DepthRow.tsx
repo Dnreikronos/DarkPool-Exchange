@@ -11,6 +11,12 @@ export interface DepthRowProps {
   side: Side.BUY | Side.SELL
   /** Best-of-book row gets one typography step up. */
   emphasized?: boolean
+  /**
+   * Marks the row as belonging to the connected trader — adds a 2px white
+   * left edge so the user can spot their resting orders inside the book.
+   * Driven by F1.10 (#77) via the `userPrices` prop chain on OrderBook.
+   */
+  mine?: boolean
   onSelect?: (price: string, side: Side.BUY | Side.SELL) => void
 }
 
@@ -20,7 +26,7 @@ export interface DepthRowProps {
  * use `secondary` at 20% (per DESIGN-INSPIRATIONS bid/ask tension table).
  * No semantic color anywhere.
  */
-export function DepthRow({ row, side, emphasized = false, onSelect }: DepthRowProps) {
+export function DepthRow({ row, side, emphasized = false, mine = false, onSelect }: DepthRowProps) {
   const isBid = side === Side.BUY
   const bar = isBid ? 'bg-brand-fg/[0.08]' : 'bg-brand-muted/20'
   const sizeClass = emphasized ? 'text-body-md' : 'text-body-sm'
@@ -34,12 +40,19 @@ export function DepthRow({ row, side, emphasized = false, onSelect }: DepthRowPr
       onClick={handleClick}
       className={`relative grid w-full grid-cols-3 items-center gap-2 px-4 py-1 text-left font-mono transition-colors duration-100 hover:bg-brand-surface focus-visible:bg-brand-surface focus-visible:outline focus-visible:outline-1 focus-visible:outline-brand-accent focus-visible:outline-offset-[-1px] ${sizeClass}`}
       aria-label={clickable ? `${isBid ? 'Bid' : 'Ask'} ${row.level.price}` : undefined}
+      data-mine={mine || undefined}
     >
       <span
         aria-hidden="true"
         className={`pointer-events-none absolute inset-y-0 right-0 ${bar}`}
         style={{ width: `${Math.min(100, Math.max(0, row.barFraction * 100))}%` }}
       />
+      {mine && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-brand-fg"
+        />
+      )}
       <NumericText
         value={row.level.price}
         kind="price"

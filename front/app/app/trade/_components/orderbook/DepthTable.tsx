@@ -17,6 +17,12 @@ export interface DepthTableProps {
    * best→worst.
    */
   reverse?: boolean
+  /**
+   * Distinct prices the connected trader has open orders at. Forwarded
+   * from F1.10 (#77) so the book can mark "your levels" with a white
+   * left edge — see `DepthRow.mine`.
+   */
+  userPrices?: ReadonlySet<string>
   onSelect?: (price: string, side: DepthTableSide) => void
 }
 
@@ -25,7 +31,7 @@ export interface DepthTableProps {
  * the side closest to the spread — gets one typography step up so the
  * top of book reads with hierarchy.
  */
-export function DepthTable({ rows, side, reverse = false, onSelect }: DepthTableProps) {
+export function DepthTable({ rows, side, reverse = false, userPrices, onSelect }: DepthTableProps) {
   const ordered = reverse ? [...rows].reverse() : rows
   const isBid = side === Side.BUY
   const bestIndex = reverse ? ordered.length - 1 : 0
@@ -40,7 +46,13 @@ export function DepthTable({ rows, side, reverse = false, onSelect }: DepthTable
       <ul className="flex flex-col">
         {ordered.map((row, i) => (
           <li key={row.level.price}>
-            <DepthRow row={row} side={side} emphasized={i === bestIndex} onSelect={onSelect} />
+            <DepthRow
+              row={row}
+              side={side}
+              emphasized={i === bestIndex}
+              mine={userPrices?.has(row.level.price) ?? false}
+              onSelect={onSelect}
+            />
           </li>
         ))}
       </ul>
