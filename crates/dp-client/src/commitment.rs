@@ -1,5 +1,5 @@
 //! Poseidon order-leg commitment. Copies the parameter set + absorption
-//! schedule from `dp_zk::pedersen` so client- and engine-side commitments
+//! schedule from `dp_zk::commitment` so client- and engine-side commitments
 //! agree byte-for-byte (verified by the interop test).
 //!
 //! Kept in this crate (rather than depending on `dp-zk`) to avoid pulling

@@ -22,7 +22,7 @@ use ark_std::rand::SeedableRng;
 use clap::Parser;
 use dp_zk::circuit::{prove, setup};
 use dp_zk::keys::fq_to_hex;
-use dp_zk::pedersen::derive_trader_id;
+use dp_zk::commitment::derive_trader_id;
 use dp_zk::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
 use dp_zk::BatchProofCircuit;
 use rust_decimal::Decimal;

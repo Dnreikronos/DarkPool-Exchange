@@ -766,7 +766,7 @@ fn derive_order_secrets(
     oracle: &dyn BalanceOracle,
     nonce: &[u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
+    let trader_id = dp_zk::commitment::derive_trader_id_bytes(commitment_key.as_bytes());
     let salt = derive_salt(commitment_key, order_id, nonce);
     let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
 
@@ -791,7 +791,7 @@ pub(crate) fn recompute_persisted_commitment(
     size: Decimal,
     nonce: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
+    let trader_id = dp_zk::commitment::derive_trader_id_bytes(commitment_key.as_bytes());
     let salt = derive_salt(commitment_key, order_id, nonce);
     compute_poseidon_commitment(&trader_id, side, price, size, &salt)
 }
@@ -819,8 +819,8 @@ pub(crate) fn compute_poseidon_commitment(
     salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
     use ark_ff::{BigInteger, PrimeField};
-    let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
-    let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
+    let trader_fr = dp_zk::commitment::bytes_to_scalar(trader_id);
+    let salt_fr = dp_zk::commitment::bytes_to_scalar(salt);
     let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
         .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     let fr = dp_zk::commit_native(&input);

@@ -513,7 +513,7 @@ mod tests {
     /// Build a circuit-satisfying single-match input matched to
     /// [`shared_keys_dir`]'s batch_size=1 keys.
     fn valid_match_input_bytes() -> Vec<u8> {
-        use dp_zk::pedersen::derive_trader_id_bytes;
+        use dp_zk::commitment::derive_trader_id_bytes;
 
         let bid_key = "bid_key";
         let ask_key = "ask_key";
