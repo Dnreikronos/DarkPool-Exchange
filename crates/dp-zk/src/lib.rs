@@ -15,15 +15,15 @@
 //! SHA256 commitment.
 
 pub mod circuit;
+pub mod commitment;
 pub mod encoding;
 pub mod keys;
-pub mod commitment;
 pub mod witness;
 
 pub use circuit::{compute_public_inputs, prove, verify, BatchProofCircuit, ProofBytes};
+pub use commitment::{commit_native, OrderCommitmentInput};
 pub use encoding::{decimal_to_scalar, fr_to_bytes32, EncodingError};
 pub use keys::{KeyMetadata, ProvingKeyBytes, VerifyingKeyBytes};
-pub use commitment::{commit_native, OrderCommitmentInput};
 pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
 
 #[derive(Debug, thiserror::Error)]

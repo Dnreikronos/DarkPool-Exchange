@@ -60,8 +60,12 @@ async fn subprocess_zk_round_trip() {
 
     let bid_key = "bid_key".to_string();
     let ask_key = "ask_key".to_string();
-    let bid_trader = hex::encode(dp_zk::commitment::derive_trader_id_bytes(bid_key.as_bytes()));
-    let ask_trader = hex::encode(dp_zk::commitment::derive_trader_id_bytes(ask_key.as_bytes()));
+    let bid_trader = hex::encode(dp_zk::commitment::derive_trader_id_bytes(
+        bid_key.as_bytes(),
+    ));
+    let ask_trader = hex::encode(dp_zk::commitment::derive_trader_id_bytes(
+        ask_key.as_bytes(),
+    ));
     let witness = BatchWitness {
         batch_id,
         auction_id,

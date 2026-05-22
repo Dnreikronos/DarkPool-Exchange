@@ -40,8 +40,8 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisE
 use ark_snark::SNARK;
 use ark_std::rand::{CryptoRng, RngCore};
 
-use crate::encoding::{decimal_to_scalar, SCALE_FACTOR_I128};
 use crate::commitment::{commit_native, hash_root_native, poseidon_config, OrderCommitmentInput};
+use crate::encoding::{decimal_to_scalar, SCALE_FACTOR_I128};
 use crate::witness::{BatchWitness, MatchWitness};
 use crate::ZkError;
 
