@@ -150,11 +150,10 @@ pub fn prove_from_bytes(
     let input: AggregatorInput = serde_json::from_slice(input_bytes)
         .map_err(|e| ProveError::new(2, format!("parse input: {e}")))?;
     let _parsed = build_witness(input).map_err(|e| ProveError::new(2, e))?;
-    // TODO(Phase G): wire IVC fold_step + finalize here so the subprocess
-    // CLI mirrors the inline aggregator. Currently the in-process
-    // InlineFoldingAggregator handles all IVC proving; this stub only
-    // exercises the witness-parsing path.
-    Ok(vec![])
+    Err(ProveError::new(
+        4,
+        "IVC proving is not implemented in dp-zk-cli; use InlineFoldingAggregator",
+    ))
 }
 
 /// Generic-IO core of [`run_prover`]: reads JSON from `stdin`, dispatches to
@@ -355,11 +354,10 @@ mod tests {
     }
 
     #[test]
-    fn prove_from_bytes_happy_path() {
+    fn prove_from_bytes_returns_unimplemented_error() {
         let dir = tempfile::tempdir().unwrap();
-        let proof = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).expect("prove");
-        // IVC stub returns empty proof until Phase G wires fold_step
-        assert!(proof.is_empty());
+        let err = prove_from_bytes(&valid_input_bytes(), 8, dir.path()).unwrap_err();
+        assert_eq!(err.exit_code, 4);
     }
 
     #[test]
