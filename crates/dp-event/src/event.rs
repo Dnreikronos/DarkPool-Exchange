@@ -224,6 +224,14 @@ mod tests {
                 },
                 EventType::PairDelisted,
             ),
+            (
+                EventData::BatchFolded {
+                    batch_id,
+                    round_index: 0,
+                    pair: "ETH/USDC".into(),
+                },
+                EventType::BatchFolded,
+            ),
         ];
         for (data, expected) in cases {
             assert_eq!(data.event_type(), expected);

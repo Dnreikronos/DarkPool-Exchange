@@ -46,6 +46,7 @@ mod tests {
         for (variant, expected) in [
             (EventType::OrderPlaced, "1"),
             (EventType::BatchSettled, "8"),
+            (EventType::BatchFolded, "12"),
         ] {
             let json = serde_json::to_string(&variant).unwrap();
             assert_eq!(json, expected);
