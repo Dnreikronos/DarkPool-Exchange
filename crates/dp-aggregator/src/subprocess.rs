@@ -181,7 +181,7 @@ impl ProofAggregator for SubprocessAggregator {
         Box::pin(async move {
             Err(AggregatorError::Zk(
                 "SubprocessAggregator does not support IVC fold_step; \
-                 switch to InlineIvcAggregator for the HyperNova path".into(),
+                 switch to InlineFoldingAggregator for the HyperNova path".into(),
             ))
         })
     }
@@ -193,7 +193,7 @@ impl ProofAggregator for SubprocessAggregator {
         Box::pin(async move {
             Err(AggregatorError::Zk(
                 "SubprocessAggregator does not support IVC finalize; \
-                 switch to InlineIvcAggregator for the HyperNova path".into(),
+                 switch to InlineFoldingAggregator for the HyperNova path".into(),
             ))
         })
     }
