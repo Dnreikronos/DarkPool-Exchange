@@ -2,7 +2,7 @@
 //!
 //! Only the prover params are serialized (the CCS/R1CS needed for the
 //! verifier params can be re-derived from the circuit at load time via
-//! [`HN::pp_deserialize_with_mode`] / [`HN::vp_deserialize_with_mode`]).
+//! `HN::pp_deserialize_with_mode` / `HN::vp_deserialize_with_mode`).
 
 use std::fs;
 use std::path::Path;
@@ -70,7 +70,7 @@ pub fn load_metadata(dir: &Path) -> Result<ParamsMetadata, ZkError> {
 
 /// Read the raw prover-param bytes from `<dir>/public_params.bin`.
 /// Callers that need the deserialized form should use
-/// [`HN::pp_deserialize_with_mode`] on the returned slice.
+/// `HN::pp_deserialize_with_mode` on the returned slice.
 pub fn load_prover_bytes(dir: &Path) -> Result<Vec<u8>, ZkError> {
     let bytes = fs::read(dir.join(PARAMS_FILE))?;
     Ok(bytes)
