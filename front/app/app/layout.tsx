@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Toaster } from '@/components/ui/toaster'
 import { WalletProviders } from '@/lib/wallet'
 import { ConnectButton } from './_components/ConnectButton'
 import { OnboardingMount } from './_components/onboarding'
@@ -29,6 +30,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <Rail />
         <main className="pt-16 lg:pl-56">{children}</main>
         <OnboardingMount />
+        <Toaster />
       </div>
     </WalletProviders>
   )

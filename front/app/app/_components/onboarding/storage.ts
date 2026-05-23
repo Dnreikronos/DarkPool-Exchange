@@ -40,6 +40,14 @@ export function isDismissed(storage: StorageLike, address: string | null | undef
 
 export function setDismissed(storage: StorageLike, address: string | null | undefined): void {
   storage.setItem(keyFor(address), FLAG)
+  // Mirror to the anon bucket so a subsequent disconnect doesn't pop the
+  // modal again. This is the symmetric counterpart to
+  // `promoteAnonToAddress`: the user's intent ("I've seen this") is
+  // wallet-agnostic, but the storage keys are wallet-specific, so we
+  // keep both buckets in sync at write time.
+  if (normalize(address) !== ANON_KEY) {
+    storage.setItem(PREFIX + ANON_KEY, FLAG)
+  }
 }
 
 export function clearDismissed(storage: StorageLike, address: string | null | undefined): void {

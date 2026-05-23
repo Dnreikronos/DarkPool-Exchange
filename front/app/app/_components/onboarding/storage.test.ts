@@ -63,6 +63,20 @@ describe('onboarding storage', () => {
     expect(isDismissed(storage, '0xabc')).toBe(false)
   })
 
+  it('mirrors a connected-address dismissal forward to the anon bucket', () => {
+    // The user's "I've seen this" intent is wallet-agnostic; the keys
+    // are not. Mirror at write time so a later disconnect does not
+    // re-pop the modal.
+    setDismissed(storage, '0xabc')
+    expect(isDismissed(storage, '0xabc')).toBe(true)
+    expect(isDismissed(storage, null)).toBe(true)
+  })
+
+  it('does not touch other address buckets when mirroring', () => {
+    setDismissed(storage, '0xabc')
+    expect(isDismissed(storage, '0xdef')).toBe(false)
+  })
+
   describe('promoteAnonToAddress', () => {
     it('copies an anon-bucket dismissal to the connecting address', () => {
       setDismissed(storage, null)

@@ -34,7 +34,7 @@ export function PortfolioPanel(): JSX.Element {
       ) : (
         <section
           aria-label="Wallet disconnected"
-          className="border border-brand-border bg-brand-surface px-5 py-6"
+          className="border border-brand-border bg-brand-surface"
         >
           <PortfolioDisconnected />
         </section>
