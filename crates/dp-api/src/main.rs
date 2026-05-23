@@ -379,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
+    let cors_origins = cfg.cors_origins();
     let rest_app = rest::router_with_ops(
         shared,
         shared_admin,
@@ -387,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         admin_auth_core,
         rl_core,
         ops,
+        &cors_origins,
     );
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();

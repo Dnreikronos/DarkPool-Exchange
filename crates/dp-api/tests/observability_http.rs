@@ -54,6 +54,7 @@ fn make_router(probes: ReadinessProbes) -> axum::Router {
             prom: shared_prom(),
             readiness: probes,
         },
+        &[],
     )
 }
 

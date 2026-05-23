@@ -1,8 +1,9 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{MatchedPath, Path, Query, State};
-use axum::http::{header, HeaderValue, Request as AxumRequest, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -10,6 +11,7 @@ use axum::{Json, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
@@ -142,6 +144,7 @@ pub fn router_with_ops(
     admin_auth: AuthCore,
     ratelimit: RateLimitCore,
     ops: OpsState,
+    cors_origins: &[String],
 ) -> Router {
     let base = router_with_admin(
         handler,
@@ -158,9 +161,31 @@ pub fn router_with_ops(
     // so we call them here in the reverse order — propagate (innermost),
     // trace, then SetRequestId (outermost, generates the id before
     // TraceLayer reads it).
-    base.layer(PropagateRequestIdLayer::x_request_id())
+    let traced = base
+        .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid));
+
+    if cors_origins.is_empty() {
+        return traced;
+    }
+
+    let origins: Vec<HeaderValue> = cors_origins
+        .iter()
+        .filter_map(|o| o.parse().ok())
+        .collect();
+
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            HeaderName::from_static("x-api-key"),
+        ])
+        .expose_headers([HeaderName::from_static("x-request-id")])
+        .max_age(Duration::from_secs(3600));
+
+    traced.layer(cors)
 }
 
 /// Build the per-request tracing span. Pulls the request_id off the
