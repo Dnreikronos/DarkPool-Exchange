@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { WalletProviders } from '@/lib/wallet'
 import { ConnectButton } from './_components/ConnectButton'
+import { OnboardingMount } from './_components/onboarding'
 import { AuctionStrip } from './_shell/AuctionStrip'
 import { ArbitrumHex } from './_shell/icons'
 import { PairSelector } from './_shell/PairSelector'
@@ -27,6 +28,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <Banner />
         <Rail />
         <main className="pt-16 lg:pl-56">{children}</main>
+        <OnboardingMount />
       </div>
     </WalletProviders>
   )

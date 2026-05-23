@@ -7,6 +7,7 @@ import type { AuctionSummary } from '@/lib/sdk'
 import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
 import { TapeRow } from './TapeRow'
+import { TapeEmpty } from './states'
 import { useAuctionHistory } from '../../_hooks/tape/useAuctionHistory'
 import { useNow } from '../../_hooks/tape/useNow'
 
@@ -31,7 +32,7 @@ export function Tape({ limit }: TapeProps = {}): JSX.Element {
       <Countdown latestAuctionUnixSeconds={latestUnix} nowUnixSeconds={nowSeconds} />
       <TableHeader />
       {auctions.length === 0 ? (
-        <EmptyState />
+        <TapeEmpty />
       ) : (
         <ol aria-live="polite" aria-atomic="false" className="flex-1 overflow-y-auto">
           {auctions.map((a) => (
@@ -56,14 +57,6 @@ function TableHeader(): JSX.Element {
       <span className="text-right">PRICE</span>
       <span className="text-right">VOLUME</span>
       <span className="text-right">MATCH</span>
-    </div>
-  )
-}
-
-function EmptyState(): JSX.Element {
-  return (
-    <div className="flex flex-1 items-center justify-center font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
-      [ NO AUCTIONS YET ]
     </div>
   )
 }

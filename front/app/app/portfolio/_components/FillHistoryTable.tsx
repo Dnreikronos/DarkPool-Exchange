@@ -6,6 +6,7 @@ import type { Fill } from '@/lib/mock-store'
 
 import { ExportCsvButton } from './ExportCsvButton'
 import { FillHistoryRow } from './FillHistoryRow'
+import { FillHistoryEmpty } from './states'
 
 export interface FillHistoryTableProps {
   fills: readonly Fill[]
@@ -20,7 +21,7 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
       <TableTitleBar count={fills.length} fills={fills} />
       <TableHeader />
       {fills.length === 0 ? (
-        <EmptyState />
+        <FillHistoryEmpty />
       ) : (
         <ol className="flex-1 overflow-y-auto">
           {fills.map((f) => (
@@ -54,19 +55,6 @@ function TableHeader() {
       <span className="text-right">PRICE</span>
       <span className="text-right">SIZE</span>
       <span className="text-right">BATCH</span>
-    </div>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-1 items-center justify-center px-4 py-12">
-      <p
-        role="status"
-        className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
-      >
-        [ NO FILLS YET — PLACE AN ORDER ON /APP/TRADE ]
-      </p>
     </div>
   )
 }

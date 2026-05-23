@@ -7,6 +7,7 @@ import { useInternalBalances, useWallet } from '@/lib/wallet/hooks'
 import { DivergenceBanner } from './DivergenceBanner'
 import { FillHistoryTable } from './FillHistoryTable'
 import { PnLCard } from './PnLCard'
+import { PortfolioDisconnected } from './states'
 import { usePortfolio } from '../_hooks/usePortfolio'
 
 /**
@@ -31,7 +32,12 @@ export function PortfolioPanel(): JSX.Element {
           <DivergenceBanner result={divergence} />
         </>
       ) : (
-        <Disconnected />
+        <section
+          aria-label="Wallet disconnected"
+          className="border border-brand-border bg-brand-surface px-5 py-6"
+        >
+          <PortfolioDisconnected />
+        </section>
       )}
       <FillHistoryTable fills={fills} />
     </div>
@@ -46,21 +52,5 @@ function PageHeader() {
       </span>
       <h1 className="font-display text-display-md tracking-brand text-brand-fg">POSITIONS</h1>
     </header>
-  )
-}
-
-function Disconnected() {
-  return (
-    <section
-      aria-label="Wallet disconnected"
-      className="border border-brand-border bg-brand-surface px-5 py-6"
-    >
-      <p
-        role="status"
-        className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
-      >
-        [ CONNECT WALLET TO SEE POSITION + P&L ]
-      </p>
-    </section>
   )
 }

@@ -1,8 +1,9 @@
 'use client'
 
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
+import { useToast } from '@/components/ui/use-toast'
 import { DEFAULT_PAIR } from '@/lib/sdk/mocks/factories'
 import { Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
@@ -67,6 +68,26 @@ export function OrderBookContent({
   const effectivePair = pair ?? DEFAULT_PAIR
   const book = useOrderBook({ pair: effectivePair, refetchIntervalMs })
   const auctions = useRecentAuctions({ pair: effectivePair, limit: 2, refetchIntervalMs })
+  const { toast } = useToast()
+  const lastErrorAtRef = useRef<unknown>(null)
+
+  // Fire one toast on the transition into an error state. We key on the
+  // error object identity so subsequent re-renders of the same failure
+  // don't re-toast; a new failure (different reference) triggers again.
+  // Retry lives on the inline `<OrderBookError>` body — the toast is a
+  // transient ack for users looking at another panel.
+  useEffect(() => {
+    if (!book.isError || !book.error) {
+      lastErrorAtRef.current = null
+      return
+    }
+    if (lastErrorAtRef.current === book.error) return
+    lastErrorAtRef.current = book.error
+    toast({
+      title: 'Orderbook unavailable',
+      description: book.error instanceof Error ? book.error.message : undefined,
+    })
+  }, [book.isError, book.error, toast])
 
   const depth = useMemo(() => {
     if (!book.data) return null

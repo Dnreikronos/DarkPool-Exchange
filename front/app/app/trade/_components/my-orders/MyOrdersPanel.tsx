@@ -22,6 +22,7 @@ import {
   type UseMyOrdersReturn,
 } from '../../_hooks/my-orders/useMyOrders'
 import { OrderRow } from './OrderRow'
+import { MyOrdersEmpty } from './states'
 
 export interface MyOrdersPanelProps {
   /**
@@ -53,9 +54,9 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
     >
       <Header id={headerId} />
       {!isConnected ? (
-        <EmptyState label="[ CONNECT WALLET ]" />
+        <MyOrdersEmpty disconnected />
       ) : rows.length === 0 ? (
-        <EmptyState label="[ NO ORDERS YET ]" />
+        <MyOrdersEmpty />
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto">
           <ColumnHeader />
@@ -97,19 +98,6 @@ function ColumnHeader(): JSX.Element {
       <span className="text-right" aria-hidden="true">
         {/* cancel column header is intentionally blank — action, not data */}
       </span>
-    </div>
-  )
-}
-
-function EmptyState({ label }: { label: string }): JSX.Element {
-  return (
-    <div className="flex flex-1 items-center justify-center p-6">
-      <p
-        role="status"
-        className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
-      >
-        {label}
-      </p>
     </div>
   )
 }
