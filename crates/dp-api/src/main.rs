@@ -205,9 +205,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let provider = alloy_provider::ProviderBuilder::new()
                 .wallet(signer.wallet())
-                .connect_http(rpc.parse().map_err(|e| {
-                    format!("bad DARKPOOL_ETH_RPC URL: {e}")
-                })?);
+                .connect_http(
+                    rpc.parse()
+                        .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+                );
 
             let submitter_cfg = dp_settlement::EthSubmitterConfig {
                 rpc_url: rpc.to_string(),
