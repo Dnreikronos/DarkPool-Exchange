@@ -172,12 +172,24 @@ pub fn router_with_ops(
 
     let origins: Vec<HeaderValue> = cors_origins
         .iter()
-        .filter_map(|o| o.parse().ok())
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(origin = %o, "ignoring unparseable CORS origin");
+                None
+            }
+        })
         .collect();
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("x-api-key"),
