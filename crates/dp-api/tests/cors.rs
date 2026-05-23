@@ -17,7 +17,7 @@ fn build_cors_layer(origins: &[&str]) -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(values))
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("x-api-key"),
@@ -176,4 +176,31 @@ async fn multiple_origins_allowed() {
         resp.headers().get("access-control-allow-origin").unwrap(),
         second,
     );
+}
+
+#[tokio::test]
+async fn preflight_allows_patch_for_admin_routes() {
+    let app = app_with_cors(&[ALLOWED_ORIGIN]);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/orders")
+                .header("origin", ALLOWED_ORIGIN)
+                .header("access-control-request-method", "PATCH")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let methods = resp
+        .headers()
+        .get("access-control-allow-methods")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(methods.contains("PATCH"), "expected PATCH in {methods}");
 }
