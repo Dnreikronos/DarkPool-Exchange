@@ -136,6 +136,7 @@ pub fn ops_router(state: OpsState) -> Router {
 /// Compose the full server router: public + admin (auth-gated) + ops
 /// (unauthenticated) and apply tracing + x-request-id propagation
 /// across every route so logs and spans share a correlation ID.
+#[allow(clippy::too_many_arguments)]
 pub fn router_with_ops(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
@@ -190,10 +191,7 @@ pub fn router_with_ops(
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            HeaderName::from_static("x-api-key"),
-        ])
+        .allow_headers([header::CONTENT_TYPE, HeaderName::from_static("x-api-key")])
         .expose_headers([HeaderName::from_static("x-request-id")])
         .max_age(Duration::from_secs(3600));
 

@@ -10,18 +10,18 @@ const ALLOWED_ORIGIN: &str = "http://localhost:3000";
 const UNKNOWN_ORIGIN: &str = "http://evil.example.com";
 
 fn build_cors_layer(origins: &[&str]) -> CorsLayer {
-    let values: Vec<HeaderValue> = origins
-        .iter()
-        .filter_map(|o| o.parse().ok())
-        .collect();
+    let values: Vec<HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(values))
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            HeaderName::from_static("x-api-key"),
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
         ])
+        .allow_headers([header::CONTENT_TYPE, HeaderName::from_static("x-api-key")])
         .expose_headers([HeaderName::from_static("x-request-id")])
         .max_age(Duration::from_secs(3600))
 }
