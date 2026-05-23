@@ -33,6 +33,8 @@ default = []
 # can wire the KMS dependency tree without bringing aws-sdk into the
 # default build.
 aws-kms = []
+# Enables HyperNova IVC proof submission (submitSession / settleAuction).
+hypernova = []
 
 [dev-dependencies]
 dp-types = { path = "../dp-types" }

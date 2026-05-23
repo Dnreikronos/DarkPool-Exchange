@@ -6,6 +6,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {VerifierProxy} from "../src/VerifierProxy.sol";
+import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
 
 contract DeployScript is Script {
     using stdJson for string;
@@ -58,13 +59,30 @@ contract DeployScript is Script {
         Groth16Verifier verifier = new Groth16Verifier(alpha1, beta2, gamma2, delta2, ic);
         console.log("Groth16Verifier:", address(verifier));
 
-        VerifierProxy proxy = new VerifierProxy(address(verifier), governor);
+        VerifierProxy proxy = new VerifierProxy(address(verifier), deployer);
         console.log("VerifierProxy:", address(proxy));
-        console.log("VerifierProxy owner:", governor);
+        console.log("VerifierProxy owner (interim):", deployer);
 
         DarkPool pool = new DarkPool(address(proxy), feeRecipient, operatorPubkey);
         console.log("DarkPool:", address(pool));
         console.log("OperatorPubkey bytes:", operatorPubkey.length);
+
+        require(
+            block.chainid != 1,
+            "stub IVC verifier cannot be deployed on mainnet; use a real Decider verifier"
+        );
+        HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
+        console.log("HyperNovaDeciderVerifier:", address(hypernova));
+        // Route IVC verification through the proxy so key rotation only
+        // requires proxy.setIvcVerifier(newImpl) — no DarkPool redeployment.
+        proxy.setIvcVerifier(address(hypernova));
+        pool.setIvcVerifier(address(proxy));
+        console.log("IVC verifier set on DarkPool via VerifierProxy (stub)");
+
+        if (governor != deployer) {
+            proxy.transferOwnership(governor);
+            console.log("VerifierProxy ownership transferred to governor:", governor);
+        }
 
         vm.stopBroadcast();
     }

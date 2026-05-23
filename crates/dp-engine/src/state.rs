@@ -101,6 +101,19 @@ impl Default for PairConfig {
     }
 }
 
+/// Typed proof payload stored in [`PendingBatch`]. The IVC path stores the
+/// full [`dp_zk::folding::FinalProof`] metadata here.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ProofPayload {
+    IvcFinal {
+        proof_bytes: Vec<u8>,
+        z_0: [[u8; 32]; 3],
+        z_n: [[u8; 32]; 3],
+        n_steps: u64,
+        policy_hash: [u8; 32],
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingBatch {
     pub batch_id: Uuid,
@@ -109,6 +122,8 @@ pub struct PendingBatch {
     pub settlement_matches: Vec<SettlementMatch>,
     pub proof: Vec<u8>,
     pub public_inputs: [U256; 6],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ivc_payload: Option<ProofPayload>,
     pub attempts: u32,
     /// `Instant` has no stable serialised representation; the retry
     /// scheduler will compute a fresh attempt time the next time the

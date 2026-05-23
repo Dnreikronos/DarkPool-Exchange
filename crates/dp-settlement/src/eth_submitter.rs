@@ -9,11 +9,11 @@ use alloy_provider::Provider;
 use alloy_rpc_types::BlockNumberOrTag;
 use tracing::Instrument;
 
-use crate::abi::{DarkPool, SolMatch, MAX_MATCHES_PER_BATCH};
-use crate::helpers::{decimal_to_wei, uuid_to_bytes32};
+use crate::abi::{DarkPool, MAX_MATCHES_PER_BATCH};
+use crate::helpers::{settlement_match_to_sol, uuid_to_bytes32};
 use crate::signer::TxSigner;
 use crate::submitter::Submitter;
-use crate::{SettlementError, SettlementMatch, SubmitBatchParams};
+use crate::{SettlementError, SubmitBatchParams};
 
 pub struct EthSubmitterConfig {
     pub rpc_url: String,
@@ -67,26 +67,15 @@ impl<P: Provider + Send + Sync> EthSubmitter<P> {
     }
 }
 
-fn build_sol_matches(params: &SubmitBatchParams) -> Result<Vec<SolMatch>, SettlementError> {
+fn build_sol_matches(
+    params: &SubmitBatchParams,
+) -> Result<Vec<crate::abi::SolMatch>, SettlementError> {
     if params.matches.len() > MAX_MATCHES_PER_BATCH {
         return Err(SettlementError::TooManyMatches {
             count: params.matches.len(),
         });
     }
     params.matches.iter().map(settlement_match_to_sol).collect()
-}
-
-fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
-    Ok(SolMatch {
-        bidOrderId: uuid_to_bytes32(m.bid_order_id),
-        askOrderId: uuid_to_bytes32(m.ask_order_id),
-        bidTrader: m.bid_trader,
-        askTrader: m.ask_trader,
-        baseToken: m.base_token,
-        quoteToken: m.quote_token,
-        price: decimal_to_wei(m.price)?,
-        size: decimal_to_wei(m.size)?,
-    })
 }
 
 /// Build the tracing span for a single `submit` call. Extracted so
@@ -98,6 +87,17 @@ fn build_submit_span(params: &SubmitBatchParams) -> tracing::Span {
         "dp_settlement.eth_submit",
         batch_id = %params.batch_id,
         auction_id = %params.auction_id,
+        match_count = params.matches.len(),
+    )
+}
+
+#[cfg(feature = "hypernova")]
+fn build_session_span(params: &crate::SubmitSessionParams) -> tracing::Span {
+    tracing::info_span!(
+        "dp_settlement.eth_submit_session",
+        session_id = %params.session_id,
+        auction_id = %params.auction_id,
+        n_steps = params.n_steps,
         match_count = params.matches.len(),
     )
 }
@@ -166,11 +166,110 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
             .instrument(span),
         )
     }
+
+    #[cfg(feature = "hypernova")]
+    fn submit_session<'a>(
+        &'a self,
+        params: &'a crate::SubmitSessionParams,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
+        let span = build_session_span(params);
+        Box::pin(
+            async move {
+                let sol_matches = params
+                    .matches
+                    .iter()
+                    .map(settlement_match_to_sol)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if sol_matches.len() > MAX_MATCHES_PER_BATCH {
+                    return Err(SettlementError::TooManyMatches {
+                        count: sol_matches.len(),
+                    });
+                }
+
+                let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
+                let contract = DarkPool::new(self.contract, &self.provider);
+
+                // submitSession: commits the IVC proof + matches hash.
+                let nonce_a = self
+                    .provider
+                    .get_transaction_count(sender)
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let latest_block = self
+                    .provider
+                    .get_block_by_number(BlockNumberOrTag::Latest)
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
+                    .ok_or_else(|| SettlementError::Rpc("no latest block".into()))?;
+                let base_fee = latest_block.header.base_fee_per_gas.ok_or_else(|| {
+                    SettlementError::Rpc("chain does not support EIP-1559".into())
+                })?;
+                let tip = self
+                    .provider
+                    .get_max_priority_fee_per_gas()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let fee_cap = u128::from(base_fee) * 2 + tip;
+
+                let session_call = contract
+                    .submitSession(
+                        uuid_to_bytes32(params.session_id),
+                        Bytes::copy_from_slice(&params.proof),
+                        params.z_0,
+                        params.z_n,
+                        params.n_steps,
+                        params.policy_hash,
+                        params.matches_hash,
+                    )
+                    .from(sender)
+                    .nonce(nonce_a)
+                    .gas(self.gas_limit)
+                    .max_fee_per_gas(fee_cap)
+                    .max_priority_fee_per_gas(tip)
+                    .chain_id(self.chain_id);
+
+                let _session_receipt = session_call
+                    .send()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
+                    .get_receipt()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+
+                // settleAuction: replay the matches array. The contract
+                // re-derives matches_hash and reverts on mismatch.
+                let settle_call = contract
+                    .settleAuction(
+                        uuid_to_bytes32(params.session_id),
+                        uuid_to_bytes32(params.auction_id),
+                        sol_matches,
+                    )
+                    .from(sender)
+                    .nonce(nonce_a + 1)
+                    .gas(self.gas_limit)
+                    .max_fee_per_gas(fee_cap)
+                    .max_priority_fee_per_gas(tip)
+                    .chain_id(self.chain_id);
+
+                let settle_receipt = settle_call
+                    .send()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
+                    .get_receipt()
+                    .await
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+
+                Ok(format!("{:#x}", settle_receipt.transaction_hash))
+            }
+            .instrument(span),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SettlementMatch;
     use alloy_primitives::{address, U256};
     use rust_decimal::Decimal;
     use uuid::Uuid;

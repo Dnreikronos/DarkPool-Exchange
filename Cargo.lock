@@ -849,7 +849,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -860,7 +860,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -887,14 +887,13 @@ dependencies = [
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-r1cs-std",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
 ]
 
 [[package]]
 name = "ark-crypto-primitives"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0c292754729c8a190e50414fd1a37093c786c709899f29c9f7daccecfa855e"
+source = "git+https://github.com/flyingnobita/crypto-primitives?rev=f559264#f55926402fc9360781a64ab7b4f7a02bd340c62b"
 dependencies = [
  "ahash 0.8.12",
  "ark-crypto-primitives-macros",
@@ -904,12 +903,14 @@ dependencies = [
  "ark-relations",
  "ark-serialize 0.5.0",
  "ark-snark",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "blake2",
  "derivative",
  "digest 0.10.7",
  "fnv",
+ "hashbrown 0.15.5",
  "merlin",
+ "num-bigint",
  "rayon",
  "sha2",
  "tracing",
@@ -918,8 +919,7 @@ dependencies = [
 [[package]]
 name = "ark-crypto-primitives-macros"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e89fe77d1f0f4fe5b96dfc940923d88d17b6a773808124f21e764dfb063c6a"
+source = "git+https://github.com/flyingnobita/crypto-primitives?rev=f559264#f55926402fc9360781a64ab7b4f7a02bd340c62b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -936,7 +936,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-poly",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "educe",
  "fnv",
  "hashbrown 0.15.5",
@@ -995,7 +995,7 @@ dependencies = [
  "ark-ff-asm 0.5.0",
  "ark-ff-macros 0.5.0",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "arrayvec",
  "digest 0.10.7",
  "educe",
@@ -1078,8 +1078,6 @@ dependencies = [
 [[package]]
 name = "ark-groth16"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88f1d0f3a534bb54188b8dcc104307db6c56cdae574ddc3212aec0625740fc7e"
 dependencies = [
  "ark-crypto-primitives",
  "ark-ec",
@@ -1087,8 +1085,20 @@ dependencies = [
  "ark-poly",
  "ark-relations",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "rayon",
+]
+
+[[package]]
+name = "ark-grumpkin"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef677b59f5aff4123207c4dceb1c0ec8fdde2d4af7886f48be42ad864bfa0352"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
 ]
 
 [[package]]
@@ -1100,7 +1110,7 @@ dependencies = [
  "ahash 0.8.12",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "educe",
  "fnv",
  "hashbrown 0.15.5",
@@ -1108,16 +1118,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-poly-commit"
+version = "0.5.0"
+source = "git+https://github.com/arkworks-rs/poly-commit#a05ec99d0d3e46c8ba0d6d3592980777bc2847e8"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-crypto-primitives",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-relations",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
+ "blake2",
+ "derivative",
+ "digest 0.10.7",
+ "fnv",
+ "merlin",
+ "num-traits",
+ "rand 0.8.6",
+ "rayon",
+]
+
+[[package]]
 name = "ark-r1cs-std"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "941551ef1df4c7a401de7068758db6503598e6f01850bdb2cfdb614a1f9dbea1"
+source = "git+https://github.com/flyingnobita/r1cs-std_yelhousni?rev=b4bab0c#b4bab0cefa00530e44f06045162af4c6328baf2d"
 dependencies = [
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-relations",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std?rev=73dcad0)",
  "educe",
+ "itertools 0.14.0",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -1127,13 +1160,17 @@ dependencies = [
 [[package]]
 name = "ark-relations"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec46ddc93e7af44bcab5230937635b06fb5744464dd6a7e7b083e80ebd274384"
+source = "git+https://github.com/arkworks-rs/snark#845ce9d50bbe535792f04b44db78b009ee402ed7"
 dependencies = [
  "ark-ff 0.5.0",
- "ark-std 0.5.0",
+ "ark-poly",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
+ "foldhash 0.1.5",
+ "indexmap 2.14.0",
+ "rayon",
  "tracing",
- "tracing-subscriber 0.2.25",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1164,7 +1201,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f4d068aaf107ebcd7dfb52bc748f8030e0fc930ac8e360146ca54c1203088f7"
 dependencies = [
  "ark-serialize-derive",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "arrayvec",
  "digest 0.10.7",
  "num-bigint",
@@ -1185,13 +1222,12 @@ dependencies = [
 [[package]]
 name = "ark-snark"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d368e2848c2d4c129ce7679a7d0d2d612b6a274d3ea6a13bad4445d61b381b88"
+source = "git+https://github.com/arkworks-rs/snark#845ce9d50bbe535792f04b44db78b009ee402ed7"
 dependencies = [
  "ark-ff 0.5.0",
  "ark-relations",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
 ]
 
 [[package]]
@@ -1217,8 +1253,17 @@ dependencies = [
 [[package]]
 name = "ark-std"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
+source = "git+https://github.com/arkworks-rs/std?rev=73dcad0#73dcad089f915f4b8126f67e91f78029ba76876e"
+dependencies = [
+ "num-traits",
+ "rand 0.8.6",
+ "rayon",
+]
+
+[[package]]
+name = "ark-std"
+version = "0.5.0"
+source = "git+https://github.com/arkworks-rs/std#1693bc56d2ca6657b623f33a3f0b009d0ffeb892"
 dependencies = [
  "num-traits",
  "rand 0.8.6",
@@ -2217,11 +2262,16 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 name = "dp-aggregator"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254",
+ "ark-crypto-primitives",
+ "ark-ff 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "dp-auction",
  "dp-types",
  "dp-zk",
  "dp-zk-cli",
  "hex",
+ "parking_lot",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -2229,7 +2279,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -2284,7 +2334,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-opentelemetry",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -2336,7 +2386,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "zeroize",
 ]
 
@@ -2350,6 +2400,7 @@ dependencies = [
  "alloy-sol-types",
  "alloy-transport",
  "arc-swap",
+ "ark-bn254",
  "ark-ff 0.5.0",
  "bincode",
  "chrono",
@@ -2380,7 +2431,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "uuid",
  "zeroize",
 ]
@@ -2431,7 +2482,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "uuid",
  "which",
  "zeroize",
@@ -2459,14 +2510,15 @@ dependencies = [
  "ark-crypto-primitives",
  "ark-ec",
  "ark-ff 0.5.0",
- "ark-groth16",
+ "ark-grumpkin",
  "ark-r1cs-std",
  "ark-relations",
  "ark-serialize 0.5.0",
  "ark-snark",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "dp-auction",
  "dp-types",
+ "folding-schemes",
  "hex",
  "rust_decimal",
  "serde",
@@ -2484,10 +2536,9 @@ dependencies = [
  "ark-bn254",
  "ark-ec",
  "ark-ff 0.5.0",
- "ark-groth16",
  "ark-serialize 0.5.0",
  "ark-snark",
- "ark-std 0.5.0",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
  "clap",
  "dp-zk",
  "hex",
@@ -2619,7 +2670,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2793,6 +2844,33 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "folding-schemes"
+version = "0.1.0"
+source = "git+https://github.com/privacy-scaling-explorations/sonobe?rev=63f2930d363150d4490ce2c4be8e0c25c2e1d92c#63f2930d363150d4490ce2c4be8e0c25c2e1d92c"
+dependencies = [
+ "ark-bn254",
+ "ark-crypto-primitives",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-groth16",
+ "ark-grumpkin",
+ "ark-poly",
+ "ark-poly-commit",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-serialize 0.5.0",
+ "ark-snark",
+ "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
+ "getrandom 0.2.17",
+ "log",
+ "num-bigint",
+ "num-integer",
+ "rayon",
+ "sha3",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "form_urlencoded"
@@ -3582,7 +3660,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4040,7 +4118,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4644,7 +4722,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -4664,7 +4742,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5302,7 +5380,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5370,7 +5448,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5904,7 +5982,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6252,7 +6330,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6687,7 +6765,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
- "tracing-subscriber 0.3.23",
+ "tracing-subscriber",
  "web-time",
 ]
 
@@ -6698,15 +6776,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
 dependencies = [
  "serde",
- "tracing-core",
-]
-
-[[package]]
-name = "tracing-subscriber"
-version = "0.2.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
-dependencies = [
  "tracing-core",
 ]
 
@@ -7183,7 +7252,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

@@ -11,8 +11,13 @@ rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 tracing = "0.1"
+parking_lot = { workspace = true }
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+ark-std = { workspace = true }
+ark-crypto-primitives = { workspace = true }
 
 [dev-dependencies]
 dp-types = { path = "../dp-types" }

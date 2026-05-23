@@ -8,6 +8,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IDarkPool} from "./interfaces/IDarkPool.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
+import {IDeciderVerifier} from "./interfaces/IDeciderVerifier.sol";
 
 contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -21,6 +22,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     mapping(address => bool) public operators;
     mapping(bytes32 => bool) public settled;
     mapping(address => mapping(address => uint256)) public balances;
+
+    IDeciderVerifier public ivcVerifier;
+    mapping(bytes32 => bool) public sessionSubmitted;
+    mapping(bytes32 => bytes32) public auctionToSession;
+    /// @notice Off-chain commitment to `keccak256(abi.encode(auctionId, matches))`
+    ///         supplied at submitSession time. settleAuction re-derives this
+    ///         and rejects any matches array that doesn't hash to the committed
+    ///         value — prevents the operator from substituting matches between
+    ///         submitSession and settleAuction. Does NOT bind the matches to
+    ///         the IVC proof (see SECURITY TODO above settleAuction).
+    mapping(bytes32 => bytes32) public sessionMatchesHash;
 
     address public feeRecipient;
     uint256 public minSize;
@@ -40,6 +52,9 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     /// transition on this value; it exists so clients can avoid the
     /// thundering-herd encryption-to-old-key window during a rotation.
     uint64 public operatorPubkeyEffectiveAt;
+
+    event SessionSubmitted(bytes32 indexed sessionId, uint64 nSteps, bytes32 policyHash);
+    event AuctionSettled(bytes32 indexed sessionId, bytes32 indexed auctionId);
 
     modifier onlyOperator() {
         require(operators[msg.sender], "not operator");
@@ -164,6 +179,75 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     function setFeeRecipient(address recipient) external onlyOwner {
         require(recipient != address(0), "zero address");
         feeRecipient = recipient;
+    }
+
+    /// @notice Set the IVC proof verifier. MUST point at VerifierProxy, not
+    ///         directly at the concrete decider, so key rotation goes through
+    ///         the proxy's governance without redeploying DarkPool.
+    function setIvcVerifier(address ivcVerifier_) external onlyOwner {
+        require(ivcVerifier_ != address(0), "zero ivc verifier");
+        require(ivcVerifier_.code.length > 0, "ivc verifier has no code");
+        ivcVerifier = IDeciderVerifier(ivcVerifier_);
+    }
+
+    /// @notice Commit to an IVC-proved session.
+    /// @param matchesHash keccak256(abi.encode(auctionId, matches)) — the
+    ///        operator's on-chain commitment to the exact matches array that
+    ///        will be passed to settleAuction. Re-checked there.
+    function submitSession(
+        bytes32 sessionId,
+        bytes calldata proof,
+        uint256[3] calldata z0,
+        uint256[3] calldata zN,
+        uint64 nSteps,
+        bytes32 policyHash,
+        bytes32 matchesHash
+    ) external onlyOperator whenNotPaused {
+        require(!sessionSubmitted[sessionId], "session already submitted");
+        require(address(ivcVerifier) != address(0), "ivc verifier not set");
+        require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
+        sessionSubmitted[sessionId] = true;
+        sessionMatchesHash[sessionId] = matchesHash;
+        emit SessionSubmitted(sessionId, nSteps, policyHash);
+    }
+
+    /// @dev SECURITY TODO (Phase C): `matches` are still not cryptographically
+    ///      bound to the IVC proof itself — `sessionMatchesHash` is an
+    ///      operator-supplied commitment, not derived from `zN`. `z_n[0]`
+    ///      accumulates a Poseidon chain over Pedersen commitments (private
+    ///      witness), not over plaintext match tuples — on-chain verification
+    ///      cannot reconstruct the commitment root without trader secrets.
+    ///      Until the step circuit exposes a Poseidon hash of plaintext match
+    ///      data in a public output slot and this function verifies it
+    ///      against `z_n`, the matchesHash check prevents post-session
+    ///      substitution but does not prove the matches were actually proved.
+    function settleAuction(
+        bytes32 sessionId,
+        bytes32 auctionId,
+        IDarkPool.Match[] calldata matches
+    ) external onlyOperator whenNotPaused {
+        require(sessionSubmitted[sessionId], "session not submitted");
+        require(!settled[auctionId], "auction already settled");
+        // Defense in depth: once an auction is bound to a session, only that
+        // session can settle it. `settled[auctionId]` already blocks
+        // re-settlement; this guards a cross-session race where two distinct
+        // submitSession calls both try to settle the same auctionId.
+        bytes32 bound = auctionToSession[auctionId];
+        require(bound == bytes32(0) || bound == sessionId, "auction bound to other session");
+        require(matches.length > 0 && matches.length <= MAX_BATCH_SIZE, "invalid batch size");
+        // Verify the matches array matches the commitment from submitSession.
+        // Re-derives keccak256(abi.encode(auctionId, matches)) and rejects any
+        // substitution attempt.
+        require(
+            keccak256(abi.encode(auctionId, matches)) == sessionMatchesHash[sessionId],
+            "matches hash mismatch"
+        );
+        auctionToSession[auctionId] = sessionId;
+        settled[auctionId] = true;
+        for (uint256 i = 0; i < matches.length; i++) {
+            _settleMatch(matches[i]);
+        }
+        emit AuctionSettled(sessionId, auctionId);
     }
 
     /// @notice Publish a new operator ECIES pubkey.

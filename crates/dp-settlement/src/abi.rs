@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use alloy_sol_types::sol;
 
 pub const MAX_MATCHES_PER_BATCH: usize = 256;
@@ -23,3 +25,7 @@ pub use DarkPool::BatchSettled;
 // references inputs as `struct IDarkPool.Match[]`. If the ABI is ever changed
 // to inline the struct, update this path.
 pub use IDarkPool::Match as SolMatch;
+
+#[cfg(feature = "hypernova")]
+#[allow(unused_imports)]
+pub use DarkPool::{settleAuctionCall, submitSessionCall, AuctionSettled, SessionSubmitted};

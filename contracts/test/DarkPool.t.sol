@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {IDarkPool} from "../src/interfaces/IDarkPool.sol";
 import {IVerifier} from "../src/interfaces/IVerifier.sol";
+import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
@@ -596,6 +597,94 @@ contract DarkPoolTest is Test {
         vm.prank(operator);
         vm.expectRevert("invalid batch size");
         pool.submitBatch(bytes32(uint256(1)), bytes32(0), new bytes(256), inputs, matches);
+    }
+
+    // --- HyperNova IVC ---
+
+    function test_submit_hypernova_session() public {
+        // Deploy and set the IVC verifier (stub returns true always)
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        bytes memory proof = new bytes(64); // dummy proof
+        uint256[3] memory z0 = [uint256(0), uint256(0), uint256(123)];
+        uint256[3] memory zN = [uint256(999), uint256(60), uint256(123)];
+        uint64 nSteps = 60;
+        bytes32 policyHash = bytes32(uint256(123));
+
+        // Fund traders so _settleMatch doesn't underflow
+        uint256 price = 100e8;
+        uint256 size = 10e8;
+        uint256 notional = price * size / 1e18;
+        _deposit(trader1, address(quoteToken), notional);
+        _deposit(trader2, address(baseToken), size);
+
+        // Build matches + the operator's pre-commitment hash
+        bytes32 auctionId = bytes32(uint256(2));
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+        bytes32 matchesHash = keccak256(abi.encode(auctionId, matches));
+
+        // submitSession
+        vm.prank(operator);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash, matchesHash);
+        assertTrue(pool.sessionSubmitted(sessionId));
+        assertEq(pool.sessionMatchesHash(sessionId), matchesHash);
+
+        // settleAuction with the committed match
+        vm.prank(operator);
+        pool.settleAuction(sessionId, auctionId, matches);
+        assertTrue(pool.settled(auctionId));
+    }
+
+    function test_settleAuction_matchesHashMismatch_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        bytes memory proof = new bytes(64);
+        uint256[3] memory z0 = [uint256(0), uint256(0), uint256(123)];
+        uint256[3] memory zN = [uint256(999), uint256(60), uint256(123)];
+        uint64 nSteps = 60;
+        bytes32 policyHash = bytes32(uint256(123));
+
+        bytes32 auctionId = bytes32(uint256(2));
+
+        // Operator commits to one set of matches at submitSession time...
+        IDarkPool.Match[] memory committedMatches = new IDarkPool.Match[](1);
+        committedMatches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: 100e8,
+            size: 10e8
+        });
+        bytes32 matchesHash = keccak256(abi.encode(auctionId, committedMatches));
+
+        vm.prank(operator);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash, matchesHash);
+
+        // ...then tries to settle a different match. Must revert.
+        IDarkPool.Match[] memory substituted = new IDarkPool.Match[](1);
+        substituted[0] = committedMatches[0];
+        substituted[0].size = 999e8; // tamper
+
+        vm.prank(operator);
+        vm.expectRevert("matches hash mismatch");
+        pool.settleAuction(sessionId, auctionId, substituted);
     }
 
     // --- Helpers ---

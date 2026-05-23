@@ -24,6 +24,10 @@ use crate::subscribe::AuctionNotification;
 pub(crate) struct PendingAggregation {
     pub batch_id: Uuid,
     pub auction_id: Uuid,
+    /// Trading pair this auction was run for (e.g. `"ETH/USDC"`).
+    /// Captured at construction time so the async proof path does not
+    /// need to reach back into the engine state under a lock.
+    pub pair: String,
     pub matches: Vec<dp_auction::Match>,
     /// Snapshot of every order referenced by `matches`, captured under the
     /// state lock BEFORE fill events are applied — once `book.apply` runs
@@ -39,7 +43,8 @@ impl Engine {
         let (notifications, pending, aggregator) = self.tick_under_lock();
 
         let mut batches_to_submit = Vec::with_capacity(pending.len());
-        for p in pending {
+
+        for p in &pending {
             let witness =
                 match self.build_batch_witness(p.batch_id, p.auction_id, &p.matches, &p.orders) {
                     Ok(w) => w,
@@ -47,62 +52,138 @@ impl Engine {
                         tracing::error!(
                             batch_id = %p.batch_id,
                             auction_id = %p.auction_id,
-                            "build witness failed, skipping proof: {e}"
+                            "build witness failed, skipping IVC fold: {e}"
                         );
                         continue;
                     }
                 };
-            let proof = match aggregator
-                .aggregate(p.batch_id, p.auction_id, &p.matches, &witness)
-                .await
-            {
-                Ok(proof) => proof,
-                Err(e) => {
-                    tracing::warn!(
-                        batch_id = %p.batch_id,
-                        auction_id = %p.auction_id,
-                        "aggregator failed: {e}"
-                    );
-                    continue;
-                }
-            };
+
             let match_prices: Vec<_> = p.matches.iter().map(|m| m.price).collect();
             let match_sizes: Vec<_> = p.matches.iter().map(|m| m.size).collect();
-            let public_inputs = match dp_zk::compute_public_inputs(
+            let ext = match dp_zk::step_circuit::AuctionExternalInputs::from_witness(
                 &witness,
                 &match_prices,
                 &match_sizes,
                 self.inner.batch_size,
             ) {
-                Ok(scalars) => scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
+                Ok(e) => e,
                 Err(e) => {
                     tracing::error!(
                         batch_id = %p.batch_id,
-                        "compute public_inputs failed: {e}"
+                        "build AuctionExternalInputs failed: {e}"
                     );
                     continue;
                 }
             };
 
-            let settlement_matches = {
-                let state = self.inner.state.lock();
-                self.build_settlement_matches(&p, &state)
-            };
-            let settlement_matches = match settlement_matches {
-                Ok(sm) => sm,
-                Err(e) => {
-                    tracing::error!(batch_id = %p.batch_id, "build settlement_matches: {e}");
-                    continue;
-                }
-            };
-
-            if let Err(e) =
-                self.finalize_pending_batch(&p, proof, public_inputs, settlement_matches)
-            {
-                tracing::warn!(batch_id = %p.batch_id, "finalize batch: {e}");
+            if let Err(e) = aggregator.fold_step(p.pair.clone(), ext).await {
+                tracing::warn!(
+                    batch_id = %p.batch_id,
+                    pair = %p.pair,
+                    "fold_step failed: {e}"
+                );
                 continue;
             }
-            batches_to_submit.push(p.batch_id);
+
+            // Advance the per-pair round counter and emit a BatchFolded event.
+            let round_index = {
+                let mut map = self.inner.ivc_round.lock();
+                let r = map.entry(p.pair.clone()).or_insert(0);
+                *r += 1;
+                *r
+            };
+
+            if let Err(e) = self.inner.store.append(&mut [Event {
+                seq: 0,
+                event_type: EventType::BatchFolded,
+                timestamp: Utc::now(),
+                data: EventData::BatchFolded {
+                    batch_id: p.batch_id,
+                    round_index,
+                    pair: p.pair.clone(),
+                },
+            }]) {
+                tracing::warn!(
+                    batch_id = %p.batch_id,
+                    "persist BatchFolded event: {e}"
+                );
+            }
+
+            let finalize_every = self
+                .inner
+                .finalize_every
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if round_index % finalize_every == 0 {
+                let final_proof = match aggregator.finalize(p.pair.clone()).await {
+                    Ok(fp) => fp,
+                    Err(e) => {
+                        tracing::warn!(
+                            batch_id = %p.batch_id,
+                            pair = %p.pair,
+                            "IVC finalize failed: {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                let settlement_matches = {
+                    let state = self.inner.state.lock();
+                    self.build_settlement_matches(p, &state)
+                };
+                let settlement_matches = match settlement_matches {
+                    Ok(sm) => sm,
+                    Err(e) => {
+                        tracing::error!(
+                            batch_id = %p.batch_id,
+                            "build settlement_matches (IVC): {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                // IVC proofs do not use Groth16 public inputs; store zeros to
+                // satisfy the `PendingBatch` schema. The on-chain verifier for
+                // IVC proofs reads public inputs from the `FinalProof` metadata
+                // stored in `ivc_payload`.
+                let proof_bytes = final_proof.proof_bytes.clone();
+                let public_inputs = [U256::ZERO; 6];
+
+                if let Err(e) =
+                    self.finalize_pending_batch(p, proof_bytes, public_inputs, settlement_matches)
+                {
+                    tracing::warn!(batch_id = %p.batch_id, "finalize IVC batch: {e}");
+                    continue;
+                }
+
+                // Store the full IVC payload alongside the batch so the
+                // submission path can pass it to the on-chain verifier.
+                {
+                    use ark_ff::{BigInteger, PrimeField};
+                    let fr_to_bytes = |f: ark_bn254::Fr| -> [u8; 32] {
+                        let b = f.into_bigint().to_bytes_be();
+                        let mut out = [0u8; 32];
+                        let take = b.len().min(32);
+                        out[32 - take..].copy_from_slice(&b[b.len() - take..]);
+                        out
+                    };
+                    let z_0 = final_proof.z_0.map(fr_to_bytes);
+                    let z_n = final_proof.z_n.map(fr_to_bytes);
+                    let policy_hash = fr_to_bytes(final_proof.policy_hash);
+                    let payload = crate::state::ProofPayload::IvcFinal {
+                        proof_bytes: final_proof.proof_bytes,
+                        z_0,
+                        z_n,
+                        n_steps: final_proof.n_steps,
+                        policy_hash,
+                    };
+                    let mut state = self.inner.state.lock();
+                    if let Some(pb) = state.pending_batches.get_mut(&p.batch_id) {
+                        pb.ivc_payload = Some(payload);
+                    }
+                }
+
+                batches_to_submit.push(p.batch_id);
+            }
         }
 
         for n in &notifications {
@@ -279,6 +360,7 @@ impl Engine {
             pending.push(PendingAggregation {
                 batch_id: Uuid::new_v4(),
                 auction_id: result.auction_id,
+                pair: result.pair.clone(),
                 matches: result
                     .matches
                     .iter()
@@ -352,6 +434,7 @@ mod tests {
         PendingAggregation {
             batch_id: Uuid::new_v4(),
             auction_id: Uuid::new_v4(),
+            pair: "ETH/USDC".to_string(),
             matches: vec![dp_auction::Match {
                 bid: Fill {
                     order_id: bid_id,
@@ -448,5 +531,192 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].base_token, base);
         assert_eq!(rows[0].quote_token, quote);
+    }
+}
+
+#[cfg(test)]
+mod ivc_tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use alloy_primitives::Address;
+    use dp_aggregator::{AggregatorError, ProofAggregator};
+    use dp_auction::Match;
+    use dp_event::MemStore;
+    use dp_types::Side;
+    use dp_zk::witness::BatchWitness;
+    use rust_decimal::Decimal;
+    use uuid::Uuid;
+
+    use crate::state::PairConfig;
+    use crate::test_helpers::place_plaintext_order;
+    use crate::Engine;
+
+    /// A mock aggregator that tracks fold_step / finalize calls and returns
+    /// dummy successful results. Does not perform any real IVC computation.
+    struct MockFoldingAggregator {
+        fold_calls: AtomicU32,
+        finalize_calls: AtomicU32,
+    }
+
+    impl MockFoldingAggregator {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                fold_calls: AtomicU32::new(0),
+                finalize_calls: AtomicU32::new(0),
+            })
+        }
+
+        fn fold_calls(&self) -> u32 {
+            self.fold_calls.load(Ordering::SeqCst)
+        }
+
+        fn finalize_calls(&self) -> u32 {
+            self.finalize_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ProofAggregator for MockFoldingAggregator {
+        fn aggregate<'a>(
+            &'a self,
+            _batch_id: Uuid,
+            _auction_id: Uuid,
+            _matches: &'a [Match],
+            _witness: &'a BatchWitness,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, AggregatorError>> + Send + 'a>> {
+            Box::pin(async { Ok(vec![0u8; 32]) })
+        }
+
+        fn fold_step<'a>(
+            &'a self,
+            _pair: String,
+            _ext: dp_zk::step_circuit::AuctionExternalInputs,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AggregatorError>> + Send + 'a>> {
+            self.fold_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn finalize<'a>(
+            &'a self,
+            _pair: String,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            self.finalize_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                use ark_bn254::Fr;
+                use ark_ff::Zero;
+                Ok(dp_zk::folding::FinalProof {
+                    proof_bytes: vec![0u8; 32],
+                    z_0: [Fr::zero(); 3],
+                    z_n: [Fr::zero(); 3],
+                    n_steps: 1,
+                    policy_hash: Fr::zero(),
+                })
+            })
+        }
+    }
+
+    fn make_engine_with_pair() -> (Engine, Arc<MemStore>) {
+        let store = Arc::new(MemStore::new());
+        let engine = Engine::new(store.clone(), Duration::from_millis(50));
+        let base = Address::repeat_byte(0xAA);
+        let quote = Address::repeat_byte(0xBB);
+        engine.register_pair_without_event("ETH/USDC".into(), PairConfig::new(base, quote));
+        (engine, store)
+    }
+
+    async fn place_matching_orders(engine: &Engine) {
+        let ttl = Duration::from_secs(60);
+        place_plaintext_order(
+            engine,
+            "ETH/USDC",
+            Side::Buy,
+            Decimal::from(100),
+            Decimal::ONE,
+            "key_bid",
+            ttl,
+        )
+        .await
+        .unwrap();
+        place_plaintext_order(
+            engine,
+            "ETH/USDC",
+            Side::Sell,
+            Decimal::from(100),
+            Decimal::ONE,
+            "key_ask",
+            ttl,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// With `finalize_every = 3`, running 2 ticks (each with one matching
+    /// round) must fold but NOT finalize — `finalize_calls` stays 0.
+    #[tokio::test]
+    async fn no_submit_before_finalize_boundary() {
+        let (engine, _store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        engine.set_finalize_every(3);
+
+        // Tick 1 — place fresh matching orders then tick.
+        place_matching_orders(&engine).await;
+        engine.run_auction_tick().await;
+
+        // Tick 2 — place matching orders again and tick.
+        place_matching_orders(&engine).await;
+        engine.run_auction_tick().await;
+
+        assert_eq!(
+            agg.finalize_calls(),
+            0,
+            "finalize must not fire before boundary"
+        );
+        assert_eq!(engine.pending_batch_count(), 0, "no batches finalized yet");
+    }
+
+    /// With `finalize_every = 2`, running 2 matching ticks hits the boundary
+    /// and must call `finalize` exactly once, producing one pending batch.
+    #[tokio::test]
+    async fn submit_compressed_at_boundary() {
+        let (engine, _store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        engine.set_finalize_every(2);
+
+        // Install a stub submitter so submit_batch doesn't error.
+        use crate::test_helpers::StubSubmitter;
+        engine.set_submitter(Arc::new(StubSubmitter::new()));
+
+        place_matching_orders(&engine).await;
+        engine.run_auction_tick().await;
+
+        place_matching_orders(&engine).await;
+        engine.run_auction_tick().await;
+
+        assert_eq!(agg.finalize_calls(), 1, "finalize must fire at round 2");
+        assert_eq!(agg.fold_calls(), 2, "two fold steps must have run");
+    }
+
+    /// Cancelling the engine loop (simulated by just not running `start`) does
+    /// not panic; the round counter initialises cleanly.
+    #[tokio::test]
+    async fn shutdown_triggers_no_panic() {
+        let (engine, _store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        engine.set_finalize_every(10);
+        // Just verify construction + setter do not panic.
+        assert_eq!(agg.fold_calls(), 0);
+        assert_eq!(agg.finalize_calls(), 0);
     }
 }

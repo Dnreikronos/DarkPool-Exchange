@@ -3,10 +3,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
 
-use alloy_primitives::U256;
+use alloy_primitives::{B256, U256};
 use chrono::Utc;
 use dp_event::{Event, EventData};
-use dp_settlement::{BatchSink, SettlementError, SettlementMatch, SubmitBatchParams};
+use dp_settlement::{
+    compute_matches_hash, BatchSink, SettlementError, SettlementMatch, SubmitBatchParams,
+    SubmitSessionParams,
+};
 use dp_types::metrics::{M_BATCH_SUBMISSION_DURATION, M_SETTLEMENT_CONFIRMATIONS};
 use dp_types::EventType;
 use uuid::Uuid;
@@ -49,6 +52,7 @@ impl Engine {
                 settlement_matches,
                 proof,
                 public_inputs,
+                ivc_payload: None,
                 attempts: 0,
                 next_attempt: None,
                 submitting: false,
@@ -106,28 +110,30 @@ impl Engine {
             let settlement_matches = pb.settlement_matches.clone();
             let proof = pb.proof.clone();
             let public_inputs = pb.public_inputs;
+            let ivc_payload = pb.ivc_payload.clone();
             let timeout = state.submit_timeout;
             (
                 auction_id,
                 settlement_matches,
                 proof,
                 public_inputs,
+                ivc_payload,
                 timeout,
             )
         };
 
-        let (auction_id, settlement_matches, proof, public_inputs, timeout) = snapshot;
+        let (auction_id, settlement_matches, proof, public_inputs, ivc_payload, timeout) = snapshot;
 
         // Poison check: a recovered `BatchSubmitted` event loses its
-        // public_inputs (the witness secrets are wiped on restart), so
-        // recovery currently writes `[U256::ZERO; 6]` (see
-        // `recover.rs::EventData::BatchSubmitted`). Submitting those
-        // zeros on-chain would fail Groth16 verification and waste gas;
-        // worse, automatic retry would loop on the same failure. We
-        // leave `pb.submitting = true` so the existing short-circuit at
-        // the top of `submit_batch` blocks every subsequent retry until
-        // an operator intervenes.
-        if public_inputs.iter().all(|u| u.is_zero()) {
+        // public_inputs (the witness secrets are wiped on restart). Submitting
+        // zeros on-chain would fail verification and waste gas. We leave
+        // `pb.submitting = true` so automatic retry is blocked until an
+        // operator intervenes.
+        //
+        // The IVC path legitimately stores zeros in `public_inputs` (the
+        // on-chain verifier reads the proof from `ivc_payload` instead), so
+        // the check is skipped when `ivc_payload` is present.
+        if ivc_payload.is_none() && public_inputs.iter().all(|u| u.is_zero()) {
             tracing::error!(
                 batch_id = %batch_id,
                 auction_id = %auction_id,
@@ -139,16 +145,41 @@ impl Engine {
 
         let submitter = self.inner.submitter.read().clone();
 
-        let params = SubmitBatchParams {
-            batch_id,
-            auction_id,
-            proof,
-            public_inputs,
-            matches: settlement_matches,
-        };
-
+        // Branch: IVC batches go through submit_session (submitSession +
+        // settleAuction); Groth16 batches go through submit (submitBatch).
         let submit_start = Instant::now();
-        let result = tokio::time::timeout(timeout, submitter.submit(&params)).await;
+        let result = if let Some(payload) = ivc_payload {
+            let crate::state::ProofPayload::IvcFinal {
+                proof_bytes,
+                z_0,
+                z_n,
+                n_steps,
+                policy_hash,
+            } = payload;
+            let matches_hash = compute_matches_hash(auction_id, &settlement_matches)
+                .map_err(EngineError::Submit)?;
+            let session_params = SubmitSessionParams {
+                session_id: batch_id,
+                proof: proof_bytes,
+                z_0: z_0.map(U256::from_be_bytes),
+                z_n: z_n.map(U256::from_be_bytes),
+                n_steps,
+                policy_hash: B256::from(policy_hash),
+                matches_hash,
+                auction_id,
+                matches: settlement_matches,
+            };
+            tokio::time::timeout(timeout, submitter.submit_session(&session_params)).await
+        } else {
+            let params = SubmitBatchParams {
+                batch_id,
+                auction_id,
+                proof,
+                public_inputs,
+                matches: settlement_matches,
+            };
+            tokio::time::timeout(timeout, submitter.submit(&params)).await
+        };
         let submit_elapsed = submit_start.elapsed();
 
         let submit_outcome: Result<String, SettlementError> = match result {

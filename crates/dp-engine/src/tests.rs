@@ -20,6 +20,9 @@ fn make_engine() -> (Engine, Arc<MemStore>) {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
+    // IVC path: finalize after every fold step so tests with a single
+    // matching tick produce a submitted batch immediately.
+    engine.set_finalize_every(1);
     (engine, store)
 }
 
@@ -630,6 +633,7 @@ async fn batch_lifecycle_recovered_batch_is_poisoned_until_pubs_persist() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     register_btc_usd(&engine);
+    engine.set_finalize_every(1);
     let stub = Arc::new(StubSubmitter::new());
     stub.set_fail(true);
     engine.set_submitter(stub.clone() as Arc<dyn Submitter>);
@@ -738,6 +742,7 @@ async fn batch_lifecycle_recover_from_file_store() {
 
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     register_btc_usd(&engine);
+    engine.set_finalize_every(1);
     let failing_stub = Arc::new(StubSubmitter::new());
     failing_stub.set_fail(true);
     engine.set_submitter(failing_stub as Arc<dyn Submitter>);
@@ -831,6 +836,7 @@ async fn batch_lifecycle_proof_persisted_and_reused_on_resubmit() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     register_btc_usd(&engine);
+    engine.set_finalize_every(1);
     let agg_proof = vec![0xCD; 32];
     let stub_agg = Arc::new(StubAggregator::new(agg_proof.clone()));
     engine.set_aggregator(stub_agg.clone() as Arc<dyn ProofAggregator>);
@@ -1014,6 +1020,7 @@ async fn full_pipeline_encrypted_order_to_settlement() {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     engine.register_pair_without_event("ETH-USD".into(), crate::state::PairConfig::default());
+    engine.set_finalize_every(1);
     engine.set_decrypter(decrypter);
     engine.set_aggregator(aggregator.clone());
     engine.set_submitter(submitter);
@@ -1146,6 +1153,8 @@ mod snapshot_recover {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        // IVC path: finalize after every fold so each tick produces a batch.
+        engine.set_finalize_every(1);
         engine
     }
 
@@ -1614,6 +1623,8 @@ mod snapshot_recover_prop {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        // IVC path: finalize after every fold so each tick produces a batch.
+        engine.set_finalize_every(1);
         engine
     }
 

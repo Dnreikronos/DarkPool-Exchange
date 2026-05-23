@@ -89,6 +89,13 @@ pub enum EventData {
     PairDelisted {
         pair: String,
     },
+    /// One IVC fold step completed. Emitted by the IVC tick path once per
+    /// auction round, before the finalization boundary.
+    BatchFolded {
+        batch_id: Uuid,
+        round_index: u64,
+        pair: String,
+    },
 }
 
 impl EventData {
@@ -105,6 +112,7 @@ impl EventData {
             Self::PairRegistered { .. } => EventType::PairRegistered,
             Self::PairSuspended { .. } => EventType::PairSuspended,
             Self::PairDelisted { .. } => EventType::PairDelisted,
+            Self::BatchFolded { .. } => EventType::BatchFolded,
         }
     }
 }
@@ -215,6 +223,14 @@ mod tests {
                     pair: "ETH/USDC".into(),
                 },
                 EventType::PairDelisted,
+            ),
+            (
+                EventData::BatchFolded {
+                    batch_id,
+                    round_index: 0,
+                    pair: "ETH/USDC".into(),
+                },
+                EventType::BatchFolded,
             ),
         ];
         for (data, expected) in cases {

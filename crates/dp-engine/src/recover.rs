@@ -322,11 +322,9 @@ impl Engine {
 
             let settlement_matches =
                 build_recovery_settlement_matches(&matches, &placed_orders, &state.pair_tokens);
-            let public_inputs = finalize_public_inputs(
-                dp_zk::compute_public_inputs(&witness, &[], &[], self.inner.batch_size),
-                batch_id,
-                |scalars| scalars.map(|f| U256::from_be_bytes(dp_zk::fr_to_bytes32(f))),
-            );
+            // IVC path: public inputs are not used for on-chain verification;
+            // store zeros to satisfy the PendingBatch schema.
+            let public_inputs = [U256::ZERO; 6];
 
             state.pending_batches.insert(
                 batch_id,
@@ -337,6 +335,13 @@ impl Engine {
                     settlement_matches,
                     proof,
                     public_inputs,
+                    // IVC batches are intentionally non-retryable after
+                    // restart: the in-memory folding accumulator is lost, so
+                    // the stored proof_bytes cannot be paired with a fresh
+                    // SubmitSessionParams (z_0/z_n/n_steps). `submit_batch`
+                    // fires the poison-gate error, blocking retry until an
+                    // operator intervenes.
+                    ivc_payload: None,
                     attempts: 0,
                     next_attempt: None,
                     submitting: false,
@@ -530,6 +535,14 @@ impl Engine {
                         settlement_matches,
                         proof: proof.clone(),
                         public_inputs,
+                        // IVC batches are intentionally non-retryable after
+                        // restart: the in-memory folding accumulator is lost,
+                        // so the stored proof_bytes are the only artifact —
+                        // but the matching SubmitSessionParams (z_0/z_n/
+                        // n_steps) cannot be reconstructed without it.
+                        // `submit_batch` will fire the poison-gate error,
+                        // blocking retry until an operator intervenes.
+                        ivc_payload: None,
                         attempts: 0,
                         next_attempt: None,
                         submitting: false,
@@ -590,6 +603,15 @@ impl Engine {
                 if let Some(cfg) = state.pair_tokens.get_mut(&key) {
                     cfg.status = crate::state::PairStatus::Delisted;
                 }
+            }
+            EventData::BatchFolded {
+                round_index, pair, ..
+            } => {
+                // Rebuild the per-pair round counter so the finalization
+                // boundary fires at the right offset after a restart.
+                let mut map = self.inner.ivc_round.lock();
+                let entry = map.entry(pair.clone()).or_insert(0);
+                *entry = (*entry).max(*round_index);
             }
         }
         Ok(())
@@ -666,6 +688,10 @@ fn log_orphan_reaggregate_error(
     tracing::error!("{msg}");
 }
 
+/// Retained as a test-only helper. In Phase G the IVC recovery path stores
+/// zeros directly; this function is exercised by unit tests to cover the
+/// error-log formatting.
+#[cfg(test)]
 fn log_compute_public_inputs_warn(batch_id: Uuid, err: &dp_zk::ZkError) {
     let msg = format!(
         "compute_public_inputs failed for batch {batch_id} during recovery: {err}; using zeros"
@@ -673,12 +699,8 @@ fn log_compute_public_inputs_warn(batch_id: Uuid, err: &dp_zk::ZkError) {
     tracing::warn!("{msg}");
 }
 
-/// Lift the `compute_public_inputs` result into the on-chain
-/// `[U256; 6]` representation. On failure, log and fall back to all-zero
-/// inputs — preserves recovery progress instead of bailing the whole
-/// engine restart on a (defensive) ZK encoding error. Generic over the
-/// `Ok` type so the conversion closure can absorb the unnameable
-/// `ark_bn254::Fr` array without leaking it through this signature.
+/// Retained as a test-only helper — see [`log_compute_public_inputs_warn`].
+#[cfg(test)]
 fn finalize_public_inputs<T>(
     result: Result<T, dp_zk::ZkError>,
     batch_id: Uuid,

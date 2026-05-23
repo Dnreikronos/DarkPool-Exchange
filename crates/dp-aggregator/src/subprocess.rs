@@ -168,6 +168,44 @@ impl ProofAggregator for SubprocessAggregator {
             .instrument(span),
         )
     }
+
+    // The subprocess aggregator drives a Groth16 prover binary and does not
+    // support IVC fold/finalize. The tick loop migrated to the IVC path — any
+    // deployment still using SubprocessAggregator will get a loud error on
+    // every tick rather than silently calling the dead `aggregate` path.
+    fn fold_step<'a>(
+        &'a self,
+        _pair: String,
+        _external_inputs: dp_zk::step_circuit::AuctionExternalInputs,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AggregatorError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            Err(AggregatorError::Zk(
+                "SubprocessAggregator does not support IVC fold_step; \
+                 switch to InlineFoldingAggregator for the HyperNova path"
+                    .into(),
+            ))
+        })
+    }
+
+    fn finalize<'a>(
+        &'a self,
+        _pair: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<dp_zk::folding::FinalProof, AggregatorError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Err(AggregatorError::Zk(
+                "SubprocessAggregator does not support IVC finalize; \
+                 switch to InlineFoldingAggregator for the HyperNova path"
+                    .into(),
+            ))
+        })
+    }
 }
 
 #[cfg(all(test, unix))]

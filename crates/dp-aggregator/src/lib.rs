@@ -1,7 +1,9 @@
 mod aggregator;
+mod inline;
 mod subprocess;
 
 pub use aggregator::{NoopAggregator, ProofAggregator};
+pub use inline::InlineFoldingAggregator;
 pub use subprocess::SubprocessAggregator;
 
 use std::io;
@@ -19,4 +21,6 @@ pub enum AggregatorError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Serialize(#[from] serde_json::Error),
+    #[error("zk error: {0}")]
+    Zk(String),
 }

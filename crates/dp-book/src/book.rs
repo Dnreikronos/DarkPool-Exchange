@@ -251,7 +251,8 @@ impl Inner {
             | EventData::BatchSettled { .. }
             | EventData::PairRegistered { .. }
             | EventData::PairSuspended { .. }
-            | EventData::PairDelisted { .. } => {}
+            | EventData::PairDelisted { .. }
+            | EventData::BatchFolded { .. } => {}
         }
     }
 

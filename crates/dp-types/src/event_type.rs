@@ -14,6 +14,11 @@ pub enum EventType {
     PairRegistered = 9,
     PairSuspended = 10,
     PairDelisted = 11,
+    /// Emitted by the IVC tick path each time one auction round is folded
+    /// into the HyperNova accumulator. Only produced when the `hypernova`
+    /// feature is active on `dp-engine`, but the discriminant is reserved
+    /// here so the wire format stays stable.
+    BatchFolded = 12,
 }
 
 #[cfg(test)]
@@ -33,6 +38,7 @@ mod tests {
         assert_eq!(EventType::PairRegistered as u8, 9);
         assert_eq!(EventType::PairSuspended as u8, 10);
         assert_eq!(EventType::PairDelisted as u8, 11);
+        assert_eq!(EventType::BatchFolded as u8, 12);
     }
 
     #[test]
@@ -40,6 +46,7 @@ mod tests {
         for (variant, expected) in [
             (EventType::OrderPlaced, "1"),
             (EventType::BatchSettled, "8"),
+            (EventType::BatchFolded, "12"),
         ] {
             let json = serde_json::to_string(&variant).unwrap();
             assert_eq!(json, expected);

@@ -2,7 +2,45 @@ use alloy_primitives::{FixedBytes, U256};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
-use crate::SettlementError;
+use crate::abi::SolMatch;
+use crate::{SettlementError, SettlementMatch};
+
+#[cfg(feature = "hypernova")]
+use alloy_primitives::{keccak256, B256};
+
+/// Mirror of `keccak256(abi.encode(auctionId, matches))` from
+/// `DarkPool.settleAuction`. The operator computes this off-chain at
+/// session-submission time and the contract re-derives it inside
+/// `settleAuction` to reject any post-session match substitution.
+pub fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
+    Ok(SolMatch {
+        bidOrderId: uuid_to_bytes32(m.bid_order_id),
+        askOrderId: uuid_to_bytes32(m.ask_order_id),
+        bidTrader: m.bid_trader,
+        askTrader: m.ask_trader,
+        baseToken: m.base_token,
+        quoteToken: m.quote_token,
+        price: decimal_to_wei(m.price)?,
+        size: decimal_to_wei(m.size)?,
+    })
+}
+
+#[cfg(feature = "hypernova")]
+pub fn compute_matches_hash(
+    auction_id: Uuid,
+    matches: &[SettlementMatch],
+) -> Result<B256, SettlementError> {
+    use alloy_sol_types::SolValue;
+
+    let sol_matches: Vec<SolMatch> = matches
+        .iter()
+        .map(settlement_match_to_sol)
+        .collect::<Result<Vec<_>, SettlementError>>()?;
+
+    let auction_id_bytes = uuid_to_bytes32(auction_id);
+    let encoded = (auction_id_bytes, sol_matches).abi_encode_params();
+    Ok(keccak256(&encoded))
+}
 
 pub fn uuid_to_bytes32(id: Uuid) -> FixedBytes<32> {
     let mut out = [0u8; 32];
