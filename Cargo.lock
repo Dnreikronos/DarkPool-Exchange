@@ -2288,6 +2288,7 @@ name = "dp-api"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-provider",
  "async-trait",
  "axum",
  "axum-server",
