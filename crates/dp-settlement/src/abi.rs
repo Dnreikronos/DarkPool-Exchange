@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use alloy_sol_types::sol;
 
 pub const MAX_MATCHES_PER_BATCH: usize = 256;
