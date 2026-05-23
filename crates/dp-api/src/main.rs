@@ -196,27 +196,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     if let Some(rpc) = cfg.eth_rpc_url() {
-        // Resolve the signer URI up-front so a typo in operator config
-        // fails at boot rather than on the first batch. Submitter
-        // construction beyond signer building still needs a fully-built
-        // alloy `Provider` (with the wallet attached); that path lands
-        // in a follow-up, but the signer side of issue #28 is wired now
-        // so KMS / age URIs surface their parsing errors at boot.
         if let Some(uri) = cfg.signer_key_uri_str() {
             let signer = dp_settlement::signer::from_uri(uri)?;
-            // Loud on purpose: with the signer resolved but no
-            // submitter installed in `Engine`, batches still settle on
-            // the noop path even though the operator configured both
-            // ETH_RPC and a signer URI. Surfaces at warn so a config
-            // audit catches it instead of discovering it via empty
-            // BatchSettled events on chain.
-            warn!(
+            let contract_addr = cfg.contract_address().ok_or(
+                "DARKPOOL_ETH_RPC and DARKPOOL_SIGNER_KEY_URI are set but \
+                 DARKPOOL_CONTRACT_ADDR is missing — cannot build EthSubmitter",
+            )?;
+
+            let provider = alloy_provider::ProviderBuilder::new()
+                .wallet(signer.wallet())
+                .connect_http(rpc.parse().map_err(|e| {
+                    format!("bad DARKPOOL_ETH_RPC URL: {e}")
+                })?);
+
+            let submitter_cfg = dp_settlement::EthSubmitterConfig {
+                rpc_url: rpc.to_string(),
+                signer,
+                contract_address: contract_addr.to_string(),
+                chain_id: cfg.chain_id,
+                gas_limit: Some(cfg.submit_gas),
+            };
+
+            let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
+            engine.set_submitter(Arc::new(submitter));
+
+            info!(
                 rpc = %rpc,
-                signer = %sanitize_uri_for_log(uri),
-                address = %signer.address(),
-                "operator signer resolved but submitter wiring is NOT installed yet \
-                 (issue #28 follow-up). Auctions will NOT settle on-chain until the \
-                 alloy Provider+wallet+contract glue lands."
+                contract = %contract_addr,
+                chain_id = cfg.chain_id,
+                "batch submitter: on-chain (EthSubmitter)"
             );
         } else {
             warn!(
