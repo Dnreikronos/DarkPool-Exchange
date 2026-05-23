@@ -48,6 +48,12 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_OPERATOR_API_KEYS", default_value = "")]
     operator_api_keys_raw: String,
 
+    /// Comma-separated list of allowed CORS origins. When empty, no CORS
+    /// headers are emitted (browser cross-origin requests will fail).
+    /// Example: `http://localhost:3000,https://app.darkpool.exchange`.
+    #[arg(long, env = "DARKPOOL_CORS_ORIGINS", default_value = "")]
+    cors_origins_raw: String,
+
     /// JSON document seeding the pair registry on first boot. Only
     /// applied when the event log is empty (otherwise pairs are replayed
     /// from `PairRegistered` events). Format:
@@ -163,6 +169,14 @@ pub struct Config {
 impl Config {
     pub fn api_keys(&self) -> Vec<String> {
         self.api_keys_raw
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
+    pub fn cors_origins(&self) -> Vec<String> {
+        self.cors_origins_raw
             .split(',')
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())

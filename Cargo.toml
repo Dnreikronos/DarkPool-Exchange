@@ -47,7 +47,7 @@ prost = "0.13"
 prost-types = "0.13"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.5", features = ["limit", "trace", "request-id"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "trace", "request-id"] }
 base64 = "0.22"
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 clap = { version = "4", features = ["derive", "env"] }
