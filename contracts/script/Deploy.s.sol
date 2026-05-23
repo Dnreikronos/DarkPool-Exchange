@@ -67,12 +67,12 @@ contract DeployScript is Script {
         console.log("DarkPool:", address(pool));
         console.log("OperatorPubkey bytes:", operatorPubkey.length);
 
-        HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
-        console.log("HyperNovaDeciderVerifier:", address(hypernova));
         require(
             block.chainid != 1,
             "stub IVC verifier cannot be deployed on mainnet; use a real Decider verifier"
         );
+        HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
+        console.log("HyperNovaDeciderVerifier:", address(hypernova));
         // Route IVC verification through the proxy so key rotation only
         // requires proxy.setIvcVerifier(newImpl) — no DarkPool redeployment.
         proxy.setIvcVerifier(address(hypernova));
