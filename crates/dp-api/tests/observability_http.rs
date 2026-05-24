@@ -171,6 +171,48 @@ async fn request_id_is_propagated_when_client_supplies_it() {
 }
 
 #[tokio::test]
+async fn request_id_is_present_on_error_responses() {
+    let router = make_router(ReadinessProbes::new());
+    // Hit an auth-gated route without a key → 401. The x-request-id
+    // middleware wraps the entire router so the header must still appear.
+    let resp = router
+        .oneshot(
+            Request::get("/v1/orderbook?pair=ETH/USDC")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("x-request-id must be set even on error responses")
+        .to_str()
+        .unwrap();
+    assert!(!id.is_empty());
+    // Verify the generated ID is a valid ULID.
+    ulid::Ulid::from_string(id).expect("request id should be a valid ULID");
+}
+
+#[tokio::test]
+async fn request_id_generated_is_valid_ulid() {
+    let router = make_router(ReadinessProbes::new());
+    let resp = router
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("x-request-id header must be set")
+        .to_str()
+        .unwrap();
+    ulid::Ulid::from_string(id).expect("generated request id should be a valid ULID");
+}
+
+#[tokio::test]
 async fn ops_endpoints_skip_auth_while_protected_routes_still_require_it() {
     let router = make_router(ReadinessProbes::new());
     // No api key → /v1/orderbook must reject.

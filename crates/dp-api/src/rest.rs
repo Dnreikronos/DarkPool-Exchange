@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tower_http::trace::TraceLayer;
 
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
@@ -34,6 +36,16 @@ use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
 pub type SharedKeyAdminHandler = Arc<KeyAdminHandler>;
+
+#[derive(Clone)]
+struct MakeRequestUlid;
+
+impl MakeRequestId for MakeRequestUlid {
+    fn make_request_id<B>(&mut self, _request: &AxumRequest<B>) -> Option<RequestId> {
+        let id = ulid::Ulid::new().to_string();
+        Some(RequestId::new(HeaderValue::from_str(&id).unwrap()))
+    }
+}
 
 // Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
 // Rejects oversized requests before JSON parse + base64 decode burn CPU.
@@ -166,7 +178,7 @@ pub fn router_with_ops(
     let traced = base
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid));
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUlid));
 
     if cors_origins.is_empty() {
         return traced;
