@@ -133,9 +133,11 @@ bytes salt      = 5;  // 32 bytes
 ```
 
 These are already transmitted in the REST JSON path (`OrderSubmission` struct
-in `submit.rs:28`) but not in the proto. The proof's public inputs are
-extracted from the proof field itself (Groth16 proofs carry public inputs in
-the serialization, or they are re-derived from the request fields).
+in `submit.rs:28`) but not in the proto. The proof's public inputs are **not**
+encoded inside Groth16 proof bytes; `ark-groth16::verify_proof` receives them
+as a separate `&[E::ScalarField]` slice via `prepare_inputs`. The verifier
+must derive the 3 public inputs (`commitment`, `trader_id`, `nullifier`) from
+the request fields and pass them alongside the deserialized proof.
 
 ### 6. Proving key generation and distribution
 
