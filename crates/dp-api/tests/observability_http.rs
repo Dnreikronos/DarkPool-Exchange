@@ -53,6 +53,7 @@ fn make_router(probes: ReadinessProbes) -> axum::Router {
         OpsState {
             prom: shared_prom(),
             readiness: probes,
+            multi: dp_crypto::MultiKeyDecrypter::new(),
         },
         &[],
     )

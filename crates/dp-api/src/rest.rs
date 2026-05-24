@@ -29,7 +29,7 @@ use crate::pb::{
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
-use dp_crypto::KeyStatus;
+use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
@@ -113,12 +113,12 @@ pub fn router_with_admin(
 }
 
 /// State carried by the operational endpoints (`/healthz`, `/readyz`,
-/// `/metrics`). Cheap to clone — the Prometheus handle and probe set
-/// are `Arc`-wrapped internally.
+/// `/metrics`). Cheap to clone — all fields are `Arc`-wrapped internally.
 #[derive(Clone)]
 pub struct OpsState {
     pub prom: PrometheusHandle,
     pub readiness: ReadinessProbes,
+    pub multi: MultiKeyDecrypter,
 }
 
 /// Build the unauthenticated operational sub-router. Mounted alongside
@@ -130,6 +130,7 @@ pub fn ops_router(state: OpsState) -> Router {
         .route("/healthz", get(rest_healthz))
         .route("/readyz", get(rest_readyz))
         .route("/metrics", get(rest_metrics))
+        .route("/v1/operator/pubkey", get(rest_operator_pubkey))
         .with_state(state)
 }
 
@@ -259,6 +260,37 @@ async fn rest_metrics(State(state): State<OpsState>) -> Response {
         HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
     );
     resp
+}
+
+#[derive(Serialize)]
+struct PubkeyResponse {
+    pubkey: String,
+    encoding: &'static str,
+}
+
+async fn rest_operator_pubkey(State(state): State<OpsState>) -> Response {
+    match state.multi.active_public_key_hex() {
+        Some(pk) => {
+            let body = Json(PubkeyResponse {
+                pubkey: pk,
+                encoding: "sec1-uncompressed",
+            });
+            let mut resp = (StatusCode::OK, body).into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=300"),
+            );
+            resp
+        }
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "code": 14,
+                "message": "no active operator key configured"
+            })),
+        )
+            .into_response(),
+    }
 }
 
 pub fn status_to_response(status: tonic::Status) -> Response {
@@ -1303,5 +1335,109 @@ mod tests {
         let bytes = body_bytes(resp).await;
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["status"], "ok");
+    }
+
+    // ---------- operator pubkey endpoint ----------
+
+    use dp_crypto::{EciesDecrypter, KeyEntry};
+
+    fn ops_app(multi: MultiKeyDecrypter) -> axum::Router {
+        let prom = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .build_recorder()
+            .handle();
+        let state = OpsState {
+            prom,
+            readiness: ReadinessProbes::new(),
+            multi,
+        };
+        ops_router(state)
+    }
+
+    #[tokio::test]
+    async fn rest_operator_pubkey_returns_active_key() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng())
+            .to_bytes()
+            .to_vec();
+        let dec = EciesDecrypter::from_bytes(sk).unwrap();
+        let expected_hex = hex::encode(dec.public_key());
+        let multi = MultiKeyDecrypter::from_entries(vec![KeyEntry::new(
+            "test",
+            dp_crypto::KeyStatus::Active,
+            Arc::new(dec),
+        )]);
+        let app = ops_app(multi);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/operator/pubkey")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "public, max-age=300"
+        );
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["pubkey"], expected_hex);
+        assert_eq!(v["encoding"], "sec1-uncompressed");
+    }
+
+    #[tokio::test]
+    async fn rest_operator_pubkey_503_when_no_active() {
+        let multi = MultiKeyDecrypter::new();
+        let app = ops_app(multi);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/operator/pubkey")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["code"], 14);
+    }
+
+    #[tokio::test]
+    async fn rest_operator_pubkey_roundtrip_encrypt_decrypt() {
+        let sk_bytes = {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            sk.to_bytes().to_vec()
+        };
+        let dec = EciesDecrypter::from_bytes(sk_bytes.clone()).unwrap();
+        let multi = MultiKeyDecrypter::from_entries(vec![KeyEntry::new(
+            "rt",
+            dp_crypto::KeyStatus::Active,
+            Arc::new(dec),
+        )]);
+        let app = ops_app(multi);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/operator/pubkey")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let pubkey_hex = v["pubkey"].as_str().unwrap();
+        let pubkey_bytes = hex::decode(pubkey_hex).unwrap();
+
+        let msg = b"test message for encryption roundtrip";
+        let ciphertext = ecies::encrypt(&pubkey_bytes, msg).unwrap();
+        let plaintext = ecies::decrypt(&sk_bytes, &ciphertext).unwrap();
+        assert_eq!(plaintext, msg);
     }
 }
