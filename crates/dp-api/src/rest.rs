@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tonic::{Code, Request};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tower_http::trace::TraceLayer;
 
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
