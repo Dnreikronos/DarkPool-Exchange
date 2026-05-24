@@ -10,6 +10,7 @@ use crate::{CryptoError, Decrypter};
 
 pub struct EciesDecrypter {
     secret_key: Vec<u8>,
+    public_key: Vec<u8>,
 }
 
 impl Drop for EciesDecrypter {
@@ -34,11 +35,26 @@ impl EciesDecrypter {
                 secret_key.len()
             )));
         }
-        Ok(Self { secret_key })
+        let sk = ecies::SecretKey::parse_slice(&secret_key)
+            .map_err(|e| CryptoError::InvalidKeyFile(format!("invalid secp256k1 scalar: {e}")))?;
+        let pk = ecies::PublicKey::from_secret_key(&sk);
+        let public_key = pk.serialize().to_vec();
+        Ok(Self {
+            secret_key,
+            public_key,
+        })
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
     }
 }
 
 impl Decrypter for EciesDecrypter {
+    fn public_key(&self) -> Option<&[u8]> {
+        Some(&self.public_key)
+    }
+
     fn decrypt<'a>(
         &'a self,
         ciphertext: &'a [u8],
@@ -110,9 +126,7 @@ mod tests {
         let plaintext = serde_json::to_vec(&order).unwrap();
         let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
 
-        let dec = EciesDecrypter {
-            secret_key: sk_bytes.to_vec(),
-        };
+        let dec = EciesDecrypter::from_bytes(sk_bytes.to_vec()).unwrap();
         let result = dec.decrypt(&ciphertext).await.unwrap();
         assert_eq!(result, order);
     }
@@ -131,9 +145,7 @@ mod tests {
         let mid = ciphertext.len() / 2;
         ciphertext[mid] ^= 0xff;
 
-        let dec = EciesDecrypter {
-            secret_key: sk_bytes.to_vec(),
-        };
+        let dec = EciesDecrypter::from_bytes(sk_bytes.to_vec()).unwrap();
         let result = dec.decrypt(&ciphertext).await;
         assert!(matches!(result, Err(CryptoError::DecryptionFailed(_))));
     }
@@ -184,7 +196,26 @@ mod tests {
     }
 
     #[test]
-    fn from_bytes_accepts_32_bytes() {
-        assert!(EciesDecrypter::from_bytes(vec![0u8; 32]).is_ok());
+    fn from_bytes_accepts_valid_32_bytes() {
+        let sk = SigningKey::random(&mut rand::thread_rng());
+        assert!(EciesDecrypter::from_bytes(sk.to_bytes().to_vec()).is_ok());
+    }
+
+    #[test]
+    fn from_bytes_rejects_zero_scalar() {
+        match EciesDecrypter::from_bytes(vec![0u8; 32]) {
+            Err(CryptoError::InvalidKeyFile(msg)) => assert!(msg.contains("secp256k1")),
+            Err(other) => panic!("expected InvalidKeyFile, got: {other:?}"),
+            Ok(_) => panic!("expected error for zero scalar"),
+        }
+    }
+
+    #[test]
+    fn public_key_is_65_bytes_uncompressed() {
+        let sk = SigningKey::random(&mut rand::thread_rng());
+        let dec = EciesDecrypter::from_bytes(sk.to_bytes().to_vec()).unwrap();
+        let pk = dec.public_key();
+        assert_eq!(pk.len(), 65);
+        assert_eq!(pk[0], 0x04);
     }
 }
