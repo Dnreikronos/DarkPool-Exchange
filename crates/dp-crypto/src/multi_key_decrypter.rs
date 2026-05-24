@@ -220,6 +220,14 @@ impl MultiKeyDecrypter {
         self.inner.read().is_empty()
     }
 
+    pub fn active_public_key_hex(&self) -> Option<String> {
+        self.inner
+            .read()
+            .iter()
+            .find(|e| e.status == KeyStatus::Active)
+            .and_then(|e| e.decrypter.public_key().map(hex::encode))
+    }
+
     /// Iterate entries in the canonical try-order so callers don't
     /// reimplement the priority rule.
     fn sorted_snapshot(&self) -> Vec<KeyEntry> {
@@ -459,6 +467,36 @@ mod tests {
         let m = MultiKeyDecrypter::default();
         assert!(m.is_empty());
         assert_eq!(m.len(), 0);
+    }
+
+    #[test]
+    fn active_public_key_hex_returns_hex_for_active() {
+        let (sk, _) = fresh_key();
+        let dec = EciesDecrypter::from_bytes(sk).unwrap();
+        let expected = hex::encode(dec.public_key());
+        let m = MultiKeyDecrypter::from_entries(vec![KeyEntry::new(
+            "a",
+            KeyStatus::Active,
+            Arc::new(dec),
+        )]);
+        assert_eq!(m.active_public_key_hex(), Some(expected));
+    }
+
+    #[test]
+    fn active_public_key_hex_returns_none_when_no_active() {
+        let (sk, _) = fresh_key();
+        let m = MultiKeyDecrypter::from_entries(vec![KeyEntry::new(
+            "r",
+            KeyStatus::Rotating,
+            ecies_for(sk),
+        )]);
+        assert_eq!(m.active_public_key_hex(), None);
+    }
+
+    #[test]
+    fn active_public_key_hex_returns_none_when_empty() {
+        let m = MultiKeyDecrypter::new();
+        assert_eq!(m.active_public_key_hex(), None);
     }
 
     #[tokio::test]

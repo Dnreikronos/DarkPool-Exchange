@@ -11,6 +11,10 @@ pub trait Decrypter: Send + Sync {
         &'a self,
         ciphertext: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>>;
+
+    fn public_key(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 pub struct NoopDecrypter;

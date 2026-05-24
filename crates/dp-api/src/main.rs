@@ -346,6 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ops = OpsState {
         prom: prom_handle,
         readiness,
+        multi: multi.clone(),
     };
 
     // Periodic gauge: event-log size. Polled off the request path so a
