@@ -186,6 +186,8 @@ pub fn run_prover_io<R: Read, W: Write>(
 }
 
 pub mod cli;
+pub mod commit;
+pub mod prove_single;
 pub use cli::{run_prover, run_prover_cli};
 
 #[cfg(test)]

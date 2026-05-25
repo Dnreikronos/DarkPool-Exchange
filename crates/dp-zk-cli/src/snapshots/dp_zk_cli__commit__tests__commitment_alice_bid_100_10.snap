@@ -1,0 +1,6 @@
+---
+source: crates/dp-zk-cli/src/commit.rs
+assertion_line: 236
+expression: hex
+---
+221ab7304a89b8c85504d2711eca0fad71d02dece5d47543ce4b54e4cfb0bd73
