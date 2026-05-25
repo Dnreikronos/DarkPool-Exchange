@@ -133,7 +133,9 @@ pub async fn auth_axum_mw(
 fn extract_api_key_from_query(query: Option<&str>) -> Option<String> {
     let q = query?;
     for param in q.split('&') {
-        let (key, value) = param.split_once('=')?;
+        let Some((key, value)) = param.split_once('=') else {
+            continue;
+        };
         if key == "apiKey" && !value.is_empty() {
             return Some(
                 percent_encoding::percent_decode_str(value)
