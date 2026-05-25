@@ -34,8 +34,6 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::Commit(args) => run_commit(args),
         Commands::ProveSingleOrder(args) => run_prove_single(args),
-        Commands::ProveBatch(args) => {
-            dp_zk_cli::run_prover(args.batch_size, args.proving_key)
-        }
+        Commands::ProveBatch(args) => dp_zk_cli::run_prover(args.batch_size, args.proving_key),
     }
 }

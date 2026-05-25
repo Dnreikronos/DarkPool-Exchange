@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use dp_zk::pedersen::{bytes_to_scalar, commit_native, OrderCommitmentInput};
 use dp_zk::encoding::decimal_to_scalar;
+use dp_zk::pedersen::{bytes_to_scalar, commit_native, OrderCommitmentInput};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -65,17 +65,19 @@ pub fn run_commit(args: CommitArgs) -> ExitCode {
 pub fn compute_commitment(input: &CommitInput) -> Result<String, String> {
     let trader_id = resolve_trader_id(input)?;
 
-    let salt_bytes = hex::decode(input.salt.trim_start_matches("0x"))
-        .map_err(|e| format!("salt hex: {e}"))?;
+    let salt_bytes =
+        hex::decode(input.salt.trim_start_matches("0x")).map_err(|e| format!("salt hex: {e}"))?;
     if salt_bytes.len() != 32 {
-        return Err(format!("salt must be exactly 32 bytes, got {}", salt_bytes.len()));
+        return Err(format!(
+            "salt must be exactly 32 bytes, got {}",
+            salt_bytes.len()
+        ));
     }
     let salt = bytes_to_scalar(&salt_bytes);
 
-    let limit_price = decimal_to_scalar(input.limit_price)
-        .map_err(|e| format!("limit_price: {e}"))?;
-    let size = decimal_to_scalar(input.size)
-        .map_err(|e| format!("size: {e}"))?;
+    let limit_price =
+        decimal_to_scalar(input.limit_price).map_err(|e| format!("limit_price: {e}"))?;
+    let size = decimal_to_scalar(input.size).map_err(|e| format!("size: {e}"))?;
 
     let side = match input.side {
         0 => ark_ff::Zero::zero(),
@@ -97,10 +99,13 @@ pub fn compute_commitment(input: &CommitInput) -> Result<String, String> {
 
 fn resolve_trader_id(input: &CommitInput) -> Result<ark_bn254::Fr, String> {
     if let Some(ref tid) = input.trader_id {
-        let bytes = hex::decode(tid.trim_start_matches("0x"))
-            .map_err(|e| format!("trader_id hex: {e}"))?;
+        let bytes =
+            hex::decode(tid.trim_start_matches("0x")).map_err(|e| format!("trader_id hex: {e}"))?;
         if bytes.len() != 32 {
-            return Err(format!("trader_id must be exactly 32 bytes, got {}", bytes.len()));
+            return Err(format!(
+                "trader_id must be exactly 32 bytes, got {}",
+                bytes.len()
+            ));
         }
         Ok(bytes_to_scalar(&bytes))
     } else if let Some(ref ck) = input.commitment_key {

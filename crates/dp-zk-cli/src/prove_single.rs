@@ -9,7 +9,7 @@ use clap::Parser;
 use dp_zk::commitment_circuit::{setup_and_prove, CommitmentPreimageCircuit};
 use dp_zk::encoding::decimal_to_scalar;
 use dp_zk::pedersen::bytes_to_scalar;
-use dp_zk::{fr_to_bytes32, OrderCommitmentInput, commit_native};
+use dp_zk::{commit_native, fr_to_bytes32, OrderCommitmentInput};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -87,17 +87,19 @@ pub fn generate_proof(
 ) -> Result<ProveSingleOutput, String> {
     let trader_id = resolve_trader_id(input)?;
 
-    let salt_bytes = hex::decode(input.salt.trim_start_matches("0x"))
-        .map_err(|e| format!("salt hex: {e}"))?;
+    let salt_bytes =
+        hex::decode(input.salt.trim_start_matches("0x")).map_err(|e| format!("salt hex: {e}"))?;
     if salt_bytes.len() != 32 {
-        return Err(format!("salt must be exactly 32 bytes, got {}", salt_bytes.len()));
+        return Err(format!(
+            "salt must be exactly 32 bytes, got {}",
+            salt_bytes.len()
+        ));
     }
     let salt = bytes_to_scalar(&salt_bytes);
 
-    let limit_price = decimal_to_scalar(input.limit_price)
-        .map_err(|e| format!("limit_price: {e}"))?;
-    let size = decimal_to_scalar(input.size)
-        .map_err(|e| format!("size: {e}"))?;
+    let limit_price =
+        decimal_to_scalar(input.limit_price).map_err(|e| format!("limit_price: {e}"))?;
+    let size = decimal_to_scalar(input.size).map_err(|e| format!("size: {e}"))?;
 
     let side_fr = match input.side {
         0 => ark_bn254::Fr::zero(),
@@ -122,8 +124,8 @@ pub fn generate_proof(
     });
 
     let mut rng = make_rng(seed);
-    let result = setup_and_prove(&circuit, &mut rng)
-        .map_err(|e| format!("proof generation: {e}"))?;
+    let result =
+        setup_and_prove(&circuit, &mut rng).map_err(|e| format!("proof generation: {e}"))?;
 
     Ok(ProveSingleOutput {
         scalars: ScalarOutput {
@@ -141,10 +143,13 @@ pub fn generate_proof(
 
 fn resolve_trader_id(input: &ProveSingleInput) -> Result<ark_bn254::Fr, String> {
     if let Some(ref tid) = input.trader_id {
-        let bytes = hex::decode(tid.trim_start_matches("0x"))
-            .map_err(|e| format!("trader_id hex: {e}"))?;
+        let bytes =
+            hex::decode(tid.trim_start_matches("0x")).map_err(|e| format!("trader_id hex: {e}"))?;
         if bytes.len() != 32 {
-            return Err(format!("trader_id must be exactly 32 bytes, got {}", bytes.len()));
+            return Err(format!(
+                "trader_id must be exactly 32 bytes, got {}",
+                bytes.len()
+            ));
         }
         Ok(bytes_to_scalar(&bytes))
     } else if let Some(ref ck) = input.commitment_key {
@@ -251,8 +256,8 @@ mod tests {
         let proof_bytes = hex::decode(&output.proof).unwrap();
         let vk_bytes = hex::decode(&output.verification_key).unwrap();
 
-        let valid = dp_zk::commitment_circuit::verify_proof(&vk_bytes, &proof_bytes, commitment)
-            .unwrap();
+        let valid =
+            dp_zk::commitment_circuit::verify_proof(&vk_bytes, &proof_bytes, commitment).unwrap();
         assert!(valid);
     }
 
