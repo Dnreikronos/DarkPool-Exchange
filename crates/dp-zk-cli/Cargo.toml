@@ -30,3 +30,4 @@ ark-snark = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+insta = "1"
