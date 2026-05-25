@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --experimental-eventsource
 //
 // E2E test: connect to the SSE auction stream and consume 3 events.
 //
