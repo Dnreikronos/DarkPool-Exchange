@@ -84,7 +84,37 @@ contract DeployScript is Script {
             console.log("VerifierProxy ownership transferred to governor:", governor);
         }
 
+        _writeDeployment(
+            address(pool),
+            address(proxy),
+            address(verifier),
+            address(hypernova)
+        );
+
         vm.stopBroadcast();
+    }
+
+    function _writeDeployment(
+        address darkPool,
+        address verifierProxy,
+        address groth16Verifier,
+        address hypernovaVerifier
+    ) internal {
+        string memory out = "deployment";
+        out.serialize("darkPool", darkPool);
+        out.serialize("verifierProxy", verifierProxy);
+        out.serialize("groth16Verifier", groth16Verifier);
+        out.serialize("hypernovaDeciderVerifier", hypernovaVerifier);
+        out.serialize("deployedAt", block.timestamp);
+        out.serialize("blockNumber", block.number);
+        string memory gitSha = vm.envOr("GIT_SHA", string("unknown"));
+        string memory json = out.serialize("gitSha", gitSha);
+
+        string memory path = string.concat(
+            "./deployments/", vm.toString(block.chainid), ".json"
+        );
+        vm.writeJson(json, path);
+        console.log("Deployment written to:", path);
     }
 
     function _loadVk(string memory path)

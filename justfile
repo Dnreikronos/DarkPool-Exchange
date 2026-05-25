@@ -163,7 +163,18 @@ anvil:
 
 # Deploy contracts to a local anvil
 deploy RPC="http://127.0.0.1:8545":
-    cd contracts && forge script script/Deploy.s.sol:DeployScript --rpc-url {{RPC}} --broadcast
+    mkdir -p contracts/deployments
+    cd contracts && GIT_SHA=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:DeployScript --rpc-url {{RPC}} --broadcast
+
+# Deploy contracts to a remote chain (Alchemy RPC from .env)
+deploy-remote:
+    @test -n "${RPC_URL:-}" || { echo "ERROR: RPC_URL not set in .env"; exit 1; }
+    @test -n "${PRIVATE_KEY:-}" || { echo "ERROR: PRIVATE_KEY not set in .env"; exit 1; }
+    mkdir -p contracts/deployments
+    cd contracts && GIT_SHA=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:DeployScript \
+        --rpc-url "$RPC_URL" \
+        --broadcast \
+        --verify
 
 # ---------------------------------------------------------------------------
 # Database
