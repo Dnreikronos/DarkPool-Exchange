@@ -113,11 +113,34 @@ where
 
 pub async fn auth_axum_mw(
     AxumState(core): AxumState<AuthCore>,
-    req: AxumRequest,
+    mut req: AxumRequest,
     next: Next,
 ) -> AxumResponse {
+    if req.headers().get(AUTH_HEADER).is_none() {
+        if let Some(key) = extract_api_key_from_query(req.uri().query()) {
+            if let Ok(val) = http::HeaderValue::from_str(&key) {
+                req.headers_mut()
+                    .insert(http::HeaderName::from_static(AUTH_HEADER), val);
+            }
+        }
+    }
     if let Err(status) = core.check(req.headers()) {
         return crate::rest::status_to_response(status);
     }
     next.run(req).await
+}
+
+fn extract_api_key_from_query(query: Option<&str>) -> Option<String> {
+    let q = query?;
+    for param in q.split('&') {
+        let (key, value) = param.split_once('=')?;
+        if key == "apiKey" && !value.is_empty() {
+            return Some(
+                percent_encoding::percent_decode_str(value)
+                    .decode_utf8_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    None
 }
