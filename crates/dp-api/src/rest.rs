@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,11 +6,14 @@ use axum::body::Body;
 use axum::extract::{MatchedPath, Path, Query, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
+use futures_util::StreamExt;
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::BroadcastStream;
 use tonic::{Code, Request};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -30,7 +34,7 @@ use crate::pb::{
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::readiness::ReadinessProbes;
-use crate::validation::{MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
 use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
 pub type SharedHandler = Arc<ApiHandler>;
@@ -62,6 +66,7 @@ pub fn router(handler: SharedHandler) -> Router {
         )
         .route("/v1/orderbook", get(rest_get_orderbook))
         .route("/v1/auctions", get(rest_get_auction_history))
+        .route("/v1/auctions/stream", get(rest_stream_auctions))
         .route("/v1/pairs", get(rest_list_pairs))
         .with_state(handler)
 }
@@ -518,6 +523,36 @@ struct AuctionHistoryQuery {
     limit: i32,
 }
 
+#[derive(Deserialize)]
+struct AuctionStreamQuery {
+    #[serde(default)]
+    pair: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuctionEventSseJson {
+    auction_id: String,
+    pair: String,
+    clearing_price: String,
+    matched_volume: String,
+    match_count: u32,
+    timestamp_unix: String,
+}
+
+impl From<dp_engine::AuctionNotification> for AuctionEventSseJson {
+    fn from(n: dp_engine::AuctionNotification) -> Self {
+        Self {
+            auction_id: n.auction_id.to_string(),
+            pair: n.pair,
+            clearing_price: n.clearing_price.to_string(),
+            matched_volume: n.matched_volume.to_string(),
+            match_count: n.match_count,
+            timestamp_unix: n.timestamp.timestamp().to_string(),
+        }
+    }
+}
+
 // ---------- error mapping ----------
 
 struct ApiError(tonic::Status);
@@ -615,6 +650,38 @@ async fn rest_get_auction_history(
     Ok(Json(AuctionHistoryRespJson {
         auctions: resp.auctions.into_iter().map(Into::into).collect(),
     }))
+}
+
+async fn rest_stream_auctions(
+    State(h): State<SharedHandler>,
+    Query(q): Query<AuctionStreamQuery>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let pair = if q.pair.is_empty() {
+        String::new()
+    } else {
+        validate_pair_known(&h.engine, &q.pair)?.into_string()
+    };
+    let rx = h.engine.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |item| {
+        let pair = pair.clone();
+        async move {
+            match item {
+                Ok(n) => {
+                    if !pair.is_empty() && n.pair != pair {
+                        return None;
+                    }
+                    let json: AuctionEventSseJson = n.into();
+                    let data = serde_json::to_string(&json).expect("AuctionEventSseJson is always serializable");
+                    Some(Ok(Event::default().event("auction").data(data)))
+                }
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                    let data = format!(r#"{{"lagged":{}}}"#, n);
+                    Some(Ok(Event::default().event("error").data(data)))
+                }
+            }
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 async fn rest_list_pairs(State(h): State<SharedHandler>) -> Result<Json<ListPairsJson>, ApiError> {
