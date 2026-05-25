@@ -41,16 +41,7 @@ impl ConstraintSynthesizer<Fr> for CommitmentPreimageCircuit {
         let expected_var = FpVar::new_input(cs.clone(), || Ok(expected))?;
 
         let mut sponge = PoseidonSpongeVar::<Fr>::new(cs, &cfg);
-        sponge.absorb(
-            &[
-                trader_id,
-                side,
-                limit_price,
-                size,
-                salt,
-            ]
-            .as_ref(),
-        )?;
+        sponge.absorb(&[trader_id, side, limit_price, size, salt].as_ref())?;
         let computed = sponge.squeeze_field_elements(1)?[0].clone();
 
         computed.enforce_equal(&expected_var)?;
@@ -88,8 +79,8 @@ pub fn setup_and_prove<R: RngCore + CryptoRng>(
     let proof = Groth16::<Bn254>::prove(&pk, circuit.clone(), rng)
         .map_err(|e| crate::ZkError::Prove(e.to_string()))?;
 
-    let pvk = Groth16::<Bn254>::process_vk(&vk)
-        .map_err(|e| crate::ZkError::Setup(e.to_string()))?;
+    let pvk =
+        Groth16::<Bn254>::process_vk(&vk).map_err(|e| crate::ZkError::Setup(e.to_string()))?;
 
     let valid = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &[commitment], &proof)
         .map_err(|e| crate::ZkError::Prove(e.to_string()))?;
@@ -114,7 +105,11 @@ pub fn setup_and_prove<R: RngCore + CryptoRng>(
     })
 }
 
-pub fn verify_proof(vk_bytes: &[u8], proof_bytes: &[u8], commitment: Fr) -> Result<bool, crate::ZkError> {
+pub fn verify_proof(
+    vk_bytes: &[u8],
+    proof_bytes: &[u8],
+    commitment: Fr,
+) -> Result<bool, crate::ZkError> {
     let vk = ark_groth16::VerifyingKey::<Bn254>::deserialize_with_mode(
         vk_bytes,
         Compress::Yes,
@@ -139,11 +134,11 @@ pub fn verify_proof(vk_bytes: &[u8], proof_bytes: &[u8], commitment: Fr) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_ff::{One, Zero};
-    use ark_std::rand::SeedableRng;
-    use ark_std::rand::rngs::StdRng;
     use crate::encoding::decimal_to_scalar;
     use crate::pedersen::bytes_to_scalar;
+    use ark_ff::{One, Zero};
+    use ark_std::rand::rngs::StdRng;
+    use ark_std::rand::SeedableRng;
     use rust_decimal::Decimal;
 
     fn fixed_rng() -> StdRng {
