@@ -342,6 +342,7 @@ async fn router_with_middleware_enforces_api_key() {
 
     // With api key → 200
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v1/pairs")
@@ -352,4 +353,176 @@ async fn router_with_middleware_enforces_api_key() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    // With api key in query param → 200
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairs?apiKey=mw-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // With percent-encoded api key in query param → 200
+    // "mw-key" percent-encoded: "mw%2Dkey"
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairs?apiKey=mw%2Dkey")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// ---------- SSE auction stream ----------
+
+#[tokio::test]
+async fn sse_stream_unknown_pair_returns_404() {
+    let app = new_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream?pair=FAKE/PAIR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sse_stream_returns_event_stream_content_type() {
+    let store = std::sync::Arc::new(MemStore::new());
+    let engine = Engine::new(store, Duration::from_secs(1));
+    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
+    let handler = ApiHandler::new(engine);
+    let app = rest::router(std::sync::Arc::new(handler));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream?pair=ETH/USDC")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(ct.contains("text/event-stream"), "content-type was: {ct}");
+}
+
+#[tokio::test]
+async fn sse_stream_no_pair_filter_returns_200() {
+    let app = new_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sse_stream_receives_auction_events() {
+    let (app, engine) = registered_app();
+
+    // Place crossing orders so the auction tick produces a match.
+    let make_body = |side: dp_types::Side, price: &str| {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        let d = dp_crypto::DecryptedOrder {
+            trader: alloy_primitives::Address::ZERO,
+            pair: "ETH/USDC".into(),
+            side,
+            price: price.parse().unwrap(),
+            size: "1".parse().unwrap(),
+            commitment_key: format!("sse-{}-{}", side as u8, price),
+            ttl: 60_000_000_000,
+        };
+        serde_json::json!({
+            "commitment": STANDARD.encode([0u8; 32]),
+            "proof": STANDARD.encode(b"p"),
+            "encryptedPayload": encrypt_b64(&d),
+        })
+        .to_string()
+    };
+
+    for (side, price) in [
+        (dp_types::Side::Buy, "1800"),
+        (dp_types::Side::Sell, "1800"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/orders")
+                    .header("content-type", "application/json")
+                    .body(Body::from(make_body(side, price)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream?pair=ETH/USDC")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let mut body = resp.into_body();
+
+    let eng = engine.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        eng.run_auction_tick().await;
+    });
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut buf = String::new();
+        loop {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        buf.push_str(&String::from_utf8_lossy(data));
+                        if buf.contains("event: auction") {
+                            return buf;
+                        }
+                    }
+                }
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await;
+
+    assert!(frame.is_ok(), "timed out waiting for auction SSE event");
+    let text = frame.unwrap();
+    assert!(text.contains("\"pair\":\"ETH/USDC\""));
+    assert!(text.contains("\"clearingPrice\""));
 }

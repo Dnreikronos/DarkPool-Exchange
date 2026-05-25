@@ -2315,6 +2315,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
+ "percent-encoding",
  "prost",
  "rand 0.8.6",
  "rcgen",
