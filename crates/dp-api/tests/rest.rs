@@ -356,9 +356,23 @@ async fn router_with_middleware_enforces_api_key() {
 
     // With api key in query param → 200
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v1/pairs?apiKey=mw-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // With percent-encoded api key in query param → 200
+    // "mw-key" percent-encoded: "mw%2Dkey"
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairs?apiKey=mw%2Dkey")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -402,7 +416,12 @@ async fn sse_stream_returns_event_stream_content_type() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(ct.contains("text/event-stream"), "content-type was: {ct}");
 }
 

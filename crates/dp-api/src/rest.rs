@@ -671,7 +671,8 @@ async fn rest_stream_auctions(
                         return None;
                     }
                     let json: AuctionEventSseJson = n.into();
-                    let data = serde_json::to_string(&json).expect("AuctionEventSseJson is always serializable");
+                    let data = serde_json::to_string(&json)
+                        .expect("AuctionEventSseJson is always serializable");
                     Some(Ok(Event::default().event("auction").data(data)))
                 }
                 Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {

@@ -24,7 +24,8 @@ params.set("pair", "ETH/USDC");
 if (API_KEY) params.set("apiKey", API_KEY);
 
 const url = `${BASE}/v1/auctions/stream?${params}`;
-console.log(`Connecting to ${url}`);
+const safeUrl = API_KEY ? url.replace(API_KEY, "***") : url;
+console.log(`Connecting to ${safeUrl}`);
 console.log(`Waiting for ${WANT} auction events…\n`);
 
 const events = [];
