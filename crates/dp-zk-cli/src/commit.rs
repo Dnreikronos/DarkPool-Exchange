@@ -67,6 +67,9 @@ pub fn compute_commitment(input: &CommitInput) -> Result<String, String> {
 
     let salt_bytes = hex::decode(input.salt.trim_start_matches("0x"))
         .map_err(|e| format!("salt hex: {e}"))?;
+    if salt_bytes.len() != 32 {
+        return Err(format!("salt must be exactly 32 bytes, got {}", salt_bytes.len()));
+    }
     let salt = bytes_to_scalar(&salt_bytes);
 
     let limit_price = decimal_to_scalar(input.limit_price)
@@ -74,13 +77,15 @@ pub fn compute_commitment(input: &CommitInput) -> Result<String, String> {
     let size = decimal_to_scalar(input.size)
         .map_err(|e| format!("size: {e}"))?;
 
+    let side = match input.side {
+        0 => ark_ff::Zero::zero(),
+        1 => ark_ff::One::one(),
+        other => return Err(format!("side must be 0 or 1, got {other}")),
+    };
+
     let ci = OrderCommitmentInput {
         trader_id,
-        side: if input.side == 0 {
-            ark_ff::Zero::zero()
-        } else {
-            ark_ff::One::one()
-        },
+        side,
         limit_price,
         size,
         salt,
@@ -94,6 +99,9 @@ fn resolve_trader_id(input: &CommitInput) -> Result<ark_bn254::Fr, String> {
     if let Some(ref tid) = input.trader_id {
         let bytes = hex::decode(tid.trim_start_matches("0x"))
             .map_err(|e| format!("trader_id hex: {e}"))?;
+        if bytes.len() != 32 {
+            return Err(format!("trader_id must be exactly 32 bytes, got {}", bytes.len()));
+        }
         Ok(bytes_to_scalar(&bytes))
     } else if let Some(ref ck) = input.commitment_key {
         dp_zk::pedersen::derive_trader_id(ck.as_bytes())

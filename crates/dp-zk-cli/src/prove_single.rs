@@ -89,6 +89,9 @@ pub fn generate_proof(
 
     let salt_bytes = hex::decode(input.salt.trim_start_matches("0x"))
         .map_err(|e| format!("salt hex: {e}"))?;
+    if salt_bytes.len() != 32 {
+        return Err(format!("salt must be exactly 32 bytes, got {}", salt_bytes.len()));
+    }
     let salt = bytes_to_scalar(&salt_bytes);
 
     let limit_price = decimal_to_scalar(input.limit_price)
@@ -96,10 +99,10 @@ pub fn generate_proof(
     let size = decimal_to_scalar(input.size)
         .map_err(|e| format!("size: {e}"))?;
 
-    let side_fr = if input.side == 0 {
-        ark_bn254::Fr::zero()
-    } else {
-        ark_bn254::Fr::one()
+    let side_fr = match input.side {
+        0 => ark_bn254::Fr::zero(),
+        1 => ark_bn254::Fr::one(),
+        other => return Err(format!("side must be 0 or 1, got {other}")),
     };
 
     let circuit = CommitmentPreimageCircuit {
@@ -140,6 +143,9 @@ fn resolve_trader_id(input: &ProveSingleInput) -> Result<ark_bn254::Fr, String> 
     if let Some(ref tid) = input.trader_id {
         let bytes = hex::decode(tid.trim_start_matches("0x"))
             .map_err(|e| format!("trader_id hex: {e}"))?;
+        if bytes.len() != 32 {
+            return Err(format!("trader_id must be exactly 32 bytes, got {}", bytes.len()));
+        }
         Ok(bytes_to_scalar(&bytes))
     } else if let Some(ref ck) = input.commitment_key {
         dp_zk::pedersen::derive_trader_id(ck.as_bytes())
