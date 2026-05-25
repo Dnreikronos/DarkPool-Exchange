@@ -12,7 +12,10 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
-fs_permissions = [{ access = "read", path = "./test/fixtures" }]
+fs_permissions = [
+    { access = "read", path = "./test/fixtures" },
+    { access = "read-write", path = "./deployments" },
+]
 
 [fuzz]
 runs = 256
