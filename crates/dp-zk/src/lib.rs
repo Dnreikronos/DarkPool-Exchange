@@ -15,6 +15,7 @@
 //! is what binds the order inside the ZK circuit. There is no separate
 //! SHA256 commitment.
 
+pub mod commitment_circuit;
 pub mod encoding;
 pub mod folding;
 pub mod params;
