@@ -22,7 +22,7 @@ beforeEach(() => {
     vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ pubkey: fakePubkeyHex, encoding: 'sec1-uncompressed' }),
-    }),
+    })
   )
 })
 
@@ -54,10 +54,7 @@ describe('useOperatorPubkey', () => {
   })
 
   it('reports error on non-ok response', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 503 }),
-    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
 
     const { result } = renderHook(() => useOperatorPubkey('http://localhost:8080'), {
       wrapper: createWrapper(),

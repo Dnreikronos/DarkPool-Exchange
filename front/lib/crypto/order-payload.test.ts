@@ -55,7 +55,7 @@ describe('serializeOrder', () => {
 
   it('rejects trader without 0x prefix', () => {
     expect(() =>
-      serializeOrder({ ...validPayload, trader: '0000000000000000000000000000000000000000' }),
+      serializeOrder({ ...validPayload, trader: '0000000000000000000000000000000000000000' })
     ).toThrow('0x-prefixed')
   })
 
