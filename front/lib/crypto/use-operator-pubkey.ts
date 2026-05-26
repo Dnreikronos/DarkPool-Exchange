@@ -19,7 +19,7 @@ async function fetchOperatorPubkey(baseUrl: string): Promise<Uint8Array> {
 
 export function useOperatorPubkey(baseUrl: string, useMocks = false) {
   return useQuery({
-    queryKey: ['operator-pubkey'],
+    queryKey: ['operator-pubkey', baseUrl],
     queryFn: () => fetchOperatorPubkey(baseUrl),
     staleTime: STALE_TIME,
     enabled: !useMocks,

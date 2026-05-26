@@ -9,7 +9,7 @@ export interface DecryptedOrderPayload {
 }
 
 export function serializeOrder(payload: DecryptedOrderPayload): Uint8Array {
-  if (!payload.trader.startsWith('0x') || payload.trader.length !== 42) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(payload.trader)) {
     throw new Error(`trader must be a 0x-prefixed 20-byte address, got "${payload.trader}"`)
   }
   if (payload.side !== 0 && payload.side !== 1) {
@@ -23,6 +23,9 @@ export function serializeOrder(payload: DecryptedOrderPayload): Uint8Array {
   }
   if (typeof payload.commitment_key !== 'string' || payload.commitment_key.length === 0) {
     throw new Error('commitment_key must be a non-empty string')
+  }
+  if (!Number.isFinite(payload.ttl) || !Number.isInteger(payload.ttl)) {
+    throw new Error('ttl must be a finite integer')
   }
 
   const json = JSON.stringify({
