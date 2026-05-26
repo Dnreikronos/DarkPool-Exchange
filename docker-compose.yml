@@ -31,41 +31,6 @@ services:
       timeout: 3s
       retries: 20
 
-  deployer:
-    image: ghcr.io/foundry-rs/foundry:stable
-    container_name: darkpool-deployer
-    depends_on:
-      anvil:
-        condition: service_healthy
-    working_dir: /contracts
-    user: "0:0"
-    volumes:
-      - ./contracts:/contracts
-      - shared:/shared
-    environment:
-      PRIVATE_KEY: ${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
-      FEE_RECIPIENT: ${FEE_RECIPIENT:-0xf39Fd6e51aad88F6F4ce6aB8827279cfFFb92266}
-      VK_JSON_PATH: /contracts/test/fixtures/vk.json
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        set -eu
-        forge script script/Deploy.s.sol:DeployScript \
-          --rpc-url http://anvil:8545 --broadcast 2>&1 | tee /tmp/deploy.log
-        DARKPOOL_ADDR=$$(grep -oE 'DarkPool: 0x[a-fA-F0-9]{40}' /tmp/deploy.log | tail -n1 | awk '{print $$2}')
-        VERIFIER_ADDR=$$(grep -oE 'VerifierProxy: 0x[a-fA-F0-9]{40}' /tmp/deploy.log | tail -n1 | awk '{print $$2}')
-        if [ -z "$$DARKPOOL_ADDR" ] || [ -z "$$VERIFIER_ADDR" ]; then
-          echo "failed to parse deploy output; full log:" >&2
-          cat /tmp/deploy.log >&2
-          exit 1
-        fi
-        # broadcast/ is written as root (foundry image default); make it host-writable.
-        chmod -R a+rwX broadcast 2>/dev/null || true
-        printf 'DARKPOOL_CONTRACT_ADDR=%s\n' "$$DARKPOOL_ADDR" > /shared/contracts.env
-        echo "deployed -> DarkPool=$$DARKPOOL_ADDR VerifierProxy=$$VERIFIER_ADDR (verifier wired via DarkPool ctor)"
-    restart: "no"
-
   darkpool-server:
     build:
       context: .
@@ -77,15 +42,13 @@ services:
         condition: service_healthy
       anvil:
         condition: service_healthy
-      deployer:
-        condition: service_completed_successfully
       keygen:
         condition: service_completed_successfully
         required: false
     volumes:
-      - shared:/shared:ro
       - zk-keys:/keys:ro
     environment:
+      DARKPOOL_CONTRACT_ADDR: ${DARKPOOL_CONTRACT_ADDR:-}
       DARKPOOL_GRPC_ADDR: 0.0.0.0:9090
       DARKPOOL_HTTP_ADDR: 0.0.0.0:8080
       DARKPOOL_EVENT_DB: postgres://${POSTGRES_USER:-darkpool}:${POSTGRES_PASSWORD:-darkpool}@postgres:5432/${POSTGRES_DB:-darkpool}
@@ -108,15 +71,7 @@ services:
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-darkpool-api}
       DP_ENVIRONMENT: ${DP_ENVIRONMENT:-local}
       DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        set -eu
-        set -a
-        . /shared/contracts.env
-        set +a
-        exec /usr/local/bin/darkpool-server
+    entrypoint: ["/usr/local/bin/darkpool-server"]
     ports:
       - "${DARKPOOL_GRPC_PORT:-9090}:9090"
       - "${DARKPOOL_HTTP_PORT:-8080}:8080"
@@ -186,5 +141,4 @@ services:
 
 volumes:
   postgres-data:
-  shared:
   zk-keys:
