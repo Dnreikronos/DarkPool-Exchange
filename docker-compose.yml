@@ -118,6 +118,31 @@ services:
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
 
+  frontend:
+    image: node:22-alpine
+    container_name: darkpool-frontend
+    profiles: ["frontend"]
+    working_dir: /app
+    volumes:
+      - ./front:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      NEXT_PUBLIC_USE_MOCKS: ${NEXT_PUBLIC_USE_MOCKS:-false}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      NEXT_PUBLIC_GRPC_URL: ${NEXT_PUBLIC_GRPC_URL:-http://localhost:9090}
+      NEXT_PUBLIC_CHAIN_ID: ${DARKPOOL_CHAIN_ID:-31337}
+      NEXT_PUBLIC_RPC_URL: ${NEXT_PUBLIC_RPC_URL:-http://localhost:8545}
+      NEXT_PUBLIC_DARKPOOL_ADDR: ${DARKPOOL_CONTRACT_ADDR:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        corepack enable && corepack prepare pnpm@latest --activate
+        pnpm install --frozen-lockfile
+        exec pnpm dev --hostname 0.0.0.0
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
   keygen:
     image: darkpool-server:dev
     container_name: darkpool-keygen
@@ -142,3 +167,4 @@ services:
 volumes:
   postgres-data:
   zk-keys:
+  frontend-node-modules:
