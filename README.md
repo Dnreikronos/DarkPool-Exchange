@@ -139,7 +139,43 @@ flowchart TB
 
 ---
 
-## Build & run
+## Local development (Docker Compose)
+
+Prerequisites: Docker (with Compose v2.20+), [Foundry](https://getfoundry.sh), [just](https://github.com/casey/just).
+
+```bash
+cp .env.example .env
+
+# 1. Start infra (postgres + anvil + dp-api)
+just up
+
+# 2. Deploy contracts to the local anvil chain
+just deploy
+
+# 3. Fund a test trader with mock WETH + USDC
+just fund-trader
+
+# 4. (Optional) Start the frontend on :3000
+just up-frontend
+```
+
+Other useful recipes:
+
+```bash
+just logs                  # tail darkpool-server logs
+just logs anvil            # tail anvil logs
+just up-obs                # add Prometheus + Grafana + Jaeger
+just up-zk                 # add ZK keygen + aggregator
+just ps                    # show running services
+just down                  # stop everything
+just clean                 # stop + remove volumes (destructive)
+```
+
+See `.env.example` for all configurable variables.
+
+---
+
+## Build & run (without Docker)
 
 ```bash
 cargo build --release --workspace

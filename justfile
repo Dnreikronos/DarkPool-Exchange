@@ -100,6 +100,10 @@ up-zk:
     DARKPOOL_ZK_PROVING_KEY={{ZK_KEYS}} \
     {{COMPOSE}} --profile zk up -d --build
 
+# Bring up stack with frontend on :3000
+up-frontend:
+    {{COMPOSE}} --profile frontend up -d --build
+
 # Bring up the obs stack (default services + prometheus/grafana/jaeger; server pushes OTLP to jaeger)
 up-obs:
     OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317} \
@@ -165,6 +169,10 @@ anvil:
 deploy RPC="http://127.0.0.1:8545":
     mkdir -p contracts/deployments
     cd contracts && GIT_SHA=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:DeployScript --rpc-url {{RPC}} --broadcast
+
+# Deploy mock WETH+USDC and fund a test trader (anvil key #0 by default)
+fund-trader RPC="http://127.0.0.1:8545":
+    cd contracts && forge script script/FundTrader.s.sol:FundTrader --rpc-url {{RPC}} --broadcast
 
 # Deploy contracts to a remote chain (Alchemy RPC from .env)
 deploy-remote:
