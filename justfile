@@ -210,6 +210,23 @@ front-lint:
     cd front && pnpm lint
 
 # ---------------------------------------------------------------------------
+# WASM (dp-client browser build)
+# ---------------------------------------------------------------------------
+
+# Build dp-client WASM module for browser
+build-wasm:
+    cd crates/dp-client && wasm-pack build --release --target web \
+        --features wasm --no-default-features
+    mkdir -p front/lib/prover/pkg
+    cp crates/dp-client/pkg/dp_client_bg.wasm front/lib/prover/pkg/
+    cp crates/dp-client/pkg/dp_client.js front/lib/prover/pkg/
+    cp crates/dp-client/pkg/dp_client.d.ts front/lib/prover/pkg/
+
+# Build WASM and report bundle size
+wasm-size: build-wasm
+    @ls -lh front/lib/prover/pkg/dp_client_bg.wasm
+
+# ---------------------------------------------------------------------------
 # Housekeeping
 # ---------------------------------------------------------------------------
 
