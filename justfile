@@ -166,6 +166,10 @@ deploy RPC="http://127.0.0.1:8545":
     mkdir -p contracts/deployments
     cd contracts && GIT_SHA=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:DeployScript --rpc-url {{RPC}} --broadcast
 
+# Deploy mock WETH+USDC and fund a test trader (anvil key #0 by default)
+fund-trader RPC="http://127.0.0.1:8545":
+    cd contracts && forge script script/FundTrader.s.sol:FundTrader --rpc-url {{RPC}} --broadcast
+
 # Deploy contracts to a remote chain (Alchemy RPC from .env)
 deploy-remote:
     @test -n "${RPC_URL:-}" || { echo "ERROR: RPC_URL not set in .env"; exit 1; }
