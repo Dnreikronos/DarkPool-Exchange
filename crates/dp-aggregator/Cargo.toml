@@ -1,0 +1,27 @@
+[package]
+name = "dp-aggregator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dp-auction = { path = "../dp-auction" }
+dp-zk = { path = "../dp-zk" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+tracing = "0.1"
+parking_lot = { workspace = true }
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+ark-std = { workspace = true }
+ark-crypto-primitives = { workspace = true }
+
+[dev-dependencies]
+dp-types = { path = "../dp-types" }
+dp-zk-cli = { path = "../dp-zk-cli" }
+hex = { workspace = true }
+tempfile = "3"
+tracing-subscriber = { workspace = true }

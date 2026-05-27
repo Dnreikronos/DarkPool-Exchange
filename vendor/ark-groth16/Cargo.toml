@@ -1,0 +1,49 @@
+[package]
+name = "ark-groth16"
+version = "0.5.0"
+edition = "2021"
+description = "An implementation of the Groth 2016 zkSNARK proof system (gr1cs-compatible)"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/arkworks-rs/groth16"
+
+[lib]
+name = "ark_groth16"
+path = "src/lib.rs"
+
+[dependencies]
+ark-crypto-primitives = { version = "0.5.0", features = ["snark", "sponge"], default-features = false }
+ark-ec = { version = "0.5.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
+ark-poly = { version = "0.5.0", default-features = false }
+ark-r1cs-std = { version = "0.5.0", optional = true, default-features = false }
+ark-relations = { version = "0.5.0", default-features = false }
+ark-serialize = { version = "0.5.0", features = ["derive"], default-features = false }
+ark-std = { version = "0.5.0", default-features = false }
+rayon = { version = "1", optional = true }
+tracing = { version = "0.1", features = ["attributes"], optional = true, default-features = false }
+
+[features]
+default = ["parallel"]
+parallel = [
+    "std",
+    "ark-ff/parallel",
+    "ark-poly/parallel",
+    "ark-ec/parallel",
+    "ark-crypto-primitives/parallel",
+    "ark-std/parallel",
+    "rayon",
+]
+print-trace = ["ark-std/print-trace"]
+r1cs = [
+    "ark-crypto-primitives/constraints",
+    "ark-r1cs-std",
+    "tracing",
+]
+std = [
+    "ark-ff/std",
+    "ark-ec/std",
+    "ark-poly/std",
+    "ark-relations/std",
+    "ark-crypto-primitives/std",
+    "ark-std/std",
+]

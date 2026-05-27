@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check docs
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - name: Detect unused dependencies
+        continue-on-error: true
+        run: |
+          cargo install cargo-machete
+          cargo machete --with-metadata
+
+  test-coverage:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    services:
+      # Required by crates/dp-event/tests/pg_store.rs once --include-ignored
+      # is set; those tests panic without DARKPOOL_TEST_PG_URL.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: dp
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DARKPOOL_TEST_PG_URL: postgres://postgres:dp@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Foundry (anvil + forge for e2e settlement test)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build Solidity artifacts
+        working-directory: contracts
+        run: forge build
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+      - name: Run tests with coverage
+        # `--include-ignored` runs anvil_e2e (covers EthSubmitter::submit and
+        # Watcher::run, which have no provider-mock alternative) and pg_store
+        # (which uses the postgres service above). Skip the dp-zk perf bench,
+        # which has a 30s wall-clock budget tuned for release-mode local hardware
+        # and runs for hours in debug-mode tarpaulin on a GitHub runner.
+        run: |
+          cargo tarpaulin --workspace \
+            --engine llvm \
+            --timeout 300 \
+            --skip-clean \
+            --out xml \
+            --output-dir coverage \
+            -- --include-ignored --skip prove_batch_within_budget \
+               --skip fold_single_step_verifies \
+               --skip compress_after_n_folds_verifies \
+               --skip fold_sixty_steps_acceptance
+      - name: Convert coverage to generic format
+        run: |
+          python3 -c "
+          import xml.etree.ElementTree as ET, os
+          tree = ET.parse('coverage/cobertura.xml')
+          root = tree.getroot()
+          out = ET.Element('coverage', version='1')
+          for pkg in root.findall('.//package'):
+              for cls in pkg.findall('.//class'):
+                  fn = cls.get('filename', '')
+                  if not fn:
+                      continue
+                  fnode = ET.SubElement(out, 'file', path=fn)
+                  for line in cls.findall('.//line'):
+                      num = line.get('number')
+                      hits = line.get('hits', '0')
+                      if num:
+                          ET.SubElement(fnode, 'lineToCover', lineNumber=num, covered=('true' if int(hits) > 0 else 'false'))
+          os.makedirs('coverage', exist_ok=True)
+          ET.ElementTree(out).write('coverage/sonar-coverage.xml', xml_declaration=True, encoding='UTF-8')
+          "
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  wasm:
+    name: WASM (dp-client)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/dp-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build --release --target web --features wasm --no-default-features
+      - name: Run golden-vector tests
+        run: cargo test -p dp-client --features wasm
+      - name: Record bundle size
+        run: |
+          SIZE=$(wc -c < pkg/dp_client_bg.wasm)
+          SIZE_KB=$((SIZE / 1024))
+          echo "### WASM bundle size" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`dp_client_bg.wasm\`: **${SIZE_KB} KB** (${SIZE} bytes)" >> "$GITHUB_STEP_SUMMARY"
+
+  wasm-zk:
+    name: WASM (dp-zk-wasm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/dp-zk-wasm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build --release --target web --features wasm --no-default-features
+      - name: Run native tests
+        run: cargo test -p dp-zk-wasm
+      - name: Record bundle size
+        run: |
+          SIZE=$(wc -c < pkg/dp_zk_wasm_bg.wasm)
+          SIZE_KB=$((SIZE / 1024))
+          echo "### ZK WASM bundle size" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`dp_zk_wasm_bg.wasm\`: **${SIZE_KB} KB** (${SIZE} bytes)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SIZE" -gt 8388608 ]; then
+            echo "::error::dp_zk_wasm_bg.wasm exceeds 8 MB ($SIZE bytes)"
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - run: npm ci
+      - name: Verify SDK is regenerated from proto
+        # Fails if front/lib/sdk/proto/ drifts from
+        # crates/dp-api/proto/darkpool/v1/darkpool.proto. Run
+        # `npm run sdk:gen` locally to refresh.
+        run: |
+          npm run sdk:gen
+          git diff --exit-code -- lib/sdk/proto
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - name: Build (Next.js)
+        # front/lib/config.ts validates NEXT_PUBLIC_* env at module
+        # load. The wallet provider chain pulls it into the page-data
+        # collection step, so the build needs the dev defaults from
+        # front/.env.local.example. Values are non-secret and mirror
+        # the example file.
+        env:
+          NEXT_PUBLIC_USE_MOCKS: 'true'
+          NEXT_PUBLIC_DARKPOOL_API_URL: 'http://localhost:8080'
+          NEXT_PUBLIC_DARKPOOL_API_KEY: 'darkpool-dev-key'
+          NEXT_PUBLIC_CHAIN_ID: '31337'
+          NEXT_PUBLIC_OPERATOR_PUBKEY_URL: 'http://localhost:8080/v1/operator/pubkey'
+        run: npm run build
+      - name: Run vitest unit tests
+        run: npm test -- --reporter=default

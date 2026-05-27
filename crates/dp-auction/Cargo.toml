@@ -1,0 +1,14 @@
+[package]
+name = "dp-auction"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dp-types = { path = "../dp-types" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+alloy-primitives = { workspace = true }
+chrono = { workspace = true }

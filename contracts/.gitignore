@@ -1,0 +1,4 @@
+/out/
+/cache/
+/deployments/*
+!/deployments/31337.json

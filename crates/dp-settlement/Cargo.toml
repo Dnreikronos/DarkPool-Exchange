@@ -1,0 +1,45 @@
+[package]
+name = "dp-settlement"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dp-auction = { path = "../dp-auction" }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-sol-types = { workspace = true }
+alloy-provider = { workspace = true }
+alloy-signer-local = { workspace = true }
+alloy-network = { workspace = true }
+alloy-contract = { workspace = true }
+alloy-rpc-types = { workspace = true }
+alloy-transport = { workspace = true }
+hex = { workspace = true }
+tracing = "0.1"
+futures-util = "0.3"
+age = { version = "0.10", default-features = false, features = ["armor"] }
+zeroize = "1.8"
+
+[features]
+default = []
+# Enables the `awskms:` signer URI scheme. The scaffold currently returns
+# a "not implemented" error; the feature flag exists so downstream crates
+# can wire the KMS dependency tree without bringing aws-sdk into the
+# default build.
+aws-kms = []
+# Enables HyperNova IVC proof submission (submitSession / settleAuction).
+hypernova = []
+
+[dev-dependencies]
+dp-types = { path = "../dp-types" }
+alloy-node-bindings = "1"
+which = "6"
+tracing-subscriber = { workspace = true }
+tempfile = "3"
+serial_test = { workspace = true }

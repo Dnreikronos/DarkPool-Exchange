@@ -1,0 +1,122 @@
+[
+  {
+    "label": "alice_bid_100_10_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "221ab7304a89b8c85504d2711eca0fad71d02dece5d47543ce4b54e4cfb0bd73",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_ask_100_10_zero_salt",
+    "commitment_key": "alice",
+    "side": 1,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "236623ab64627cad0a49c94b8b763634c76c5c18314a974173bf2a912ef64212",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_bid_2500_1.5_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "2500.00",
+    "size": "1.5",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "1e7b7493bb5a0a83e5ad4e00df5d5e7e020c07e2facb71af8924076192bf7afd",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_bid_0_0_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "0",
+    "size": "0",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "26bf1df38da8fbe9a169e1cd6412b2ff5e31a096fd4b219031be5925c468ffce",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_bid_10M_10M_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "10000000",
+    "size": "10000000",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "1ac17836ef28369a60d0f8b3da939fe728a5c8a2e587554520e6fbec3bd7b9d4",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "bob_bid_100_10_zero_salt",
+    "commitment_key": "bob",
+    "side": 0,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "2a975dd487539da3f69f737d270abb7584ac7989d49be4019440262db162e276",
+    "expected_trader_id_hex": "1b6fcbe358ecbf6743079fe7cb923e30addf6abca95b842ebbde4ac484cdf78b"
+  },
+  {
+    "label": "empty_key_bid_100_10_zero_salt",
+    "commitment_key": "",
+    "side": 0,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "0c753a636c0da87f567a7aaaa2b7dd35b6299727735eecc39480ff9348c50fc7",
+    "expected_trader_id_hex": "13a545a13f1d91dddb87f46679dfaec0900ce24791a924bee7fa4d69a9569d85"
+  },
+  {
+    "label": "alice_bid_100_10_ab_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "abababababababababababababababababababababababababababababababab",
+    "expected_commitment_hex": "2371492fc3b0e7600e4f6f322c334a110c5fdf173dfdf67c438afbd344c24926",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_ask_100_10_ff_salt",
+    "commitment_key": "alice",
+    "side": 1,
+    "price": "100",
+    "size": "10",
+    "salt_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected_commitment_hex": "1f3dbbfcfcbeac5022c63eb1030744831370aa56c110bf268a2038415cca3ed9",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "alice_bid_1_1_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "1",
+    "size": "1",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "04932928fecbf8ea59be0f2ff4d5439308890925d80f33da9f0c349259847fdf",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  },
+  {
+    "label": "bob_ask_3500.50_0.25_11_salt",
+    "commitment_key": "bob",
+    "side": 1,
+    "price": "3500.50",
+    "size": "0.25",
+    "salt_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "expected_commitment_hex": "0a750c9302c550837dabc2ad8a5565748e89ff6b0ec91f109f7b7699d12db6d6",
+    "expected_trader_id_hex": "1b6fcbe358ecbf6743079fe7cb923e30addf6abca95b842ebbde4ac484cdf78b"
+  },
+  {
+    "label": "alice_bid_1sat_1sat_zero_salt",
+    "commitment_key": "alice",
+    "side": 0,
+    "price": "0.00000001",
+    "size": "0.00000001",
+    "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_commitment_hex": "0a867400adbfe4b126ab60fa22ed6675feb6b547fbdf2a88074d4dfa92d6e2e2",
+    "expected_trader_id_hex": "0b5ddce136b4437b7df9a9c9a15738d2bf060737790af21312f0e3d6f0125a2e"
+  }
+]

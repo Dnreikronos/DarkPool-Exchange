@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+  external_labels:
+    environment: local
+
+scrape_configs:
+  - job_name: darkpool
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['darkpool-server:8080']

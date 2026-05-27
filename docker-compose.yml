@@ -1,0 +1,170 @@
+# Requires docker compose v2.20+ (uses `depends_on.<svc>.required: false`).
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: darkpool-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-darkpool}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-darkpool}
+      POSTGRES_DB: ${POSTGRES_DB:-darkpool}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-darkpool} -d ${POSTGRES_DB:-darkpool}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:stable
+    container_name: darkpool-anvil
+    restart: unless-stopped
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337", "--block-time", "1"]
+    ports:
+      - "${ANVIL_PORT:-8545}:8545"
+    healthcheck:
+      test: ["CMD-SHELL", "cast block-number --rpc-url http://localhost:8545 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  darkpool-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: darkpool-server:dev
+    container_name: darkpool-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      anvil:
+        condition: service_healthy
+      keygen:
+        condition: service_completed_successfully
+        required: false
+    volumes:
+      - zk-keys:/keys:ro
+    environment:
+      DARKPOOL_CONTRACT_ADDR: ${DARKPOOL_CONTRACT_ADDR:-}
+      DARKPOOL_GRPC_ADDR: 0.0.0.0:9090
+      DARKPOOL_HTTP_ADDR: 0.0.0.0:8080
+      DARKPOOL_EVENT_DB: postgres://${POSTGRES_USER:-darkpool}:${POSTGRES_PASSWORD:-darkpool}@postgres:5432/${POSTGRES_DB:-darkpool}
+      DARKPOOL_AUCTION_INTERVAL: ${DARKPOOL_AUCTION_INTERVAL:-5s}
+      DARKPOOL_ETH_RPC: http://anvil:8545
+      DARKPOOL_CHAIN_ID: ${DARKPOOL_CHAIN_ID:-31337}
+      DARKPOOL_OPERATOR_KEY: ${DARKPOOL_OPERATOR_KEY:-}
+      DARKPOOL_AGGREGATOR_BIN: ${DARKPOOL_AGGREGATOR_BIN:-}
+      DARKPOOL_AGGREGATOR_TIMEOUT: ${DARKPOOL_AGGREGATOR_TIMEOUT:-30s}
+      DARKPOOL_ZK_PROVING_KEY: ${DARKPOOL_ZK_PROVING_KEY:-}
+      DARKPOOL_ZK_BATCH_SIZE: ${DARKPOOL_ZK_BATCH_SIZE:-8}
+      DARKPOOL_SUBMIT_TIMEOUT: ${DARKPOOL_SUBMIT_TIMEOUT:-0s}
+      DARKPOOL_SUBMIT_GAS: ${DARKPOOL_SUBMIT_GAS:-500000}
+      DARKPOOL_API_KEYS: ${DARKPOOL_API_KEYS:-}
+      DARKPOOL_RATE_LIMIT: ${DARKPOOL_RATE_LIMIT:-10}
+      DARKPOOL_RATE_BURST: ${DARKPOOL_RATE_BURST:-20}
+      DARKPOOL_RATE_STALE_AFTER: ${DARKPOOL_RATE_STALE_AFTER:-10m}
+      RUST_LOG: ${RUST_LOG:-info,dp_event=debug,dp_engine=info}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-darkpool-api}
+      DP_ENVIRONMENT: ${DP_ENVIRONMENT:-local}
+      DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
+    entrypoint: ["/usr/local/bin/darkpool-server"]
+    ports:
+      - "${DARKPOOL_GRPC_PORT:-9090}:9090"
+      - "${DARKPOOL_HTTP_PORT:-8080}:8080"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: darkpool-jaeger
+    profiles: ["obs"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: darkpool-prometheus
+    profiles: ["obs"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: darkpool-grafana
+    profiles: ["obs"]
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/darkpool.json:/var/lib/grafana/dashboards/darkpool.json:ro
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+
+  frontend:
+    image: node:22-alpine
+    container_name: darkpool-frontend
+    profiles: ["frontend"]
+    working_dir: /app
+    volumes:
+      - ./front:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      NEXT_PUBLIC_USE_MOCKS: ${NEXT_PUBLIC_USE_MOCKS:-false}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      NEXT_PUBLIC_GRPC_URL: ${NEXT_PUBLIC_GRPC_URL:-http://localhost:9090}
+      NEXT_PUBLIC_CHAIN_ID: ${DARKPOOL_CHAIN_ID:-31337}
+      NEXT_PUBLIC_RPC_URL: ${NEXT_PUBLIC_RPC_URL:-http://localhost:8545}
+      NEXT_PUBLIC_DARKPOOL_ADDR: ${DARKPOOL_CONTRACT_ADDR:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        corepack enable && corepack prepare pnpm@latest --activate
+        pnpm install --frozen-lockfile
+        exec pnpm dev --hostname 0.0.0.0
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+  keygen:
+    image: darkpool-server:dev
+    container_name: darkpool-keygen
+    profiles: ["zk"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "0:0"
+    volumes:
+      - zk-keys:/keys
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /keys/proving_key.bin ]; then
+          /usr/local/bin/dp-zk-keygen --out /keys --batch-size ${DARKPOOL_ZK_BATCH_SIZE:-8} --seed ${DARKPOOL_ZK_KEYGEN_SEED:-42}
+        else
+          echo "keys already present at /keys, skipping keygen"
+        fi
+    restart: "no"
+
+volumes:
+  postgres-data:
+  zk-keys:
+  frontend-node-modules:

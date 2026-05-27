@@ -1,0 +1,101 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dp-types",
+    "crates/dp-crypto",
+    "crates/dp-event",
+    "crates/dp-book",
+    "crates/dp-auction",
+    "crates/dp-aggregator",
+    "crates/dp-settlement",
+    "crates/dp-engine",
+    "crates/dp-api",
+    "crates/dp-zk",
+    "crates/dp-zk-cli",
+    "crates/dp-zk-wasm",
+]
+
+[workspace.dependencies]
+uuid = { version = "1", features = ["v4", "serde"] }
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_repr = "0.1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+parking_lot = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+ecies = { version = "0.2", default-features = false, features = ["pure"] }
+bincode = "1"
+tokio-util = { version = "0.7", features = ["rt"] }
+alloy-primitives = "1"
+alloy-sol-types = { version = "1", features = ["json"] }
+alloy-provider = { version = "1", features = ["ws"] }
+alloy-signer-local = "1"
+alloy-network = "1"
+alloy-contract = "1"
+alloy-rpc-types = "1"
+alloy-transport = "1"
+tonic = "0.12"
+tonic-build = "0.12"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+prost = "0.13"
+prost-types = "0.13"
+axum = "0.7"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "trace", "request-id"] }
+base64 = "0.22"
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false }
+tracing-opentelemetry = "0.27"
+opentelemetry = "0.26"
+opentelemetry-otlp = { version = "0.26", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+async-trait = "0.1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+humantime = "2"
+ulid = "1"
+futures-util = "0.3"
+serial_test = "3"
+ark-ff = { version = "0.5", default-features = false }
+ark-ec = { version = "0.5", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+ark-serialize = { version = "0.5", default-features = false, features = ["derive"] }
+ark-relations = { version = "0.5", default-features = false }
+ark-r1cs-std = { version = "0.5", default-features = false }
+ark-snark = { version = "0.5", default-features = false }
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+ark-groth16 = { version = "0.5", default-features = false }
+ark-crypto-primitives = { version = "0.5", default-features = false, features = ["sponge", "constraints"] }
+ark-grumpkin = { version = "0.5", default-features = false }
+folding-schemes = { git = "https://github.com/privacy-scaling-explorations/sonobe", rev = "63f2930d363150d4490ce2c4be8e0c25c2e1d92c" }
+
+[patch.crates-io]
+ark-groth16 = { path = "vendor/ark-groth16" }
+# These four patches MUST stay unpinned (no `rev`). Sonobe's transitive deps
+# pull the same repos without `rev`; adding one here creates a duplicate source
+# in Cargo's resolver → compile failure. Cargo.lock is the effective pin.
+# Expected locked SHAs (see VERSIONS.md):
+#   ark-relations/ark-snark: 845ce9d50bbe535792f04b44db78b009ee402ed7
+#   ark-std:                 1693bc56d2ca6657b623f33a3f0b009d0ffeb892
+#   ark-poly-commit:         a05ec99d0d3e46c8ba0d6d3592980777bc2847e8
+ark-relations = { git = "https://github.com/arkworks-rs/snark" }
+ark-snark = { git = "https://github.com/arkworks-rs/snark" }
+ark-crypto-primitives = { git = "https://github.com/flyingnobita/crypto-primitives", rev = "f559264" }
+ark-r1cs-std = { git = "https://github.com/flyingnobita/r1cs-std_yelhousni", rev = "b4bab0c" }
+ark-std = { git = "https://github.com/arkworks-rs/std" }
+ark-poly-commit = { git = "https://github.com/arkworks-rs/poly-commit" }
+
+[patch."https://github.com/arkworks-rs/crypto-primitives.git"]
+ark-crypto-primitives = { git = "https://github.com/flyingnobita/crypto-primitives", rev = "f559264" }

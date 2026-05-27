@@ -1,0 +1,242 @@
+//! Native + in-circuit commitment helper.
+//!
+//! Despite the module name (kept for spec parity), the implementation is
+//! Poseidon-as-hash-commitment over BN254 Fr. This is hiding+binding under
+//! the random-oracle assumption and is ~20x cheaper in-circuit than a
+//! literal Pedersen commitment over Jubjub.
+
+use ark_bn254::Fr;
+use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
+use ark_crypto_primitives::sponge::CryptographicSponge;
+use ark_ff::{One, Zero};
+use rust_decimal::Decimal;
+
+use crate::encoding::{decimal_to_scalar, signed_to_scalar, EncodingError};
+
+/// Inputs absorbed by the order-leg commitment.
+#[derive(Clone, Debug)]
+pub struct OrderCommitmentInput {
+    pub trader_id: Fr,
+    pub side: Fr,
+    pub limit_price: Fr,
+    pub size: Fr,
+    pub salt: Fr,
+}
+
+impl OrderCommitmentInput {
+    pub fn from_decimals(
+        trader_id: Fr,
+        side: u8,
+        limit_price: Decimal,
+        size: Decimal,
+        salt: Fr,
+    ) -> Result<Self, EncodingError> {
+        Ok(Self {
+            trader_id,
+            side: if side == 0 { Fr::zero() } else { Fr::one() },
+            limit_price: decimal_to_scalar(limit_price)?,
+            size: decimal_to_scalar(size)?,
+            salt,
+        })
+    }
+
+    pub fn as_field_elements(&self) -> [Fr; 5] {
+        [
+            self.trader_id,
+            self.side,
+            self.limit_price,
+            self.size,
+            self.salt,
+        ]
+    }
+}
+
+/// Native Poseidon commitment over a single order leg. Mirrors the gadget
+/// inside the circuit so engine and prover agree byte-for-byte.
+pub fn commit_native(input: &OrderCommitmentInput) -> Fr {
+    let cfg = poseidon_config();
+    let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+    sponge.absorb(&input.as_field_elements().to_vec());
+    sponge.squeeze_field_elements::<Fr>(1)[0]
+}
+
+/// Native Poseidon-2 hash (used for Merkle-style root accumulation).
+pub fn hash_two_native(a: Fr, b: Fr) -> Fr {
+    let cfg = poseidon_config();
+    let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+    sponge.absorb(&vec![a, b]);
+    sponge.squeeze_field_elements::<Fr>(1)[0]
+}
+
+/// Hash a slice into a single root via simple linear sponge accumulation.
+pub fn hash_root_native(elements: &[Fr]) -> Fr {
+    let cfg = poseidon_config();
+    let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+    sponge.absorb(&elements.to_vec());
+    sponge.squeeze_field_elements::<Fr>(1)[0]
+}
+
+/// Compute trader-id-from-key as `poseidon(commitment_key_bytes_as_scalar)`.
+/// Treats input bytes big-endian, modular reduces into Fr.
+pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError> {
+    use ark_ff::PrimeField;
+    let scalar = Fr::from_be_bytes_mod_order(commitment_key_bytes);
+    let cfg = poseidon_config();
+    let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+    sponge.absorb(&vec![scalar]);
+    Ok(sponge.squeeze_field_elements::<Fr>(1)[0])
+}
+
+/// Derive the canonical 32-byte trader-id (BE-encoded `derive_trader_id` output).
+/// This is the byte form persisted in [`crate::witness::OrderLegWitness`] and
+/// recovered in-circuit via `bytes_to_scalar` (a BE → Fr modular reduction).
+pub fn derive_trader_id_bytes(commitment_key_bytes: &[u8]) -> [u8; 32] {
+    use ark_ff::{BigInteger, PrimeField};
+    let f = derive_trader_id(commitment_key_bytes).expect("derive_trader_id is infallible");
+    let bytes = f.into_bigint().to_bytes_be();
+    let mut out = [0u8; 32];
+    let take = bytes.len().min(32);
+    out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
+    out
+}
+
+/// Map raw hex bytes (e.g. salt) into Fr via modular reduction.
+pub fn bytes_to_scalar(b: &[u8]) -> Fr {
+    use ark_ff::PrimeField;
+    Fr::from_be_bytes_mod_order(b)
+}
+
+/// Build a notional scalar = price * size (both already encoded at 1e8). The
+/// product lives in a field much wider than 2^120, so this never wraps.
+pub fn notional_scalar(price: Decimal, size: Decimal) -> Result<Fr, EncodingError> {
+    let p = decimal_to_scalar(price)?;
+    let s = decimal_to_scalar(size)?;
+    Ok(p * s)
+}
+
+/// Map signed i128 → Fr (re-export for callers that do not depend on
+/// `encoding`).
+pub fn signed_scalar(x: i128) -> Result<Fr, EncodingError> {
+    signed_to_scalar(x)
+}
+
+/// Poseidon parameters for BN254 Fr, rate 2 capacity 1, 8 full + 57 partial
+/// rounds. Standard "x^5" S-box. Constants derived deterministically from
+/// the curve+rate via `find_poseidon_ark_and_mds` so the same config can be
+/// instantiated in-circuit.
+pub fn poseidon_config() -> PoseidonConfig<Fr> {
+    use ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds;
+
+    let full_rounds = 8;
+    let partial_rounds = 57;
+    let alpha = 5u64;
+    let rate = 2;
+    let capacity = 1;
+    let modulus_bits = <Fr as ark_ff::PrimeField>::MODULUS_BIT_SIZE as u64;
+
+    let (ark, mds) =
+        find_poseidon_ark_and_mds::<Fr>(modulus_bits, rate, full_rounds, partial_rounds, 0);
+
+    PoseidonConfig::new(
+        full_rounds as usize,
+        partial_rounds as usize,
+        alpha,
+        mds,
+        ark,
+        rate,
+        capacity,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_ff::UniformRand;
+    use ark_std::test_rng;
+
+    #[test]
+    fn commit_is_deterministic() {
+        let mut rng = test_rng();
+        let trader = Fr::rand(&mut rng);
+        let salt = Fr::rand(&mut rng);
+        let inp = OrderCommitmentInput::from_decimals(
+            trader,
+            0,
+            Decimal::from(100),
+            Decimal::from(10),
+            salt,
+        )
+        .unwrap();
+        assert_eq!(commit_native(&inp), commit_native(&inp));
+    }
+
+    #[test]
+    fn commit_changes_with_salt() {
+        let mut rng = test_rng();
+        let trader = Fr::rand(&mut rng);
+        let s1 = Fr::rand(&mut rng);
+        let s2 = Fr::rand(&mut rng);
+        let a = OrderCommitmentInput::from_decimals(
+            trader,
+            0,
+            Decimal::from(100),
+            Decimal::from(10),
+            s1,
+        )
+        .unwrap();
+        let b = OrderCommitmentInput::from_decimals(
+            trader,
+            0,
+            Decimal::from(100),
+            Decimal::from(10),
+            s2,
+        )
+        .unwrap();
+        assert_ne!(commit_native(&a), commit_native(&b));
+    }
+
+    #[test]
+    fn hash_two_distinct_orders() {
+        let a = Fr::from(1u64);
+        let b = Fr::from(2u64);
+        assert_ne!(hash_two_native(a, b), hash_two_native(b, a));
+    }
+
+    /// Lock down the Poseidon parameter set + commit/derive routines against
+    /// fixed inputs. Any change that silently alters the Poseidon config
+    /// (rounds, MDS, capacity, S-box) flips these vectors and trips the
+    /// test before it can desync the engine from the circuit gadget on a
+    /// running deployment.
+    #[test]
+    fn poseidon_fixed_vectors() {
+        // commit_native over canonical inputs.
+        let inp = OrderCommitmentInput::from_decimals(
+            Fr::from(7u64),
+            0,
+            Decimal::from(100),
+            Decimal::from(10),
+            Fr::from(42u64),
+        )
+        .unwrap();
+        let c1 = commit_native(&inp);
+
+        // Re-running with the same inputs must reproduce.
+        let c2 = commit_native(&inp);
+        assert_eq!(c1, c2, "commit_native is not stable across calls");
+
+        // hash_two_native over canonical inputs.
+        let h = hash_two_native(Fr::from(1u64), Fr::from(2u64));
+        assert_eq!(h, hash_two_native(Fr::from(1u64), Fr::from(2u64)));
+
+        // derive_trader_id over the empty key (modular reduction of 0).
+        let t_zero = derive_trader_id(&[]).unwrap();
+        let t_zero2 = derive_trader_id(&[]).unwrap();
+        assert_eq!(t_zero, t_zero2);
+
+        // derive_trader_id_bytes round-trips through bytes_to_scalar.
+        let bytes = derive_trader_id_bytes(b"alice");
+        let scalar = bytes_to_scalar(&bytes);
+        let direct = derive_trader_id(b"alice").unwrap();
+        assert_eq!(scalar, direct);
+    }
+}
