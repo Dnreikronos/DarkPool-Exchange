@@ -1,3 +1,5 @@
+'use client'
+
 type WasmExports = typeof import('./pkg/dp_client');
 
 let cached: WasmExports | null = null;
