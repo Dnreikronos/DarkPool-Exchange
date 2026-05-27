@@ -47,3 +47,8 @@ export async function encryptOrderWasm(
   const m = await getModule();
   return m.encrypt_order_wasm(pubkeyHex, orderJson);
 }
+
+// ZK prover (Groth16 via Web Worker)
+export { useProver } from './useProver'
+export type { ProverState, ProverProgress, ProveResult, UseProverReturn } from './useProver'
+export type { WitnessInput } from './prover.worker'
