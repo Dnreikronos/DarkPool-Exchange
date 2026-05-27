@@ -27,10 +27,15 @@ export function useProver(): UseProverReturn {
   const [state, setState] = useState<ProverState>('idle')
   const [progress, setProgress] = useState<ProverProgress | null>(null)
   const workerRef = useRef<Worker | null>(null)
-  const pendingRef = useRef<Map<string, {
-    resolve: (r: ProveResult) => void
-    reject: (e: Error) => void
-  }>>(new Map())
+  const pendingRef = useRef<
+    Map<
+      string,
+      {
+        resolve: (r: ProveResult) => void
+        reject: (e: Error) => void
+      }
+    >
+  >(new Map())
   const idCounter = useRef(0)
 
   const getWorker = useCallback((): Worker => {
