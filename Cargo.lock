@@ -2319,6 +2319,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "humantime",
+ "jsonwebtoken",
  "k256",
  "metrics",
  "metrics-exporter-prometheus",
@@ -2338,8 +2339,10 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha2",
+ "siwe",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -6001,6 +6004,22 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
+name = "siwe"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95bdefc0eedf06440b27092fbfe33f2cb493ad6a3423aa12cfe7f2aac44bd618"
+dependencies = [
+ "hex",
+ "http",
+ "iri-string",
+ "k256",
+ "rand 0.8.6",
+ "sha3",
+ "thiserror 1.0.69",
  "time",
 ]
 
