@@ -29,14 +29,8 @@ pub fn prove_order(witness_json: &str) -> Result<ProveResult, String> {
     }
     let side_fr = Fr::from(w.side as u64);
 
-    let price: rust_decimal::Decimal = w
-        .price
-        .parse()
-        .map_err(|e| format!("bad price: {e}"))?;
-    let size: rust_decimal::Decimal = w
-        .size
-        .parse()
-        .map_err(|e| format!("bad size: {e}"))?;
+    let price: rust_decimal::Decimal = w.price.parse().map_err(|e| format!("bad price: {e}"))?;
+    let size: rust_decimal::Decimal = w.size.parse().map_err(|e| format!("bad size: {e}"))?;
     let price_fr = decimal_to_scalar(price).map_err(|e| format!("price encoding: {e}"))?;
     let size_fr = decimal_to_scalar(size).map_err(|e| format!("size encoding: {e}"))?;
 
@@ -80,8 +74,7 @@ mod wasm_bindings {
 
     #[wasm_bindgen]
     pub fn prove_order_wasm(witness_json: &str) -> Result<js_sys::Uint8Array, JsError> {
-        let result =
-            super::prove_order(witness_json).map_err(|e| JsError::new(&e))?;
+        let result = super::prove_order(witness_json).map_err(|e| JsError::new(&e))?;
 
         let proof_len = result.proof.len() as u32;
         let vk_len = result.vk.len() as u32;
@@ -122,10 +115,8 @@ mod tests {
     fn prove_and_verify_round_trip() {
         let result = prove_order(&sample_witness_json()).unwrap();
 
-        let commitment = <Fr as CanonicalSerialize>::serialized_size(
-            &Fr::from(0u64),
-            Compress::Yes,
-        );
+        let commitment =
+            <Fr as CanonicalSerialize>::serialized_size(&Fr::from(0u64), Compress::Yes);
         assert_eq!(result.commitment.len(), commitment);
 
         let c: Fr = ark_serialize::CanonicalDeserialize::deserialize_with_mode(
