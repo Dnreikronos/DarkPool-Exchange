@@ -17,19 +17,25 @@
 
 pub mod commitment_circuit;
 pub mod encoding;
+#[cfg(feature = "ivc")]
 pub mod folding;
+#[cfg(feature = "ivc")]
 pub mod params;
 pub mod pedersen;
+#[cfg(feature = "ivc")]
 pub mod step_circuit;
 pub mod witness;
 
 pub use encoding::{decimal_to_scalar, fr_to_bytes32, EncodingError};
+#[cfg(feature = "ivc")]
 pub use folding::{
     compress_and_finalize, fold_step, generate_params, init_accumulator, verify_final, FinalProof,
     FoldingAccumulator, HyperNovaPublicParams,
 };
 pub use pedersen::{commit_native, OrderCommitmentInput};
-pub use witness::{BatchWitness, MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
+#[cfg(feature = "ivc")]
+pub use witness::BatchWitness;
+pub use witness::{MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZkError {
