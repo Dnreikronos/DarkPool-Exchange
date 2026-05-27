@@ -3,6 +3,7 @@
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "ivc")]
 use uuid::Uuid;
 
 use crate::encoding::{decimal_to_scalar, signed_to_scalar, EncodingError};
@@ -69,6 +70,7 @@ impl PolicyDefault {
     }
 }
 
+#[cfg(feature = "ivc")]
 /// Full per-batch witness, mirroring the JSON wire format consumed by
 /// `dp-zk-cli`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +81,7 @@ pub struct BatchWitness {
     pub policy: Policy,
 }
 
+#[cfg(feature = "ivc")]
 impl BatchWitness {
     pub fn empty(batch_id: Uuid, auction_id: Uuid) -> Self {
         Self {
@@ -123,7 +126,7 @@ impl OrderLegWitness {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ivc"))]
 mod tests {
     use super::*;
 

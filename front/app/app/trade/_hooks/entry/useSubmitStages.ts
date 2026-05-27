@@ -39,8 +39,18 @@ export interface SubmitPayload {
   size: string
 }
 
+export interface ProvePayload {
+  commitment_key: string
+  side: number
+  price: string
+  size: string
+  salt_hex: string
+}
+
 export interface SubmissionDeps {
   placeOrder: (payload: SubmitPayload) => void | Promise<void>
+  /** Real ZK prover. When provided, replaces the mock delay during the proving stage. */
+  prove?: (witness: ProvePayload) => Promise<{ proof: Uint8Array; commitment: Uint8Array }>
   /** Returns a promise that resolves after `ms`. Defaults to setTimeout. */
   delay?: (ms: number) => Promise<void>
 }
@@ -91,14 +101,25 @@ export async function runSubmission(
       if (aborted()) return
       opts.onPhase({ kind: 'running', stage, progress: progressAtStartOfStage(stage) })
 
-      // placeOrder runs at the start of the SUBMIT stage so the
-      // mock-store mutation lands while the user still sees the
-      // "SUBMITTING" label. A synchronous throw surfaces here.
-      if (stage === 'submitting') {
+      if (stage === 'proving' && opts.prove) {
+        const randomHex = (n: number) =>
+          Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) =>
+            b.toString(16).padStart(2, '0')
+          ).join('')
+        await opts.prove({
+          commitment_key: randomHex(32),
+          side: payload.side === 'buy' ? 0 : 1,
+          price: payload.price,
+          size: payload.size,
+          salt_hex: randomHex(32),
+        })
+      } else if (stage === 'submitting') {
         await Promise.resolve(opts.placeOrder(payload))
       }
 
-      await delay(STAGE_DURATIONS_MS[stage])
+      if (!(stage === 'proving' && opts.prove)) {
+        await delay(STAGE_DURATIONS_MS[stage])
+      }
       if (aborted()) return
       opts.onPhase({ kind: 'running', stage, progress: progressAtEndOfStage(stage) })
     }
@@ -150,6 +171,7 @@ export function useSubmitStages(params: UseSubmitStagesParams): UseSubmitStagesR
 
     await runSubmission(payload, {
       placeOrder: paramsRef.current.placeOrder,
+      prove: paramsRef.current.prove,
       delay: paramsRef.current.delay,
       shouldAbort: isStale,
       onPhase: (next) => {

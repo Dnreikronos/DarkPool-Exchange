@@ -12,6 +12,7 @@ members = [
     "crates/dp-api",
     "crates/dp-zk",
     "crates/dp-zk-cli",
+    "crates/dp-zk-wasm",
 ]
 
 [workspace.dependencies]
