@@ -19,11 +19,21 @@ export type ProverResponse =
   | { type: 'error'; id: string; message: string }
 
 let wasmReady = false
+let wasmInitPromise: Promise<void> | null = null
 
 async function loadWasm() {
-  const wasmUrl = new URL('./zk-pkg/dp_zk_wasm_bg.wasm', import.meta.url)
-  await init(wasmUrl)
-  wasmReady = true
+  if (wasmReady) return
+  if (!wasmInitPromise) {
+    const wasmUrl = new URL('./zk-pkg/dp_zk_wasm_bg.wasm', import.meta.url)
+    wasmInitPromise = init(wasmUrl)
+      .then(() => {
+        wasmReady = true
+      })
+      .finally(() => {
+        if (!wasmReady) wasmInitPromise = null
+      })
+  }
+  await wasmInitPromise
 }
 
 function parseProveResult(buf: Uint8Array): {
@@ -31,6 +41,10 @@ function parseProveResult(buf: Uint8Array): {
   vk: Uint8Array
   commitment: Uint8Array
 } {
+  if (buf.byteLength < 12) {
+    throw new Error('Invalid prove result: header too short')
+  }
+
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
   const proofLen = view.getUint32(0, true)
   const vkLen = view.getUint32(4, true)
@@ -39,6 +53,11 @@ function parseProveResult(buf: Uint8Array): {
   const proofStart = 12
   const vkStart = proofStart + proofLen
   const commitmentStart = vkStart + vkLen
+  const end = commitmentStart + commitmentLen
+
+  if (end > buf.byteLength) {
+    throw new Error('Invalid prove result: truncated payload')
+  }
 
   return {
     proof: buf.slice(proofStart, proofStart + proofLen),
