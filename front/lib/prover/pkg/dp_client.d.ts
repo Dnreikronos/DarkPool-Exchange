@@ -13,8 +13,7 @@ export function encrypt_order_wasm(
 export function prepare_order_wasm(
   operator_pubkey_hex: string,
   order_json: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): any;
+): string;
 
 export type InitInput =
   | RequestInfo
