@@ -147,6 +147,35 @@ jobs:
           echo "### WASM bundle size" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`dp_client_bg.wasm\`: **${SIZE_KB} KB** (${SIZE} bytes)" >> "$GITHUB_STEP_SUMMARY"
 
+  wasm-zk:
+    name: WASM (dp-zk-wasm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/dp-zk-wasm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build --release --target web --features wasm --no-default-features
+      - name: Run native tests
+        run: cargo test -p dp-zk-wasm
+      - name: Record bundle size
+        run: |
+          SIZE=$(wc -c < pkg/dp_zk_wasm_bg.wasm)
+          SIZE_KB=$((SIZE / 1024))
+          echo "### ZK WASM bundle size" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`dp_zk_wasm_bg.wasm\`: **${SIZE_KB} KB** (${SIZE} bytes)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SIZE" -gt 8388608 ]; then
+            echo "::error::dp_zk_wasm_bg.wasm exceeds 8 MB ($SIZE bytes)"
+            exit 1
+          fi
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
