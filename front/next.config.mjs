@@ -39,6 +39,10 @@ const nextConfig = {
       encoding: false,
       lokijs: false,
     };
+    config.experiments = {
+      ...(config.experiments ?? {}),
+      asyncWebAssembly: true,
+    };
     return config;
   },
 };

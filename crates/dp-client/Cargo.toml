@@ -41,11 +41,7 @@ js-sys = { version = "0.3", optional = true }
 getrandom = { version = "0.2", optional = true, features = ["js"] }
 
 [dev-dependencies]
-dp-crypto = { path = "../dp-crypto" }
-dp-types = { path = "../dp-types" }
-dp-zk = { path = "../dp-zk" }
 k256 = "0.13"
-tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 
 [[bin]]

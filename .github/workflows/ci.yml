@@ -122,6 +122,31 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  wasm:
+    name: WASM (dp-client)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/dp-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build --release --target web --features wasm --no-default-features
+      - name: Run golden-vector tests
+        run: cargo test -p dp-client --features wasm
+      - name: Record bundle size
+        run: |
+          SIZE=$(wc -c < pkg/dp_client_bg.wasm)
+          SIZE_KB=$((SIZE / 1024))
+          echo "### WASM bundle size" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`dp_client_bg.wasm\`: **${SIZE_KB} KB** (${SIZE} bytes)" >> "$GITHUB_STEP_SUMMARY"
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
