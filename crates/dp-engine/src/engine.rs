@@ -454,7 +454,7 @@ impl Engine {
 
     #[tracing::instrument(
         name = "dp_engine.place_encrypted_order",
-        skip(self, _client_commitment, proof, ciphertext),
+        skip(self, _client_commitment, proof, ciphertext, caller),
         fields(
             ciphertext_bytes = ciphertext.len(),
             proof_bytes = proof.len(),
@@ -465,12 +465,24 @@ impl Engine {
         _client_commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
+        caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
         let decrypter = self.inner.decrypter.read().clone();
         let decrypted = decrypter
             .decrypt(&ciphertext)
             .await
             .map_err(EngineError::Decrypt)?;
+
+        if let Some(expected) = caller {
+            if decrypted.trader != expected {
+                return Err(EngineError::Validation(
+                    DarkPoolError::TraderAddressMismatch {
+                        expected: format!("{:#x}", expected),
+                        found: format!("{:#x}", decrypted.trader),
+                    },
+                ));
+            }
+        }
 
         // Client-supplied commitment is accepted (proto requires it) but no
         // longer verified content-wise: the engine recomputes the canonical
