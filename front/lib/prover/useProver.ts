@@ -85,6 +85,21 @@ export function useProver(): UseProverReturn {
       }
     }
 
+    const rejectAll = (error: Error) => {
+      setState('error')
+      setProgress(null)
+      for (const [, p] of pendingRef.current) p.reject(error)
+      pendingRef.current.clear()
+    }
+
+    w.onerror = (event) => {
+      rejectAll(new Error(event.message || 'Worker error'))
+    }
+
+    w.onmessageerror = () => {
+      rejectAll(new Error('Worker message deserialization error'))
+    }
+
     workerRef.current = w
     return w
   }, [])
