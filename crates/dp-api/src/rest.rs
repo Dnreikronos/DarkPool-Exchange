@@ -25,6 +25,7 @@ use tower_http::trace::TraceLayer;
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
+use crate::siwe::SiweState;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
@@ -151,6 +152,13 @@ pub fn ops_router(state: OpsState) -> Router {
         .with_state(state)
 }
 
+pub fn auth_router(state: SiweState) -> Router {
+    Router::new()
+        .route("/v1/auth/nonce", get(rest_auth_nonce))
+        .route("/v1/auth/verify", post(rest_auth_verify))
+        .with_state(state)
+}
+
 /// Compose the full server router: public + admin (auth-gated) + ops
 /// (unauthenticated) and apply tracing + x-request-id propagation
 /// across every route so logs and spans share a correlation ID.
@@ -164,8 +172,9 @@ pub fn router_with_ops(
     ratelimit: RateLimitCore,
     ops: OpsState,
     cors_origins: &[String],
+    siwe_state: Option<SiweState>,
 ) -> Router {
-    let base = router_with_admin(
+    let mut base = router_with_admin(
         handler,
         admin_handler,
         key_admin_handler,
@@ -174,6 +183,9 @@ pub fn router_with_ops(
         ratelimit,
     )
     .merge(ops_router(ops));
+    if let Some(siwe) = siwe_state {
+        base = base.merge(auth_router(siwe));
+    }
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
     // path. Desired request-side order is SetRequestId → Trace → Propagate,
@@ -209,7 +221,11 @@ pub fn router_with_ops(
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::CONTENT_TYPE, HeaderName::from_static("x-api-key")])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+        ])
         .expose_headers([HeaderName::from_static("x-request-id")])
         .max_age(Duration::from_secs(3600));
 
@@ -240,6 +256,63 @@ fn make_http_span(request: &AxumRequest<Body>) -> tracing::Span {
         path = %path,
         request_id = req_id,
     )
+}
+
+// ---------- SIWE auth handlers ----------
+
+#[derive(Serialize)]
+struct NonceResponse {
+    nonce: String,
+}
+
+#[derive(Deserialize)]
+struct VerifyRequest {
+    message: String,
+    signature: String,
+}
+
+#[derive(Serialize)]
+struct VerifyResponse {
+    token: String,
+    expires_at: u64,
+    address: String,
+}
+
+async fn rest_auth_nonce(State(state): State<SiweState>) -> Json<NonceResponse> {
+    Json(NonceResponse {
+        nonce: state.nonce_store.generate(),
+    })
+}
+
+async fn rest_auth_verify(
+    State(state): State<SiweState>,
+    Json(body): Json<VerifyRequest>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    let sig_bytes = hex::decode(body.signature.strip_prefix("0x").unwrap_or(&body.signature))
+        .map_err(|_| ApiError(tonic::Status::invalid_argument("invalid signature hex")))?;
+    let sig: [u8; 65] = sig_bytes.try_into().map_err(|_| {
+        ApiError(tonic::Status::invalid_argument(
+            "signature must be 65 bytes",
+        ))
+    })?;
+    let address = crate::siwe::verify_siwe_message(
+        &body.message,
+        &sig,
+        &state.nonce_store,
+        state.chain_id,
+    )
+    .map_err(|e| ApiError(tonic::Status::unauthenticated(e.to_string())))?;
+
+    let (token, expires_at) = state
+        .jwt_manager
+        .issue(address)
+        .map_err(|e| ApiError(tonic::Status::internal(format!("jwt issue: {e}"))))?;
+
+    Ok(Json(VerifyResponse {
+        token,
+        expires_at,
+        address: format!("{:#x}", address),
+    }))
 }
 
 // ---------- ops handlers ----------

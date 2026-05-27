@@ -56,6 +56,7 @@ fn make_router(probes: ReadinessProbes) -> axum::Router {
             multi: dp_crypto::MultiKeyDecrypter::new(),
         },
         &[],
+        None,
     )
 }
 
