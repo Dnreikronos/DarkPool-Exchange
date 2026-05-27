@@ -102,12 +102,16 @@ export async function runSubmission(
       opts.onPhase({ kind: 'running', stage, progress: progressAtStartOfStage(stage) })
 
       if (stage === 'proving' && opts.prove) {
+        const randomHex = (n: number) =>
+          Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) =>
+            b.toString(16).padStart(2, '0')
+          ).join('')
         await opts.prove({
-          commitment_key: '',
+          commitment_key: randomHex(32),
           side: payload.side === 'buy' ? 0 : 1,
           price: payload.price,
           size: payload.size,
-          salt_hex: '',
+          salt_hex: randomHex(32),
         })
       } else if (stage === 'submitting') {
         await Promise.resolve(opts.placeOrder(payload))
@@ -167,6 +171,7 @@ export function useSubmitStages(params: UseSubmitStagesParams): UseSubmitStagesR
 
     await runSubmission(payload, {
       placeOrder: paramsRef.current.placeOrder,
+      prove: paramsRef.current.prove,
       delay: paramsRef.current.delay,
       shouldAbort: isStale,
       onPhase: (next) => {
