@@ -47,10 +47,13 @@ coverage/
 
 # rust
 
-# WASM build output (regenerate with `just build-wasm`)
+# WASM build output (regenerate with `just build-wasm` / `just build-wasm-zk`)
 front/lib/prover/pkg/*
 !front/lib/prover/pkg/dp_client.d.ts
+front/lib/prover/zk-pkg/*
+!front/lib/prover/zk-pkg/dp_zk_wasm.d.ts
 crates/dp-client/pkg/
+crates/dp-zk-wasm/pkg/
 
 # forge broadcast artifacts (run-latest.json etc., regenerated each deploy)
 contracts/broadcast/

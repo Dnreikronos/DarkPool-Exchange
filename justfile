@@ -222,6 +222,15 @@ build-wasm:
     cp crates/dp-client/pkg/dp_client.js front/lib/prover/pkg/
     cp crates/dp-client/pkg/dp_client.d.ts front/lib/prover/pkg/
 
+# Build dp-zk-wasm Groth16 prover for browser
+build-wasm-zk:
+    cd crates/dp-zk-wasm && wasm-pack build --release --target web \
+        --features wasm --no-default-features
+    mkdir -p front/lib/prover/zk-pkg
+    cp crates/dp-zk-wasm/pkg/dp_zk_wasm_bg.wasm front/lib/prover/zk-pkg/
+    cp crates/dp-zk-wasm/pkg/dp_zk_wasm.js front/lib/prover/zk-pkg/
+    cp crates/dp-zk-wasm/pkg/dp_zk_wasm.d.ts front/lib/prover/zk-pkg/
+
 # Build WASM and report bundle size
 wasm-size: build-wasm
     @ls -lh front/lib/prover/pkg/dp_client_bg.wasm
