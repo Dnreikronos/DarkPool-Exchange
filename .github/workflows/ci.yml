@@ -135,9 +135,11 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-pack
-        run: cargo install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build WASM
         run: wasm-pack build --release --target web --features wasm --no-default-features
+      - name: Run golden-vector tests
+        run: cargo test -p dp-client --features wasm
       - name: Record bundle size
         run: |
           SIZE=$(wc -c < pkg/dp_client_bg.wasm)
