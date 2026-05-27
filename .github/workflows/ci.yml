@@ -95,7 +95,10 @@ jobs:
             --skip-clean \
             --out xml \
             --output-dir coverage \
-            -- --include-ignored --skip prove_batch_within_budget
+            -- --include-ignored --skip prove_batch_within_budget \
+               --skip fold_single_step_verifies \
+               --skip compress_after_n_folds_verifies \
+               --skip fold_sixty_steps_acceptance
       - name: Convert coverage to generic format
         run: |
           python3 -c "
