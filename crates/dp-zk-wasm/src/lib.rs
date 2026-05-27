@@ -24,11 +24,10 @@ pub fn prove_order(witness_json: &str) -> Result<ProveResult, String> {
     let trader_id =
         derive_trader_id(&commitment_key_bytes).map_err(|e| format!("derive_trader_id: {e}"))?;
 
-    let side_fr = if w.side == 0 {
-        Fr::from(0u64)
-    } else {
-        Fr::from(1u64)
-    };
+    if w.side > 1 {
+        return Err(format!("side must be 0 or 1, got {}", w.side));
+    }
+    let side_fr = Fr::from(w.side as u64);
 
     let price: rust_decimal::Decimal = w
         .price
@@ -179,9 +178,8 @@ mod tests {
             "salt_hex": "bb".repeat(32)
         })
         .to_string();
-        // side=2 is not semantically invalid for the circuit (it just maps to Fr(1))
-        // but the proof will verify — it's the higher-level protocol that validates side ∈ {0,1}
-        assert!(prove_order(&json).is_ok());
+        let err = prove_order(&json).unwrap_err();
+        assert!(err.contains("side must be 0 or 1"));
     }
 
     #[test]
