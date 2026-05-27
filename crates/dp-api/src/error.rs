@@ -16,6 +16,9 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
         EngineError::Validation(
             e @ (DarkPoolError::PairNotAccepting(_) | DarkPoolError::CannotSuspendDelistedPair(_)),
         ) => Status::failed_precondition(e.to_string()),
+        EngineError::Validation(e @ DarkPoolError::TraderAddressMismatch { .. }) => {
+            Status::permission_denied(e.to_string())
+        }
         EngineError::Validation(
             e @ (DarkPoolError::PairRequired
             | DarkPoolError::PriceMustBePositive

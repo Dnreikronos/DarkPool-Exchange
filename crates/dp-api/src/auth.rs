@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use alloy_primitives::Address;
 use axum::extract::{Request as AxumRequest, State as AxumState};
 use axum::middleware::Next;
 use axum::response::Response as AxumResponse;
@@ -17,23 +18,54 @@ use crate::validation::{MSG_INVALID_API_KEY, MSG_MISSING_API_KEY};
 pub const AUTH_HEADER: &str = "x-api-key";
 
 #[derive(Clone, Debug)]
+pub enum AuthenticatedIdentity {
+    ApiKey,
+    Wallet(Address),
+}
+
+#[derive(Clone, Debug)]
 pub struct AuthCore {
     keys: Arc<HashSet<String>>,
+    jwt: Option<Arc<crate::siwe::JwtManager>>,
 }
 
 impl AuthCore {
     pub fn new(keys: Vec<String>) -> Self {
         Self {
             keys: Arc::new(keys.into_iter().filter(|k| !k.is_empty()).collect()),
+            jwt: None,
         }
     }
 
-    pub fn check(&self, headers: &HeaderMap) -> Result<(), Status> {
-        if self.keys.is_empty() {
-            return Ok(());
+    pub fn new_with_jwt(keys: Vec<String>, jwt: Arc<crate::siwe::JwtManager>) -> Self {
+        Self {
+            keys: Arc::new(keys.into_iter().filter(|k| !k.is_empty()).collect()),
+            jwt: Some(jwt),
         }
-        // All auth failures map to Unauthenticated so clients can branch on
-        // Code alone. The message disambiguates missing-vs-invalid for logs.
+    }
+
+    pub fn check(&self, headers: &HeaderMap) -> Result<AuthenticatedIdentity, Status> {
+        if let Some(auth_val) = headers.get(http::header::AUTHORIZATION) {
+            if let Some(jwt) = &self.jwt {
+                let auth_str = auth_val
+                    .to_str()
+                    .map_err(|_| Status::unauthenticated("invalid authorization header"))?;
+                if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                    let claims = jwt.verify(token).map_err(|e| {
+                        Status::unauthenticated(format!("invalid token: {e}"))
+                    })?;
+                    let addr = crate::siwe::JwtManager::address_from_claims(&claims)
+                        .ok_or_else(|| {
+                            Status::unauthenticated("invalid address in token")
+                        })?;
+                    return Ok(AuthenticatedIdentity::Wallet(addr));
+                }
+            }
+        }
+
+        if self.keys.is_empty() {
+            return Ok(AuthenticatedIdentity::ApiKey);
+        }
         let key = match headers.get(AUTH_HEADER) {
             Some(v) => match v.to_str() {
                 Ok(s) => s,
@@ -47,7 +79,7 @@ impl AuthCore {
         if !self.keys.contains(key) {
             return Err(Status::unauthenticated(MSG_INVALID_API_KEY));
         }
-        Ok(())
+        Ok(AuthenticatedIdentity::ApiKey)
     }
 }
 
@@ -98,15 +130,18 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, mut req: Request<B>) -> Self::Future {
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let core = self.core.clone();
         Box::pin(async move {
-            if let Err(status) = core.check(req.headers()) {
-                return Ok(status.into_http());
+            match core.check(req.headers()) {
+                Ok(identity) => {
+                    req.extensions_mut().insert(identity);
+                    inner.call(req).await
+                }
+                Err(status) => Ok(status.into_http()),
             }
-            inner.call(req).await
         })
     }
 }
@@ -124,10 +159,13 @@ pub async fn auth_axum_mw(
             }
         }
     }
-    if let Err(status) = core.check(req.headers()) {
-        return crate::rest::status_to_response(status);
+    match core.check(req.headers()) {
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(status) => crate::rest::status_to_response(status),
     }
-    next.run(req).await
 }
 
 fn extract_api_key_from_query(query: Option<&str>) -> Option<String> {

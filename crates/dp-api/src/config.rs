@@ -164,6 +164,21 @@ pub struct Config {
 
     #[arg(long, env = "DARKPOOL_SUBMIT_GAS", default_value = "500000")]
     pub submit_gas: u64,
+
+    /// Enable SIWE (Sign-In with Ethereum) authentication. When enabled,
+    /// traders can authenticate via wallet signature and receive a JWT.
+    /// Static API keys remain as fallback for programmatic access.
+    #[arg(long, env = "DARKPOOL_SIWE_ENABLED", default_value = "false")]
+    pub siwe_enabled: bool,
+
+    /// Secret used to sign/verify JWT session tokens. Required when
+    /// SIWE is enabled; ignored otherwise.
+    #[arg(long, env = "DARKPOOL_SESSION_SECRET", default_value = "")]
+    session_secret_raw: String,
+
+    /// JWT session token TTL. Defaults to 24 hours.
+    #[arg(long, env = "DARKPOOL_SESSION_TTL", default_value = "24h", value_parser = parse_duration)]
+    pub session_ttl: Duration,
 }
 
 impl Config {
@@ -233,6 +248,19 @@ impl Config {
 
     pub fn contract_address(&self) -> Option<&str> {
         opt(&self.contract_addr)
+    }
+
+    pub fn session_secret(&self) -> Option<&str> {
+        opt(&self.session_secret_raw)
+    }
+
+    pub fn validate_siwe_config(&self) -> Result<(), String> {
+        if self.siwe_enabled && self.session_secret().is_none() {
+            return Err(
+                "DARKPOOL_SIWE_ENABLED is true but DARKPOOL_SESSION_SECRET is not set".into(),
+            );
+        }
+        Ok(())
     }
 
     pub fn tls_cert_path(&self) -> Option<&str> {
