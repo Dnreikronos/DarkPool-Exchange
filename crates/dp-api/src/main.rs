@@ -286,7 +286,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None
     };
 
-    let auth_core = AuthCore::new(cfg.api_keys());
+    cfg.validate_siwe_config()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
+    let siwe_state = if cfg.siwe_enabled {
+        let secret = cfg.session_secret().unwrap();
+        let jwt_manager = Arc::new(dp_api::siwe::JwtManager::new(secret, cfg.session_ttl));
+        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(Duration::from_secs(300)));
+        nonce_store.start_cleanup(cancel.clone(), Duration::from_secs(60));
+        let chain_id = if cfg.chain_id > 0 {
+            Some(cfg.chain_id)
+        } else {
+            None
+        };
+        info!(
+            chain_id = ?chain_id,
+            session_ttl = ?cfg.session_ttl,
+            "SIWE authentication enabled"
+        );
+        let expected_domain = cfg.siwe_domain().map(|s| s.to_string());
+        Some(dp_api::siwe::SiweState {
+            nonce_store,
+            jwt_manager: jwt_manager.clone(),
+            chain_id,
+            expected_domain,
+        })
+    } else {
+        info!("SIWE authentication disabled (set --siwe-enabled to activate)");
+        None
+    };
+
+    let auth_core = if let Some(ref siwe) = siwe_state {
+        AuthCore::new_with_jwt(cfg.api_keys(), siwe.jwt_manager.clone())
+    } else {
+        AuthCore::new(cfg.api_keys())
+    };
     let operator_keys = cfg.operator_api_keys();
     if operator_keys.is_empty() {
         warn!(
@@ -390,6 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         rl_core,
         ops,
         &cors_origins,
+        siwe_state,
     );
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();

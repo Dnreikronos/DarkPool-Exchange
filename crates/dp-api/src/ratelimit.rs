@@ -17,7 +17,7 @@ use tonic::transport::server::TcpConnectInfo;
 use tonic::Status;
 use tower::{Layer, Service};
 
-use crate::auth::AUTH_HEADER;
+use crate::auth::{AuthenticatedIdentity, AUTH_HEADER};
 use crate::validation::MSG_RATE_LIMIT_EXCEEDED;
 
 #[derive(Debug)]
@@ -107,7 +107,17 @@ impl RateLimitCore {
     }
 }
 
-pub fn client_key(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+pub fn client_key(
+    identity: Option<&AuthenticatedIdentity>,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> String {
+    if let Some(id) = identity {
+        match id {
+            AuthenticatedIdentity::Wallet(addr) => return format!("{:#x}", addr),
+            AuthenticatedIdentity::ApiKey => {}
+        }
+    }
     if let Some(v) = headers.get(AUTH_HEADER) {
         if let Ok(s) = v.to_str() {
             if !s.is_empty() {
@@ -177,6 +187,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let core = self.core.clone();
         Box::pin(async move {
+            let identity = req.extensions().get::<AuthenticatedIdentity>().cloned();
             let peer = req
                 .extensions()
                 .get::<TcpConnectInfo>()
@@ -187,7 +198,7 @@ where
                         .get::<ConnectInfo<SocketAddr>>()
                         .map(|ci| ci.0)
                 });
-            let key = client_key(req.headers(), peer);
+            let key = client_key(identity.as_ref(), req.headers(), peer);
             if let Err(status) = core.allow(&key) {
                 return Ok(status.into_http());
             }
@@ -201,12 +212,13 @@ pub async fn ratelimit_axum_mw(
     req: AxumRequest,
     next: Next,
 ) -> AxumResponse {
+    let identity = req.extensions().get::<AuthenticatedIdentity>().cloned();
     let peer = req.extensions().get::<SocketAddr>().copied().or_else(|| {
         req.extensions()
             .get::<ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0)
     });
-    let key = client_key(req.headers(), peer);
+    let key = client_key(identity.as_ref(), req.headers(), peer);
     if let Err(status) = core.allow(&key) {
         return crate::rest::status_to_response(status);
     }

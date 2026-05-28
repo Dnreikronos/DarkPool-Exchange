@@ -164,6 +164,28 @@ pub struct Config {
 
     #[arg(long, env = "DARKPOOL_SUBMIT_GAS", default_value = "500000")]
     pub submit_gas: u64,
+
+    /// Enable SIWE (Sign-In with Ethereum) authentication. When enabled,
+    /// traders can authenticate via wallet signature and receive a JWT.
+    /// Static API keys remain as fallback for programmatic access.
+    #[arg(long, env = "DARKPOOL_SIWE_ENABLED", default_value = "false")]
+    pub siwe_enabled: bool,
+
+    /// Secret used to sign/verify JWT session tokens. Required when
+    /// SIWE is enabled; ignored otherwise.
+    #[arg(long, env = "DARKPOOL_SESSION_SECRET", default_value = "")]
+    session_secret_raw: String,
+
+    /// JWT session token TTL. Defaults to 24 hours.
+    #[arg(long, env = "DARKPOOL_SESSION_TTL", default_value = "24h", value_parser = parse_duration)]
+    pub session_ttl: Duration,
+
+    /// Expected SIWE message domain (RFC 3986 authority). When set,
+    /// the server rejects SIWE messages whose `domain` field doesn't
+    /// match — prevents cross-site replay attacks. Example:
+    /// `app.darkpool.exchange` or `localhost:3000`.
+    #[arg(long, env = "DARKPOOL_SIWE_DOMAIN", default_value = "")]
+    siwe_domain_raw: String,
 }
 
 impl Config {
@@ -233,6 +255,32 @@ impl Config {
 
     pub fn contract_address(&self) -> Option<&str> {
         opt(&self.contract_addr)
+    }
+
+    pub fn session_secret(&self) -> Option<&str> {
+        opt(&self.session_secret_raw)
+    }
+
+    pub fn siwe_domain(&self) -> Option<&str> {
+        opt(&self.siwe_domain_raw)
+    }
+
+    pub fn validate_siwe_config(&self) -> Result<(), String> {
+        if !self.siwe_enabled {
+            return Ok(());
+        }
+        match self.session_secret() {
+            None => {
+                return Err(
+                    "DARKPOOL_SIWE_ENABLED is true but DARKPOOL_SESSION_SECRET is not set".into(),
+                );
+            }
+            Some(s) if s.len() < 32 => {
+                return Err("DARKPOOL_SESSION_SECRET must be at least 32 bytes".into());
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub fn tls_cert_path(&self) -> Option<&str> {
@@ -425,5 +473,56 @@ mod tests {
     fn snapshot_dir_path_set_returns_some() {
         let cfg = Config::parse_from(["darkpool-server", "--snapshot-dir", "/var/dp/snaps"]);
         assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
+    }
+
+    fn cfg_with_siwe(enabled: bool, secret: &str, domain: &str) -> Config {
+        let mut args = vec!["darkpool-server".to_string()];
+        if enabled {
+            args.push("--siwe-enabled".into());
+        }
+        if !secret.is_empty() {
+            args.push("--session-secret-raw".into());
+            args.push(secret.into());
+        }
+        if !domain.is_empty() {
+            args.push("--siwe-domain-raw".into());
+            args.push(domain.into());
+        }
+        Config::parse_from(args)
+    }
+
+    #[test]
+    fn siwe_disabled_validates_ok_without_secret() {
+        let cfg = cfg_with_siwe(false, "", "");
+        assert!(cfg.validate_siwe_config().is_ok());
+    }
+
+    #[test]
+    fn siwe_enabled_without_secret_fails() {
+        let cfg = cfg_with_siwe(true, "", "");
+        let err = cfg.validate_siwe_config().unwrap_err();
+        assert!(err.contains("SESSION_SECRET"), "msg: {err}");
+    }
+
+    #[test]
+    fn siwe_enabled_with_short_secret_fails() {
+        let cfg = cfg_with_siwe(true, "tooshort", "");
+        let err = cfg.validate_siwe_config().unwrap_err();
+        assert!(err.contains("32 bytes"), "msg: {err}");
+    }
+
+    #[test]
+    fn siwe_enabled_with_valid_secret_passes() {
+        let cfg = cfg_with_siwe(true, "a]secret-that-is-at-least-32-bytes-long!", "");
+        assert!(cfg.validate_siwe_config().is_ok());
+        assert!(cfg.session_secret().is_some());
+    }
+
+    #[test]
+    fn siwe_domain_accessor() {
+        let cfg = cfg_with_siwe(false, "", "app.darkpool.exchange");
+        assert_eq!(cfg.siwe_domain(), Some("app.darkpool.exchange"));
+        let cfg2 = cfg_with_siwe(false, "", "");
+        assert!(cfg2.siwe_domain().is_none());
     }
 }
