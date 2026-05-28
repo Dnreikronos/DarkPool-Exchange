@@ -78,7 +78,7 @@ async fn populate_store(engine: &Engine, n: usize) {
         // Engine recomputes the commitment internally; supplying an
         // empty placeholder here is allowed by `place_encrypted_order`.
         engine
-            .place_encrypted_order(vec![0u8; 32], vec![], ct)
+            .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
             .await
             .expect("place");
     }

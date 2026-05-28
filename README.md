@@ -2,7 +2,7 @@
 
 A decentralized exchange where orders stay private until settlement. Traders encrypt orders to the operator and prove validity using zero-knowledge proofs, without revealing the pair, price, or size to any external observer.
 
-Rust · Solidity · ZK Circuits (halo2 / arkworks)
+Rust · Solidity · ZK Circuits (arkworks)
 
 https://front-five-flax.vercel.app/
 
@@ -89,7 +89,7 @@ flowchart TB
 
 ## Order lifecycle
 
-1. Trader submits a Pedersen commitment to the order parameters and locks collateral in escrow.
+1. Trader submits a Poseidon commitment to the order parameters and locks collateral in escrow.
 2. Trader runs a Rust circuit locally, gets back a ZK proof that the order is valid.
 3. Trader encrypts the full order to the operator's public key and submits commitment + proof + encrypted payload.
 4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (bincode-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
@@ -115,7 +115,7 @@ flowchart TB
 - Batches hold up to 256 matched pairs. Cap is enforced by the settlement contract; the engine hands the aggregator whatever matched in the current auction round.
 - If the aggregated proof fails verification, the entire batch is rejected. No partial settlement.
 - Collateral is locked in escrow at commitment time and released atomically at settlement (enforced in `DarkPool.sol`).
-- 0.05% protocol fee is taken from the taker side (enforced in `DarkPool.sol`).
+- 0.05% protocol fee is deducted from the sell (ask) side (enforced in `DarkPool.sol`).
 
 ### Trust model & privacy
 
@@ -129,7 +129,7 @@ flowchart TB
 
 | Layer | Language | What it does |
 |---|---|---|
-| ZK Circuit | Rust (halo2 / arkworks) | Generates and verifies proofs of order validity |
+| ZK Circuit | Rust (arkworks) | Generates and verifies proofs of order validity |
 | Matching Engine | Rust (tokio) | Batch auction logic, clearing price computation, event sourcing (`crates/dp-engine/`) |
 | Event Store | Rust (bincode + fsync) | Append-only event log for state reconstruction and auditability (`crates/dp-event/`) |
 | Proof Aggregator | Rust (subprocess) | Combines individual proofs into a single batch proof (`crates/dp-aggregator/`) |
@@ -212,7 +212,7 @@ cargo run   --release --bin darkpool-server
 crates/
 ├── dp-types/        # Shared domain types (Order, Fill, Side, EventType)
 ├── dp-crypto/       # ECIES decrypter + commitment computation
-├── dp-event/        # Append-only event store (MemStore + FileStore, bincode + fsync)
+├── dp-event/        # Append-only event store (MemStore + FileStore + PgStore, bincode + fsync)
 ├── dp-book/         # Order book projection + depth aggregation
 ├── dp-auction/      # Batch auction, clearing price, self-match prevention
 ├── dp-aggregator/   # Pluggable proof aggregator (noop + subprocess)

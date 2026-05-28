@@ -269,7 +269,7 @@ async fn place_encrypted_order_noop_round_trip() {
     };
     let ct = serde_json::to_vec(&d).unwrap();
     let order = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .unwrap();
     assert_eq!(order.pair, "BTC-USD");
@@ -289,7 +289,7 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
     };
     let ct = serde_json::to_vec(&d).unwrap();
     let order = engine
-        .place_encrypted_order(vec![0xAB; 32], vec![], ct)
+        .place_encrypted_order(vec![0xAB; 32], vec![], ct, None)
         .await
         .expect("engine no longer rejects on client commitment");
 
@@ -330,9 +330,53 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
 async fn place_encrypted_order_bad_ciphertext() {
     let (engine, _) = make_engine();
     let r = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], b"not json".to_vec())
+        .place_encrypted_order(vec![0u8; 32], vec![], b"not json".to_vec(), None)
         .await;
     assert!(r.is_err());
+}
+
+#[tokio::test]
+async fn place_encrypted_order_rejects_caller_address_mismatch() {
+    let (engine, _) = make_engine();
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+    let wrong_caller: Address = "0x0000000000000000000000000000000000000001"
+        .parse()
+        .unwrap();
+    let r = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(wrong_caller))
+        .await;
+    assert!(r.is_err());
+    let msg = r.unwrap_err().to_string();
+    assert!(msg.contains("trader address mismatch"), "got: {msg}");
+}
+
+#[tokio::test]
+async fn place_encrypted_order_accepts_matching_caller() {
+    let (engine, _) = make_engine();
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+    let order = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(Address::ZERO))
+        .await
+        .expect("matching caller should succeed");
+    assert_eq!(order.trader, Address::ZERO);
 }
 
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
@@ -358,7 +402,7 @@ async fn place_encrypted_order_canonicalises_lowercase_pair() {
     };
     let ct = serde_json::to_vec(&d).unwrap();
     let order = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .expect("lowercase pair canonicalises and matches registry");
 
@@ -390,7 +434,7 @@ async fn event_store_contains_no_plaintext() {
     let plain = serde_json::to_vec(&d).unwrap();
     let ct = xor.encrypt(&plain);
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .unwrap();
 
@@ -1044,11 +1088,11 @@ async fn full_pipeline_encrypted_order_to_settlement() {
     let (ask_commit, ask_ct) = encrypt_order(Side::Sell, dec(1900), "ask-key");
 
     let bid_order = engine
-        .place_encrypted_order(bid_commit, vec![], bid_ct)
+        .place_encrypted_order(bid_commit, vec![], bid_ct, None)
         .await
         .unwrap();
     let ask_order = engine
-        .place_encrypted_order(ask_commit, vec![], ask_ct)
+        .place_encrypted_order(ask_commit, vec![], ask_ct, None)
         .await
         .unwrap();
     assert_eq!(bid_order.pair, "ETH-USD");

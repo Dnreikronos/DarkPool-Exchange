@@ -67,7 +67,9 @@ in the repo root for the longer story.
 
 ### Rust workspace (`crates/`) — backend, fully functional
 - `dp-api` — REST (`POST /v1/orders`, `GET /v1/orderbook`, etc.) + gRPC
-  + streaming `StreamAuctions`. Auth via `x-api-key`.
+  + streaming `StreamAuctions`. Auth via `x-api-key`. Also serves
+  `DarkPoolAdminService` (operator-only): `RegisterPair`, `SuspendPair`,
+  `DelistPair`, `ListPairsAdmin` — relevant to multi-pair (#29).
   Proto: `crates/dp-api/proto/darkpool/v1/darkpool.proto` (source of truth
   for the TypeScript SDK).
 - `dp-engine` — order matching engine, in-memory order book, periodic
@@ -77,19 +79,35 @@ in the repo root for the longer story.
   `crates/dp-settlement/abi/`.
 - `dp-crypto` — ECIES decryption (operator-side).
 - `dp-zk` + `dp-zk-cli` — arkworks Groth16 over BN254 with Poseidon
-  commitments. Native today; WASM build planned (#97, #98).
-- `dp-event` — event-sourced store (in-memory / file / Postgres).
-- `dp-types`, `dp-book`, `dp-aggregator`, `dp-client` — supporting
-  crates.
+  commitments. Feature-gated HyperNova IVC support via Sonobe.
+- `dp-zk-wasm` — WASM bindings for ZK proving (`prove_order_wasm`).
+  Built with `wasm-pack --features wasm`.
+- `dp-event` — event-sourced store (in-memory / file / Postgres behind
+  `postgres` feature flag).
+- `dp-types`, `dp-book`, `dp-aggregator` — supporting crates.
+- `dp-client` — standalone crate (intentionally **not** in root
+  workspace members to avoid arkworks feature conflicts). Provides
+  WASM bindings for encrypt/commit/prepare (`prepare_order_wasm`,
+  `encrypt_order_wasm`, `compute_commitment_wasm`). Also has a native
+  CLI binary `dp-trade`.
 
 ### Solidity contracts (`contracts/`) — deployed pattern, no fixed addresses yet
-- `DarkPool.sol` — escrow + `submitBatch`. Trader deposits ERC20s,
-  operator submits batches with Groth16 proof, contract settles by
-  shuffling internal balances. Events: `Deposit`, `Withdrawal`,
-  `BatchSettled`. Protocol fee 5 bps. **No EIP-712, no Permit2.**
-- `VerifierProxy.sol` — governance router for the verifier; allows
-  rotating the verifying key without redeploying `DarkPool`.
+- `DarkPool.sol` — escrow + dual settlement paths. Groth16 path:
+  `submitBatch`. HyperNova IVC path: `submitSession` + `settleAuction`.
+  Trader deposits ERC20s, operator submits batches with proof, contract
+  settles by shuffling internal balances. Events: `Deposit`, `Withdrawal`,
+  `BatchSettled`, `SessionSubmitted`, `AuctionSettled`, `OperatorAdded`,
+  `OperatorRemoved`, `OperatorPubkeyUpdated`. Protocol fee 5 bps
+  (deducted from sell side). Operator pubkey rotation via
+  `setOperatorPubkey` with SEC1 validation. **No EIP-712, no Permit2.**
+- `VerifierProxy.sol` — typed router dispatching to both `IVerifier`
+  (Groth16) and `IDeciderVerifier` (HyperNova). Allows rotating
+  verifiers without redeploying `DarkPool`.
 - `Groth16Verifier.sol` — BN254 proof verifier, VK immutable at deploy.
+  Single-proof and batch RLC verification.
+- `HyperNovaDeciderVerifier.sol` — **STUB (accepts all proofs)**.
+  Placeholder until real verifier is generated from trusted setup.
+  NOT FOR PRODUCTION.
 - `contracts/script/Deploy.s.sol` — Foundry deploy script (Cancun EVM,
   via-IR, 200 optimizer runs).
 
@@ -294,8 +312,9 @@ exhaustive.
 
 - `claude-api`, `claude-code-guide` — we are not building on top of the
   Claude API or modifying Claude Code itself.
-- `gsap-*` — the old frontend used GSAP heavily; the new build does
-  not. Stick with CSS / Framer Motion / View Transitions API.
+- `gsap-*` — GSAP is used on the landing page only (Hero, HowItWorks).
+  The trading app (`/app/*`) does not use GSAP. Stick with CSS / Framer
+  Motion / View Transitions API for trading panels.
 - `golang-pro` — backend is Rust, not Go.
 
 ---

@@ -16,6 +16,9 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
         EngineError::Validation(
             e @ (DarkPoolError::PairNotAccepting(_) | DarkPoolError::CannotSuspendDelistedPair(_)),
         ) => Status::failed_precondition(e.to_string()),
+        EngineError::Validation(e @ DarkPoolError::TraderAddressMismatch { .. }) => {
+            Status::permission_denied(e.to_string())
+        }
         EngineError::Validation(
             e @ (DarkPoolError::PairRequired
             | DarkPoolError::PriceMustBePositive
@@ -88,6 +91,17 @@ mod tests {
             let s = engine_error_to_status(EngineError::Validation(err));
             assert_eq!(s.code(), Code::InvalidArgument);
         }
+    }
+
+    #[test]
+    fn trader_address_mismatch_maps_to_permission_denied() {
+        let s = engine_error_to_status(EngineError::Validation(
+            DarkPoolError::TraderAddressMismatch {
+                expected: "0x1111".into(),
+                found: "***".into(),
+            },
+        ));
+        assert_eq!(s.code(), Code::PermissionDenied);
     }
 
     #[test]
