@@ -304,10 +304,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             session_ttl = ?cfg.session_ttl,
             "SIWE authentication enabled"
         );
+        let expected_domain = cfg.siwe_domain().map(|s| s.to_string());
         Some(dp_api::siwe::SiweState {
             nonce_store,
             jwt_manager: jwt_manager.clone(),
             chain_id,
+            expected_domain,
         })
     } else {
         info!("SIWE authentication disabled (set --siwe-enabled to activate)");

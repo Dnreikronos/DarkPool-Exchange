@@ -85,6 +85,10 @@ pub enum SiweError {
     NonceInvalid,
     #[error("SIWE message expired")]
     Expired,
+    #[error("SIWE message not yet valid")]
+    NotYetValid,
+    #[error("domain mismatch: expected {expected}, got {got}")]
+    DomainMismatch { expected: String, got: String },
     #[error("chain ID mismatch: expected {expected}, got {got}")]
     ChainMismatch { expected: u64, got: u64 },
     #[error("signature verification failed: {0}")]
@@ -96,12 +100,19 @@ pub fn verify_siwe_message(
     signature: &[u8; 65],
     nonce_store: &NonceStore,
     expected_chain_id: Option<u64>,
+    expected_domain: Option<&str>,
 ) -> Result<Address, SiweError> {
     let message: siwe::Message =
         message_str.parse().map_err(|e| SiweError::Parse(format!("{e}")))?;
 
-    if !nonce_store.consume(&message.nonce) {
-        return Err(SiweError::NonceInvalid);
+    if let Some(domain) = expected_domain {
+        let msg_domain = message.domain.to_string();
+        if msg_domain != domain {
+            return Err(SiweError::DomainMismatch {
+                expected: domain.to_string(),
+                got: msg_domain,
+            });
+        }
     }
 
     if let Some(expected) = expected_chain_id {
@@ -113,15 +124,27 @@ pub fn verify_siwe_message(
         }
     }
 
+    let now = time::OffsetDateTime::now_utc();
+
     if let Some(ref exp) = message.expiration_time {
-        if exp < &time::OffsetDateTime::now_utc() {
+        if exp < &now {
             return Err(SiweError::Expired);
+        }
+    }
+
+    if let Some(ref nbf) = message.not_before {
+        if nbf > &now {
+            return Err(SiweError::NotYetValid);
         }
     }
 
     message
         .verify_eip191(signature)
         .map_err(|e| SiweError::Verification(format!("{e}")))?;
+
+    if !nonce_store.consume(&message.nonce) {
+        return Err(SiweError::NonceInvalid);
+    }
 
     Ok(Address::from_slice(&message.address))
 }
@@ -195,6 +218,7 @@ pub struct SiweState {
     pub nonce_store: Arc<NonceStore>,
     pub jwt_manager: Arc<JwtManager>,
     pub chain_id: Option<u64>,
+    pub expected_domain: Option<String>,
 }
 
 #[cfg(test)]

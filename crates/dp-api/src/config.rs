@@ -179,6 +179,13 @@ pub struct Config {
     /// JWT session token TTL. Defaults to 24 hours.
     #[arg(long, env = "DARKPOOL_SESSION_TTL", default_value = "24h", value_parser = parse_duration)]
     pub session_ttl: Duration,
+
+    /// Expected SIWE message domain (RFC 3986 authority). When set,
+    /// the server rejects SIWE messages whose `domain` field doesn't
+    /// match — prevents cross-site replay attacks. Example:
+    /// `app.darkpool.exchange` or `localhost:3000`.
+    #[arg(long, env = "DARKPOOL_SIWE_DOMAIN", default_value = "")]
+    siwe_domain_raw: String,
 }
 
 impl Config {
@@ -252,6 +259,10 @@ impl Config {
 
     pub fn session_secret(&self) -> Option<&str> {
         opt(&self.session_secret_raw)
+    }
+
+    pub fn siwe_domain(&self) -> Option<&str> {
+        opt(&self.siwe_domain_raw)
     }
 
     pub fn validate_siwe_config(&self) -> Result<(), String> {

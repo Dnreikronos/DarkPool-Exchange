@@ -300,6 +300,7 @@ async fn rest_auth_verify(
         &sig,
         &state.nonce_store,
         state.chain_id,
+        state.expected_domain.as_deref(),
     )
     .map_err(|e| ApiError(tonic::Status::unauthenticated(e.to_string())))?;
 
