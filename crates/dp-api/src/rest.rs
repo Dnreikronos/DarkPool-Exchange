@@ -25,7 +25,6 @@ use tower_http::trace::TraceLayer;
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
 use crate::auth::{auth_axum_mw, AuthCore};
 use crate::handler::ApiHandler;
-use crate::siwe::SiweState;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
@@ -35,6 +34,7 @@ use crate::pb::{
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
 use crate::readiness::ReadinessProbes;
+use crate::siwe::SiweState;
 use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
 use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
@@ -278,12 +278,11 @@ struct VerifyResponse {
     address: String,
 }
 
-async fn rest_auth_nonce(
-    State(state): State<SiweState>,
-) -> Result<Json<NonceResponse>, ApiError> {
-    let nonce = state.nonce_store.generate().ok_or_else(|| {
-        ApiError(tonic::Status::resource_exhausted("nonce store full"))
-    })?;
+async fn rest_auth_nonce(State(state): State<SiweState>) -> Result<Json<NonceResponse>, ApiError> {
+    let nonce = state
+        .nonce_store
+        .generate()
+        .ok_or_else(|| ApiError(tonic::Status::resource_exhausted("nonce store full")))?;
     Ok(Json(NonceResponse { nonce }))
 }
 

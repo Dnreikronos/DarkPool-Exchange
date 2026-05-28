@@ -276,9 +276,7 @@ impl Config {
                 );
             }
             Some(s) if s.len() < 32 => {
-                return Err(
-                    "DARKPOOL_SESSION_SECRET must be at least 32 bytes".into(),
-                );
+                return Err("DARKPOOL_SESSION_SECRET must be at least 32 bytes".into());
             }
             _ => {}
         }

@@ -108,8 +108,9 @@ pub fn verify_siwe_message(
     expected_chain_id: Option<u64>,
     expected_domain: Option<&str>,
 ) -> Result<Address, SiweError> {
-    let message: siwe::Message =
-        message_str.parse().map_err(|e| SiweError::Parse(format!("{e}")))?;
+    let message: siwe::Message = message_str
+        .parse()
+        .map_err(|e| SiweError::Parse(format!("{e}")))?;
 
     if let Some(domain) = expected_domain {
         let msg_domain = message.domain.to_string();
@@ -315,8 +316,14 @@ mod tests {
 
     #[test]
     fn jwt_wrong_secret_rejected() {
-        let mgr1 = JwtManager::new("secret-one-xxxxxxxxxxxxxxxxxxxxxxxx", Duration::from_secs(3600));
-        let mgr2 = JwtManager::new("secret-two-xxxxxxxxxxxxxxxxxxxxxxxx", Duration::from_secs(3600));
+        let mgr1 = JwtManager::new(
+            "secret-one-xxxxxxxxxxxxxxxxxxxxxxxx",
+            Duration::from_secs(3600),
+        );
+        let mgr2 = JwtManager::new(
+            "secret-two-xxxxxxxxxxxxxxxxxxxxxxxx",
+            Duration::from_secs(3600),
+        );
         let addr: Address = "0x6Da01670d8fc844e736095918bbE11fE8D564163"
             .parse()
             .unwrap();
@@ -334,6 +341,9 @@ mod tests {
             exp: 0,
         };
         let addr = JwtManager::address_from_claims(&claims).unwrap();
-        assert_eq!(format!("{:#x}", addr), "0x6da01670d8fc844e736095918bbe11fe8d564163");
+        assert_eq!(
+            format!("{:#x}", addr),
+            "0x6da01670d8fc844e736095918bbe11fe8d564163"
+        );
     }
 }
