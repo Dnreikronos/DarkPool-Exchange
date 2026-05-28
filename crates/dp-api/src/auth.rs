@@ -46,20 +46,21 @@ impl AuthCore {
 
     pub fn check(&self, headers: &HeaderMap) -> Result<AuthenticatedIdentity, Status> {
         if let Some(auth_val) = headers.get(http::header::AUTHORIZATION) {
-            if let Some(jwt) = &self.jwt {
-                let auth_str = auth_val
-                    .to_str()
-                    .map_err(|_| Status::unauthenticated("invalid authorization header"))?;
-                if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                    let claims = jwt.verify(token).map_err(|e| {
-                        Status::unauthenticated(format!("invalid token: {e}"))
+            let auth_str = auth_val
+                .to_str()
+                .map_err(|_| Status::unauthenticated("invalid authorization header"))?;
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                let jwt = self.jwt.as_ref().ok_or_else(|| {
+                    Status::unauthenticated("bearer authentication not enabled")
+                })?;
+                let claims = jwt.verify(token).map_err(|e| {
+                    Status::unauthenticated(format!("invalid token: {e}"))
+                })?;
+                let addr = crate::siwe::JwtManager::address_from_claims(&claims)
+                    .ok_or_else(|| {
+                        Status::unauthenticated("invalid address in token")
                     })?;
-                    let addr = crate::siwe::JwtManager::address_from_claims(&claims)
-                        .ok_or_else(|| {
-                            Status::unauthenticated("invalid address in token")
-                        })?;
-                    return Ok(AuthenticatedIdentity::Wallet(addr));
-                }
+                return Ok(AuthenticatedIdentity::Wallet(addr));
             }
         }
 
