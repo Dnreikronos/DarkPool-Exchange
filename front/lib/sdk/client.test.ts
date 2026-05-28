@@ -506,6 +506,59 @@ describe('methodOverridesFromEnv', () => {
   })
 })
 
+// ─── I2.5 wire test: NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false flips ──
+//      just `getAuctionHistory` to the live RestClient (siblings stay on
+//      the StoreMockClient). Mirrors the I2.4 orderbook flip so a
+//      regression in either the env parser or the routing client surfaces
+//      here instead of as a silent mocked tape in the browser.
+
+describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false', () => {
+  it('routes getAuctionHistory to REST while siblings stay on the StoreMockClient', async () => {
+    const overrides = methodOverridesFromEnv({
+      NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY: 'false',
+    })
+    expect(overrides).toEqual({ getAuctionHistory: false })
+
+    const { fetch, calls } = captureFetch(makeJsonResponse({ auctions: [] }))
+    const mockCalls: DarkPoolMethod[] = []
+    const stubMock = makeRecordingClient((m) => mockCalls.push(m))
+
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: true,
+      mockClient: stubMock,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+      methodOverrides: overrides,
+    })
+
+    await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions?pair=ETH%2FUSDC&limit=50`)
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['x-api-key']).toBe(KEY)
+    expect(mockCalls).toEqual(['getOrderBook'])
+  })
+
+  it('falls through to the empty-array response when the backend reports zero auctions', async () => {
+    const { fetch } = captureFetch(makeJsonResponse({ auctions: [] }))
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: false,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+    })
+    const resp = await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+    expect(resp.auctions).toEqual([])
+  })
+})
+
 // ─── DarkPoolError ────────────────────────────────────────────────────────
 
 describe('DarkPoolError', () => {

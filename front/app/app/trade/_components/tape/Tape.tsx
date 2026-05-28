@@ -1,21 +1,42 @@
 'use client'
 
 import * as React from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { AuctionSummary } from '@/lib/sdk'
 
 import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
 import { TapeRow } from './TapeRow'
+import { auctionsFromQuery } from '../../_lib/tape/auctions'
 import { useAuctionHistory } from '../../_hooks/tape/useAuctionHistory'
 import { useNow } from '../../_hooks/tape/useNow'
 
 export interface TapeProps {
   limit?: number
+  /** Override polling cadence for Storybook / tests. */
+  refetchIntervalMs?: number
 }
 
-export function Tape({ limit }: TapeProps = {}): JSX.Element {
-  const auctions = useAuctionHistory({ limit })
+/**
+ * Root tape component.
+ *
+ * Ships its own `QueryClientProvider` mirroring `OrderBook`: the trading
+ * shell hasn't hoisted a shared client yet, so each panel scopes one.
+ * Consumers that already wrap children with a `QueryClientProvider`
+ * should render {@link TapeContent} directly to share the cache.
+ */
+export function Tape(props: TapeProps = {}): JSX.Element {
+  return (
+    <QueryClientProvider client={getScopedClient()}>
+      <TapeContent {...props} />
+    </QueryClientProvider>
+  )
+}
+
+export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.Element {
+  const query = useAuctionHistory({ limit, refetchIntervalMs })
+  const auctions = auctionsFromQuery(query)
   const nowSeconds = useNow()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
 
@@ -66,4 +87,18 @@ function EmptyState(): JSX.Element {
       [ NO AUCTIONS YET ]
     </div>
   )
+}
+
+let scopedClient: QueryClient | null = null
+function getScopedClient(): QueryClient {
+  if (scopedClient) return scopedClient
+  scopedClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        refetchOnWindowFocus: false,
+      },
+    },
+  })
+  return scopedClient
 }
