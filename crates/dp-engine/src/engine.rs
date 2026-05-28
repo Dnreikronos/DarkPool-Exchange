@@ -478,7 +478,7 @@ impl Engine {
                 return Err(EngineError::Validation(
                     DarkPoolError::TraderAddressMismatch {
                         expected: format!("{:#x}", expected),
-                        found: format!("{:#x}", decrypted.trader),
+                        found: "***".to_string(),
                     },
                 ));
             }
