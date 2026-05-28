@@ -346,4 +346,114 @@ mod tests {
             "0x6da01670d8fc844e736095918bbe11fe8d564163"
         );
     }
+
+    fn sign_eip191(msg: &str, sk: &k256::ecdsa::SigningKey) -> [u8; 65] {
+        use k256::ecdsa::signature::hazmat::PrehashSigner;
+        use sha3::{Digest, Keccak256};
+        let prefixed = format!("\x19Ethereum Signed Message:\n{}{}", msg.len(), msg);
+        let hash = Keccak256::digest(prefixed.as_bytes());
+        let (sig, recid): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) =
+            sk.sign_prehash(hash.as_ref()).unwrap();
+        let mut out = [0u8; 65];
+        out[..64].copy_from_slice(&sig.to_bytes());
+        out[64] = recid.to_byte() + 27;
+        out
+    }
+
+    fn eth_address(sk: &k256::ecdsa::SigningKey) -> String {
+        use sha3::{Digest, Keccak256};
+        let pk = sk.verifying_key();
+        let uncompressed = pk.to_encoded_point(false);
+        let hash = Keccak256::digest(&uncompressed.as_bytes()[1..]);
+        let addr_bytes = &hash[12..];
+        let addr_hex = hex::encode(addr_bytes);
+        let addr_hash = Keccak256::digest(addr_hex.as_bytes());
+        let mut checksummed = String::with_capacity(42);
+        checksummed.push_str("0x");
+        for (i, c) in addr_hex.chars().enumerate() {
+            if c.is_ascii_digit() {
+                checksummed.push(c);
+            } else if addr_hash[i / 2] >> (if i % 2 == 0 { 4 } else { 0 }) & 0xf >= 8 {
+                checksummed.push(c.to_ascii_uppercase());
+            } else {
+                checksummed.push(c);
+            }
+        }
+        checksummed
+    }
+
+    fn make_siwe_message(address: &str, nonce: &str, chain_id: u64) -> String {
+        format!(
+            "localhost wants you to sign in with your Ethereum account:\n\
+             {address}\n\
+             \n\
+             Test statement\n\
+             \n\
+             URI: http://localhost\n\
+             Version: 1\n\
+             Chain ID: {chain_id}\n\
+             Nonce: {nonce}\n\
+             Issued At: 2099-01-01T00:00:00Z"
+        )
+    }
+
+    #[test]
+    fn verify_siwe_round_trip() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message(&addr_str, &nonce, 1);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(result.is_ok(), "verify failed: {result:?}");
+    }
+
+    #[test]
+    fn verify_siwe_wrong_chain_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message(&addr_str, &nonce, 1);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(42), None);
+        assert!(matches!(result, Err(SiweError::ChainMismatch { .. })));
+    }
+
+    #[test]
+    fn verify_siwe_wrong_domain_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message(&addr_str, &nonce, 1);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, None, Some("evil.com"));
+        assert!(matches!(result, Err(SiweError::DomainMismatch { .. })));
+    }
+
+    #[test]
+    fn verify_siwe_bad_nonce_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let msg = make_siwe_message(&addr_str, "unknownnonce12345", 1);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, None, None);
+        assert!(matches!(result, Err(SiweError::NonceInvalid)));
+    }
+
+    #[test]
+    fn verify_siwe_bad_signature_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message(&addr_str, &nonce, 1);
+        let mut sig = sign_eip191(&msg, &sk);
+        sig[0] ^= 0xff;
+        let result = verify_siwe_message(&msg, &sig, &store, None, None);
+        assert!(matches!(result, Err(SiweError::Verification(_))));
+    }
 }

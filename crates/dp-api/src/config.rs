@@ -474,4 +474,55 @@ mod tests {
         let cfg = Config::parse_from(["darkpool-server", "--snapshot-dir", "/var/dp/snaps"]);
         assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
     }
+
+    fn cfg_with_siwe(enabled: bool, secret: &str, domain: &str) -> Config {
+        let mut args = vec!["darkpool-server".to_string()];
+        if enabled {
+            args.push("--siwe-enabled".into());
+        }
+        if !secret.is_empty() {
+            args.push("--session-secret-raw".into());
+            args.push(secret.into());
+        }
+        if !domain.is_empty() {
+            args.push("--siwe-domain-raw".into());
+            args.push(domain.into());
+        }
+        Config::parse_from(args)
+    }
+
+    #[test]
+    fn siwe_disabled_validates_ok_without_secret() {
+        let cfg = cfg_with_siwe(false, "", "");
+        assert!(cfg.validate_siwe_config().is_ok());
+    }
+
+    #[test]
+    fn siwe_enabled_without_secret_fails() {
+        let cfg = cfg_with_siwe(true, "", "");
+        let err = cfg.validate_siwe_config().unwrap_err();
+        assert!(err.contains("SESSION_SECRET"), "msg: {err}");
+    }
+
+    #[test]
+    fn siwe_enabled_with_short_secret_fails() {
+        let cfg = cfg_with_siwe(true, "tooshort", "");
+        let err = cfg.validate_siwe_config().unwrap_err();
+        assert!(err.contains("32 bytes"), "msg: {err}");
+    }
+
+    #[test]
+    fn siwe_enabled_with_valid_secret_passes() {
+        let cfg = cfg_with_siwe(true, "a]secret-that-is-at-least-32-bytes-long!", "");
+        assert!(cfg.validate_siwe_config().is_ok());
+        assert!(cfg.session_secret().is_some());
+    }
+
+    #[test]
+    fn siwe_domain_accessor() {
+        let cfg = cfg_with_siwe(false, "", "app.darkpool.exchange");
+        assert_eq!(cfg.siwe_domain(), Some("app.darkpool.exchange"));
+        let cfg2 = cfg_with_siwe(false, "", "");
+        assert!(cfg2.siwe_domain().is_none());
+    }
 }
