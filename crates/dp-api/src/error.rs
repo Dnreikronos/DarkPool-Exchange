@@ -94,6 +94,17 @@ mod tests {
     }
 
     #[test]
+    fn trader_address_mismatch_maps_to_permission_denied() {
+        let s = engine_error_to_status(EngineError::Validation(
+            DarkPoolError::TraderAddressMismatch {
+                expected: "0x1111".into(),
+                found: "***".into(),
+            },
+        ));
+        assert_eq!(s.code(), Code::PermissionDenied);
+    }
+
+    #[test]
     fn non_validation_engine_error_maps_to_internal() {
         let s = engine_error_to_status(EngineError::WitnessOrderMissing {
             order_id: uuid::Uuid::nil(),
