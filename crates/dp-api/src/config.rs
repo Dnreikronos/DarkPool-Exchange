@@ -255,10 +255,21 @@ impl Config {
     }
 
     pub fn validate_siwe_config(&self) -> Result<(), String> {
-        if self.siwe_enabled && self.session_secret().is_none() {
-            return Err(
-                "DARKPOOL_SIWE_ENABLED is true but DARKPOOL_SESSION_SECRET is not set".into(),
-            );
+        if !self.siwe_enabled {
+            return Ok(());
+        }
+        match self.session_secret() {
+            None => {
+                return Err(
+                    "DARKPOOL_SIWE_ENABLED is true but DARKPOOL_SESSION_SECRET is not set".into(),
+                );
+            }
+            Some(s) if s.len() < 32 => {
+                return Err(
+                    "DARKPOOL_SESSION_SECRET must be at least 32 bytes".into(),
+                );
+            }
+            _ => {}
         }
         Ok(())
     }
