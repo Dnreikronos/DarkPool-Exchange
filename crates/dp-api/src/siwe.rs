@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 // NonceStore
 // ---------------------------------------------------------------------------
 
+const MAX_NONCES: usize = 10_000;
+
 #[derive(Debug)]
 pub struct NonceStore {
     inner: Arc<Mutex<HashMap<String, Instant>>>,
@@ -27,10 +29,14 @@ impl NonceStore {
         }
     }
 
-    pub fn generate(&self) -> String {
+    pub fn generate(&self) -> Option<String> {
+        let mut map = self.inner.lock();
+        if map.len() >= MAX_NONCES {
+            return None;
+        }
         let nonce = siwe::generate_nonce();
-        self.inner.lock().insert(nonce.clone(), Instant::now());
-        nonce
+        map.insert(nonce.clone(), Instant::now());
+        Some(nonce)
     }
 
     pub fn consume(&self, nonce: &str) -> bool {
@@ -153,9 +159,13 @@ pub fn verify_siwe_message(
 // JWT
 // ---------------------------------------------------------------------------
 
+const JWT_ISSUER: &str = "darkpool";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
+    pub iss: String,
+    pub aud: String,
     pub iat: u64,
     pub exp: u64,
 }
@@ -164,6 +174,7 @@ pub struct Claims {
 pub struct JwtManager {
     encoding: Arc<EncodingKey>,
     decoding: Arc<DecodingKey>,
+    validation: Arc<Validation>,
     ttl: Duration,
 }
 
@@ -177,9 +188,13 @@ impl std::fmt::Debug for JwtManager {
 
 impl JwtManager {
     pub fn new(secret: &str, ttl: Duration) -> Self {
+        let mut validation = Validation::default();
+        validation.set_issuer(&[JWT_ISSUER]);
+        validation.set_audience(&[JWT_ISSUER]);
         Self {
             encoding: Arc::new(EncodingKey::from_secret(secret.as_bytes())),
             decoding: Arc::new(DecodingKey::from_secret(secret.as_bytes())),
+            validation: Arc::new(validation),
             ttl,
         }
     }
@@ -192,6 +207,8 @@ impl JwtManager {
         let exp = now + self.ttl.as_secs();
         let claims = Claims {
             sub: format!("{:#x}", address),
+            iss: JWT_ISSUER.to_string(),
+            aud: JWT_ISSUER.to_string(),
             iat: now,
             exp,
         };
@@ -200,7 +217,7 @@ impl JwtManager {
     }
 
     pub fn verify(&self, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-        let data = jsonwebtoken::decode::<Claims>(token, &self.decoding, &Validation::default())?;
+        let data = jsonwebtoken::decode::<Claims>(token, &self.decoding, &self.validation)?;
         Ok(data.claims)
     }
 
@@ -228,14 +245,14 @@ mod tests {
     #[test]
     fn nonce_generate_and_consume() {
         let store = NonceStore::new(Duration::from_secs(300));
-        let nonce = store.generate();
+        let nonce = store.generate().unwrap();
         assert!(store.consume(&nonce));
     }
 
     #[test]
     fn nonce_double_consume_fails() {
         let store = NonceStore::new(Duration::from_secs(300));
-        let nonce = store.generate();
+        let nonce = store.generate().unwrap();
         assert!(store.consume(&nonce));
         assert!(!store.consume(&nonce));
     }
@@ -243,7 +260,7 @@ mod tests {
     #[test]
     fn nonce_expired_fails() {
         let store = NonceStore::new(Duration::from_secs(0));
-        let nonce = store.generate();
+        let nonce = store.generate().unwrap();
         std::thread::sleep(Duration::from_millis(10));
         assert!(!store.consume(&nonce));
     }
@@ -262,6 +279,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         store.evict_stale();
         assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn nonce_rejects_when_full() {
+        let store = NonceStore::new(Duration::from_secs(300));
+        for _ in 0..MAX_NONCES {
+            assert!(store.generate().is_some());
+        }
+        assert!(store.generate().is_none());
     }
 
     #[test]
@@ -302,6 +328,8 @@ mod tests {
     fn jwt_address_from_claims() {
         let claims = Claims {
             sub: "0x6da01670d8fc844e736095918bbe11fe8d564163".into(),
+            iss: JWT_ISSUER.into(),
+            aud: JWT_ISSUER.into(),
             iat: 0,
             exp: 0,
         };

@@ -278,10 +278,13 @@ struct VerifyResponse {
     address: String,
 }
 
-async fn rest_auth_nonce(State(state): State<SiweState>) -> Json<NonceResponse> {
-    Json(NonceResponse {
-        nonce: state.nonce_store.generate(),
-    })
+async fn rest_auth_nonce(
+    State(state): State<SiweState>,
+) -> Result<Json<NonceResponse>, ApiError> {
+    let nonce = state.nonce_store.generate().ok_or_else(|| {
+        ApiError(tonic::Status::resource_exhausted("nonce store full"))
+    })?;
+    Ok(Json(NonceResponse { nonce }))
 }
 
 async fn rest_auth_verify(
