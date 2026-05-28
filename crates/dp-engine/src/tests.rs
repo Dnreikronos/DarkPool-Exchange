@@ -335,6 +335,30 @@ async fn place_encrypted_order_bad_ciphertext() {
     assert!(r.is_err());
 }
 
+#[tokio::test]
+async fn place_encrypted_order_rejects_caller_address_mismatch() {
+    let (engine, _) = make_engine();
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+    let wrong_caller: Address = "0x0000000000000000000000000000000000000001"
+        .parse()
+        .unwrap();
+    let r = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(wrong_caller))
+        .await;
+    assert!(r.is_err());
+    let msg = r.unwrap_err().to_string();
+    assert!(msg.contains("trader address mismatch"), "got: {msg}");
+}
+
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
 /// but traders may send any casing. The trader path must canonicalise
 /// before the registry lookup — otherwise `eth/usdc` 404s against an
