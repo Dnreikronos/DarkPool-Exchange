@@ -205,7 +205,7 @@ mod tests {
             limit_price: Decimal::new(100, 0),
             order_size: Decimal::new(10, 0),
             side: 0,
-            commitment_key: "ck".into(),
+            trader_addr: "cc".repeat(20),
         }
     }
 

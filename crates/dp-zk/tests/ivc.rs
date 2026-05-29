@@ -33,9 +33,10 @@ fn make_rng() -> ark_std::rand::rngs::StdRng {
     ark_std::rand::rngs::StdRng::seed_from_u64(42)
 }
 
-fn trader_id_hex(commitment_key: &str) -> String {
+fn trader_id_hex(addr_hex: &str) -> String {
     use ark_ff::{BigInteger, PrimeField};
-    let f = derive_trader_id(commitment_key.as_bytes()).unwrap();
+    let addr = hex::decode(addr_hex.trim_start_matches("0x")).unwrap();
+    let f = derive_trader_id(&addr).unwrap();
     let mut bytes = f.into_bigint().to_bytes_be();
     while bytes.len() < 32 {
         bytes.insert(0, 0);
@@ -44,28 +45,28 @@ fn trader_id_hex(commitment_key: &str) -> String {
 }
 
 fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
-    let bid_key = "bid_key".to_string();
-    let ask_key = "ask_key".to_string();
+    let bid_addr = "aa".repeat(20);
+    let ask_addr = "bb".repeat(20);
     let m = MatchWitness {
         bid: OrderLegWitness {
-            trader_id: trader_id_hex(&bid_key),
+            trader_id: trader_id_hex(&bid_addr),
             salt: "22".repeat(32),
             balance: Decimal::from(1_000_000),
             position: "0".into(),
             limit_price: Decimal::from(105),
             order_size: Decimal::from(10),
             side: 0,
-            commitment_key: bid_key,
+            trader_addr: bid_addr,
         },
         ask: OrderLegWitness {
-            trader_id: trader_id_hex(&ask_key),
+            trader_id: trader_id_hex(&ask_addr),
             salt: "44".repeat(32),
             balance: Decimal::from(1_000_000),
             position: "0".into(),
             limit_price: Decimal::from(95),
             order_size: Decimal::from(10),
             side: 1,
-            commitment_key: ask_key,
+            trader_addr: ask_addr,
         },
     };
     let w = BatchWitness {

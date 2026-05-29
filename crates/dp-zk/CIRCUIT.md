@@ -28,12 +28,13 @@ uses `2^58`.
 | 1 | Side bit-form               | All rows     | `side * (1 - side) == 0` per leg.                   |
 | 2 | Opposite sides              | Active rows  | `(bid_side + ask_side - 1) * is_active == 0`.       |
 | 3 | Crossing                    | Active rows  | `bid_lp - match_price` and `match_price - ask_lp` non-negative via 60-bit range. |
+| 3b| Uniform clearing price      | Active rows  | `(match_price - clearing_price) * is_active == 0` — every active row settles at the single auction clearing price (#163). |
 | 4 | Min-size, min-price         | All / active | 60-bit ranges on `size`, `price`; diff to floors gated by `is_active`. |
 | 5 | Leg commitment binding      | All rows     | In-circuit Poseidon over `(trader_id, side, lp, size, salt)` reconstructs the commitment, accumulated into `commitments_root`. |
 | 6 | Notional binding            | All rows     | `match_price * match_size` accumulates into `notionals_root`. |
 | 7 | Solvency                    | Active rows  | `balance < 2^60` (60-bit range) AND `balance * 1e8 - notional` fits 120-bit range. |
 | 8 | Position-limit (two-sided)  | Active rows  | For `new_pos = position ± match_size`, `(limit - new_pos)` and `(limit + new_pos)` each fit in 60 bits → `\|new_pos\| ≤ position_limit`. |
-| 9 | Trader-id binding           | Active rows  | `(poseidon(commitment_key_scalar) - trader_id) * is_active == 0`. |
+| 9 | Trader-id binding           | Active rows  | `(poseidon(trader_addr_scalar) - trader_id) * is_active == 0` — identity is the on-chain settlement address, binding the proof to the account the contract debits/credits (#153). |
 
 The two-sided range trick avoids an explicit absolute-value gadget:
 because the Poseidon-friendly `signed_to_scalar` representation puts

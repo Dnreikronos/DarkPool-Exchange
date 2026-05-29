@@ -578,6 +578,7 @@ impl Engine {
         let nonce = &self.inner.salt_nonce;
         let secrets = derive_order_secrets(
             order.id,
+            order.trader.as_slice(),
             &order.commitment_key,
             order.side as u8,
             order.price,
@@ -777,7 +778,9 @@ fn leg_witness_from(
         limit_price: order.price,
         order_size: order.size,
         side,
-        commitment_key: order.commitment_key,
+        // The circuit identity is the on-chain settlement address; `trader_id`
+        // above is `poseidon(this)` (#153).
+        trader_addr: hex::encode(order.trader),
     }
 }
 
@@ -790,8 +793,12 @@ fn leg_witness_from(
 /// `order_id` — from reconstructing the salt. The nonce is persisted
 /// alongside each `OrderPlaced` event so recovery can recompute the
 /// commitment.
+// Internal helper threading the full secret-derivation inputs; the argument
+// list is intentionally flat rather than a one-off params struct.
+#[allow(clippy::too_many_arguments)]
 fn derive_order_secrets(
     order_id: Uuid,
+    trader_addr: &[u8],
     commitment_key: &str,
     side: u8,
     price: Decimal,
@@ -799,7 +806,10 @@ fn derive_order_secrets(
     oracle: &dyn BalanceOracle,
     nonce: &[u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
+    // Identity is bound to the verified on-chain address, not the client-
+    // chosen commitment_key (#153). The commitment_key is retained below only
+    // as blinding entropy for the salt.
+    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
     let salt = derive_salt(commitment_key, order_id, nonce);
     let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
 
@@ -818,13 +828,14 @@ fn derive_order_secrets(
 /// `OrderPlaced` events without keeping any state in memory.
 pub(crate) fn recompute_persisted_commitment(
     order_id: Uuid,
+    trader_addr: &[u8],
     commitment_key: &str,
     side: u8,
     price: Decimal,
     size: Decimal,
     nonce: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(commitment_key.as_bytes());
+    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
     let salt = derive_salt(commitment_key, order_id, nonce);
     compute_poseidon_commitment(&trader_id, side, price, size, &salt)
 }

@@ -31,7 +31,7 @@ pub struct CircuitMatchNative {
     pub bid_side: Fr,
     pub bid_balance: Fr,
     pub bid_position: Fr,
-    pub bid_commitment_key: Fr,
+    pub bid_trader_addr: Fr,
     pub bid_order_size: Fr,
 
     pub ask_trader: Fr,
@@ -40,7 +40,7 @@ pub struct CircuitMatchNative {
     pub ask_side: Fr,
     pub ask_balance: Fr,
     pub ask_position: Fr,
-    pub ask_commitment_key: Fr,
+    pub ask_trader_addr: Fr,
     pub ask_order_size: Fr,
 
     pub match_price: Fr,
@@ -59,7 +59,7 @@ impl Default for CircuitMatchNative {
             bid_side: zero,
             bid_balance: zero,
             bid_position: zero,
-            bid_commitment_key: zero,
+            bid_trader_addr: zero,
             bid_order_size: zero,
             ask_trader: zero,
             ask_salt: zero,
@@ -67,7 +67,7 @@ impl Default for CircuitMatchNative {
             ask_side: one, // ask side = 1 for inactive rows (valid bit)
             ask_balance: zero,
             ask_position: zero,
-            ask_commitment_key: zero,
+            ask_trader_addr: zero,
             ask_order_size: zero,
             match_price: zero,
             match_size: zero,
@@ -166,7 +166,10 @@ impl AuctionExternalInputs {
                 bid_side: Fr::from(m.bid.side as u64),
                 bid_balance: m.bid.balance_scalar()?,
                 bid_position: m.bid.position_scalar()?,
-                bid_commitment_key: m.bid.commitment_key_scalar(),
+                bid_trader_addr: m
+                    .bid
+                    .trader_addr_scalar()
+                    .map_err(|e| ZkError::Witness(format!("bid trader_addr: {e}")))?,
                 bid_order_size: m.bid.order_size_scalar()?,
                 ask_trader,
                 ask_salt,
@@ -174,7 +177,10 @@ impl AuctionExternalInputs {
                 ask_side: Fr::from(m.ask.side as u64),
                 ask_balance: m.ask.balance_scalar()?,
                 ask_position: m.ask.position_scalar()?,
-                ask_commitment_key: m.ask.commitment_key_scalar(),
+                ask_trader_addr: m
+                    .ask
+                    .trader_addr_scalar()
+                    .map_err(|e| ZkError::Witness(format!("ask trader_addr: {e}")))?,
                 ask_order_size: m.ask.order_size_scalar()?,
                 match_price: decimal_to_scalar(match_prices[i])?,
                 match_size: decimal_to_scalar(match_sizes[i])?,
@@ -217,7 +223,7 @@ pub struct CircuitMatchVar {
     pub bid_side: FpVar<Fr>,
     pub bid_balance: FpVar<Fr>,
     pub bid_position: FpVar<Fr>,
-    pub bid_commitment_key: FpVar<Fr>,
+    pub bid_trader_addr: FpVar<Fr>,
     pub bid_order_size: FpVar<Fr>,
 
     pub ask_trader: FpVar<Fr>,
@@ -226,7 +232,7 @@ pub struct CircuitMatchVar {
     pub ask_side: FpVar<Fr>,
     pub ask_balance: FpVar<Fr>,
     pub ask_position: FpVar<Fr>,
-    pub ask_commitment_key: FpVar<Fr>,
+    pub ask_trader_addr: FpVar<Fr>,
     pub ask_order_size: FpVar<Fr>,
 
     pub match_price: FpVar<Fr>,
@@ -269,11 +275,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
                 bid_side: FpVar::new_variable(cs.clone(), || Ok(cm.bid_side), mode)?,
                 bid_balance: FpVar::new_variable(cs.clone(), || Ok(cm.bid_balance), mode)?,
                 bid_position: FpVar::new_variable(cs.clone(), || Ok(cm.bid_position), mode)?,
-                bid_commitment_key: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.bid_commitment_key),
-                    mode,
-                )?,
+                bid_trader_addr: FpVar::new_variable(cs.clone(), || Ok(cm.bid_trader_addr), mode)?,
                 bid_order_size: FpVar::new_variable(cs.clone(), || Ok(cm.bid_order_size), mode)?,
                 ask_trader: FpVar::new_variable(cs.clone(), || Ok(cm.ask_trader), mode)?,
                 ask_salt: FpVar::new_variable(cs.clone(), || Ok(cm.ask_salt), mode)?,
@@ -281,11 +283,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
                 ask_side: FpVar::new_variable(cs.clone(), || Ok(cm.ask_side), mode)?,
                 ask_balance: FpVar::new_variable(cs.clone(), || Ok(cm.ask_balance), mode)?,
                 ask_position: FpVar::new_variable(cs.clone(), || Ok(cm.ask_position), mode)?,
-                ask_commitment_key: FpVar::new_variable(
-                    cs.clone(),
-                    || Ok(cm.ask_commitment_key),
-                    mode,
-                )?,
+                ask_trader_addr: FpVar::new_variable(cs.clone(), || Ok(cm.ask_trader_addr), mode)?,
                 ask_order_size: FpVar::new_variable(cs.clone(), || Ok(cm.ask_order_size), mode)?,
                 match_price: FpVar::new_variable(cs.clone(), || Ok(cm.match_price), mode)?,
                 match_size: FpVar::new_variable(cs.clone(), || Ok(cm.match_size), mode)?,
@@ -381,7 +379,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
                 bid_side,
                 bid_balance,
                 bid_position,
-                bid_ck,
+                bid_addr,
                 bid_order_size,
                 ask_trader,
                 ask_salt,
@@ -389,7 +387,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
                 ask_side,
                 ask_balance,
                 ask_position,
-                ask_ck,
+                ask_addr,
                 ask_order_size,
                 m_price,
                 m_size,
@@ -403,7 +401,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
                     cm.bid_side.clone(),
                     cm.bid_balance.clone(),
                     cm.bid_position.clone(),
-                    cm.bid_commitment_key.clone(),
+                    cm.bid_trader_addr.clone(),
                     cm.bid_order_size.clone(),
                     cm.ask_trader.clone(),
                     cm.ask_salt.clone(),
@@ -411,7 +409,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
                     cm.ask_side.clone(),
                     cm.ask_balance.clone(),
                     cm.ask_position.clone(),
-                    cm.ask_commitment_key.clone(),
+                    cm.ask_trader_addr.clone(),
                     cm.ask_order_size.clone(),
                     cm.match_price.clone(),
                     cm.match_size.clone(),
@@ -534,14 +532,19 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             enforce_range_60(&ask_pos_lo)?;
             enforce_range_60(&ask_pos_hi)?;
 
-            // ── Family 9: trader_id == poseidon(commitment_key) on active rows
+            // ── Family 9: trader_id == poseidon(trader_addr) on active rows ──
+            // Binds the in-circuit identity to the trader's on-chain settlement
+            // address, so a proven match maps to the exact account the contract
+            // debits/credits (#153). `trader_addr` is the address bytes as a
+            // field element; the engine derives `trader_id` the same way from
+            // the *verified* caller address, so a lying client cannot rebind.
             let mut bid_id_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            bid_id_sponge.absorb(&[bid_ck.clone()].as_ref())?;
+            bid_id_sponge.absorb(&[bid_addr.clone()].as_ref())?;
             let bid_derived = bid_id_sponge.squeeze_field_elements(1)?[0].clone();
             ((&bid_derived - &bid_trader) * &is_active).enforce_equal(&zero)?;
 
             let mut ask_id_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
-            ask_id_sponge.absorb(&[ask_ck.clone()].as_ref())?;
+            ask_id_sponge.absorb(&[ask_addr.clone()].as_ref())?;
             let ask_derived = ask_id_sponge.squeeze_field_elements(1)?[0].clone();
             ((&ask_derived - &ask_trader) * &is_active).enforce_equal(&zero)?;
 
@@ -610,8 +613,11 @@ mod tests {
     use rust_decimal::Decimal;
     use uuid::Uuid;
 
-    fn trader_id_hex(commitment_key: &str) -> String {
-        let f = derive_trader_id(commitment_key.as_bytes()).unwrap();
+    /// Trader id for a hex-encoded address, matching `trader_addr_scalar`'s
+    /// projection: `poseidon(from_be_bytes_mod_order(addr_bytes))`.
+    fn trader_id_hex(addr_hex: &str) -> String {
+        let addr = hex::decode(addr_hex.trim_start_matches("0x")).unwrap();
+        let f = derive_trader_id(&addr).unwrap();
         let mut bytes = f.into_bigint().to_bytes_be();
         while bytes.len() < 32 {
             bytes.insert(0, 0);
@@ -620,28 +626,28 @@ mod tests {
     }
 
     fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
-        let bid_key = "bid_key".to_string();
-        let ask_key = "ask_key".to_string();
+        let bid_addr = "aa".repeat(20);
+        let ask_addr = "bb".repeat(20);
         let m = MatchWitness {
             bid: OrderLegWitness {
-                trader_id: trader_id_hex(&bid_key),
+                trader_id: trader_id_hex(&bid_addr),
                 salt: "22".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(105),
                 order_size: Decimal::from(10),
                 side: 0,
-                commitment_key: bid_key,
+                trader_addr: bid_addr,
             },
             ask: OrderLegWitness {
-                trader_id: trader_id_hex(&ask_key),
+                trader_id: trader_id_hex(&ask_addr),
                 salt: "44".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(95),
                 order_size: Decimal::from(10),
                 side: 1,
-                commitment_key: ask_key,
+                trader_addr: ask_addr,
             },
         };
         let w = BatchWitness {
@@ -787,32 +793,35 @@ mod tests {
         price0: Decimal,
         price1: Decimal,
     ) -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
-        let mk = |bid_key: &str, ask_key: &str| MatchWitness {
+        let mk = |bid_addr: &str, ask_addr: &str| MatchWitness {
             bid: OrderLegWitness {
-                trader_id: trader_id_hex(bid_key),
+                trader_id: trader_id_hex(bid_addr),
                 salt: "22".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(105),
                 order_size: Decimal::from(10),
                 side: 0,
-                commitment_key: bid_key.to_string(),
+                trader_addr: bid_addr.to_string(),
             },
             ask: OrderLegWitness {
-                trader_id: trader_id_hex(ask_key),
+                trader_id: trader_id_hex(ask_addr),
                 salt: "44".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(95),
                 order_size: Decimal::from(10),
                 side: 1,
-                commitment_key: ask_key.to_string(),
+                trader_addr: ask_addr.to_string(),
             },
         };
         let w = BatchWitness {
             batch_id: Uuid::nil(),
             auction_id: Uuid::nil(),
-            matches: vec![mk("bid0", "ask0"), mk("bid1", "ask1")],
+            matches: vec![
+                mk(&"a1".repeat(20), &"a2".repeat(20)),
+                mk(&"b1".repeat(20), &"b2".repeat(20)),
+            ],
             policy: DEFAULT_POLICY.into_policy(),
         };
         (

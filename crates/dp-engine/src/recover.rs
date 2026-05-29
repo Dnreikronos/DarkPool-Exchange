@@ -391,6 +391,7 @@ impl Engine {
                 })?;
                 let recomputed = crate::engine::recompute_persisted_commitment(
                     *order_id,
+                    decrypted.trader.as_slice(),
                     &decrypted.commitment_key,
                     decrypted.side as u8,
                     decrypted.price,
