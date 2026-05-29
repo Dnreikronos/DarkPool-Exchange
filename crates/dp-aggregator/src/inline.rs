@@ -145,15 +145,16 @@ impl ProofAggregator for InlineFoldingAggregator {
     }
 }
 
-/// Compute z_0 = [0, 0, poseidon(min_size, min_price, position_limit)] from
+/// Compute z_0 = [0, 0, poseidon(min_size, min_price, position_limit), 0] from
 /// the external inputs of the first round. This matches the `initial_z` helper
-/// in `dp-zk`'s step circuit tests.
-fn compute_z_0(ext: &AuctionExternalInputs) -> [Fr; 3] {
+/// in `dp-zk`'s step circuit tests. The trailing slot is the empty settlement
+/// hash-chain accumulator (#153).
+fn compute_z_0(ext: &AuctionExternalInputs) -> [Fr; 4] {
     let cfg = poseidon_config();
     let mut s = PoseidonSponge::<Fr>::new(&cfg);
     s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
     let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-    [Fr::zero(), Fr::zero(), policy_hash]
+    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero()]
 }
 
 #[cfg(test)]

@@ -305,15 +305,18 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
 
 /// IVC step circuit for HyperNova.
 ///
-/// IVC state: `z_i = [state_hash, round_nonce, policy_hash]` (3 Fr elements).
+/// IVC state: `z_i = [state_hash, round_nonce, policy_hash, settlement_acc]`
+/// (4 Fr elements).
 ///
-/// Each step folds one auction batch, enforcing the same 9 constraint families
-/// as `BatchProofCircuit`, then updates the state:
+/// Each step folds one auction batch, enforcing the constraint families, then
+/// updates the state:
 /// ```text
 /// policy_hash_computed = poseidon(min_size, min_price, position_limit)
 /// // checked == z_i[2]
 /// new_state_hash = poseidon(z_i[0], commitments_root, notionals_root, active_count)
-/// z_{i+1} = [new_state_hash, z_i[1] + 1, z_i[2]]
+/// // settlement_acc folds each active row's tuple (bid_addr, ask_addr,
+/// // match_price, match_size) into a running Poseidon chain (#153)
+/// z_{i+1} = [new_state_hash, z_i[1] + 1, z_i[2], settlement_acc']
 /// ```
 #[derive(Clone, Debug)]
 pub struct AuctionStepCircuit {
@@ -330,7 +333,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
     }
 
     fn state_len(&self) -> usize {
-        3 // [state_hash, round_nonce, policy_hash]
+        4 // [state_hash, round_nonce, policy_hash, settlement_acc]
     }
 
     fn generate_step_constraints(
@@ -343,6 +346,14 @@ impl FCircuit<Fr> for AuctionStepCircuit {
         let prev_state_hash = z_i[0].clone();
         let round_nonce = z_i[1].clone();
         let policy_hash = z_i[2].clone();
+        // Running Poseidon hash-chain over the plaintext settlement tuples of
+        // every active match across the whole session, in order. The contract
+        // recomputes the identical chain over the settled `matches[]` and
+        // requires it equal `z_n[3]` — this is what binds on-chain settlement
+        // to the proof (#153). A chain (not a sponge over a padded vector)
+        // means the contract folds only real matches, with no padding-length
+        // coupling to the circuit's fixed `batch_size`.
+        let mut settlement_acc = z_i[3].clone();
 
         let cfg = poseidon_config();
         let one = FpVar::<Fr>::one();
@@ -548,6 +559,26 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             let ask_derived = ask_id_sponge.squeeze_field_elements(1)?[0].clone();
             ((&ask_derived - &ask_trader) * &is_active).enforce_equal(&zero)?;
 
+            // ── Settlement-tuple chain (#153) ────────────────────────────────
+            // Fold this row's plaintext settlement tuple into the running
+            // chain on active rows; inactive (padding) rows pass the
+            // accumulator through unchanged. `bid_addr`/`ask_addr` are the
+            // settlement addresses as field elements (== uint256(address)),
+            // matching what the contract hashes from `matches[]`.
+            let mut settle_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
+            settle_sponge.absorb(
+                &[
+                    settlement_acc.clone(),
+                    bid_addr.clone(),
+                    ask_addr.clone(),
+                    m_price.clone(),
+                    m_size.clone(),
+                ]
+                .as_ref(),
+            )?;
+            let settle_next = settle_sponge.squeeze_field_elements(1)?[0].clone();
+            settlement_acc = &settle_next * &is_active + &settlement_acc * (&one - &is_active);
+
             all_leaves.push(&bid_commit * &is_active);
             all_leaves.push(&ask_commit * &is_active);
             all_notionals.push(&notional * &is_active);
@@ -580,7 +611,12 @@ impl FCircuit<Fr> for AuctionStepCircuit {
 
         let new_round_nonce = &round_nonce + &one;
 
-        Ok(vec![new_state_hash, new_round_nonce, policy_hash])
+        Ok(vec![
+            new_state_hash,
+            new_round_nonce,
+            policy_hash,
+            settlement_acc,
+        ])
     }
 }
 
@@ -687,7 +723,52 @@ mod tests {
         let mut s = PoseidonSponge::<Fr>::new(&cfg);
         s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
         let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-        vec![Fr::zero(), Fr::zero(), policy_hash]
+        // [state_hash, round_nonce, policy_hash, settlement_acc]
+        vec![Fr::zero(), Fr::zero(), policy_hash, Fr::zero()]
+    }
+
+    /// Native mirror of the in-circuit settlement hash-chain (#153): folds
+    /// each active match's `(bid_addr, ask_addr, price_8, size_8)` tuple into a
+    /// running Poseidon chain starting from `acc0`. This is the value the
+    /// on-chain `settleSession` must reproduce from `matches[]`.
+    fn settlement_chain(ext: &AuctionExternalInputs, acc0: Fr) -> Fr {
+        let cfg = poseidon_config();
+        let mut acc = acc0;
+        for m in &ext.matches {
+            if m.is_active != Fr::one() {
+                continue;
+            }
+            let mut s = PoseidonSponge::<Fr>::new(&cfg);
+            s.absorb(&vec![
+                acc,
+                m.bid_trader_addr,
+                m.ask_trader_addr,
+                m.match_price,
+                m.match_size,
+            ]);
+            acc = s.squeeze_field_elements::<Fr>(1)[0];
+        }
+        acc
+    }
+
+    #[test]
+    fn settlement_acc_matches_native_chain() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(100), Decimal::from(100));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 3).unwrap();
+        let z_0 = initial_z(&ext);
+        let expected = settlement_chain(&ext, z_0[3]);
+        let circuit = AuctionStepCircuit::new(3).unwrap();
+        let (satisfied, z_next) = run_step(&circuit, z_0, ext);
+        assert!(satisfied, "valid two-match batch must satisfy");
+        assert_eq!(
+            z_next[3], expected,
+            "in-circuit settlement_acc must equal the native hash-chain the contract recomputes"
+        );
+        assert_ne!(
+            z_next[3],
+            Fr::zero(),
+            "non-empty batch must advance the chain"
+        );
     }
 
     #[test]

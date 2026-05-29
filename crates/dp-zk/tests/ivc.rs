@@ -84,14 +84,15 @@ fn sample_ext(batch_size: usize) -> AuctionExternalInputs {
         .expect("sample_ext: from_witness")
 }
 
-/// Compute `z_0 = [0, 0, policy_hash]` where
-/// `policy_hash = poseidon(min_size, min_price, position_limit)`.
-fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 3] {
+/// Compute `z_0 = [0, 0, policy_hash, 0]` where
+/// `policy_hash = poseidon(min_size, min_price, position_limit)` and the
+/// trailing slot is the empty settlement hash-chain accumulator.
+fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 4] {
     let cfg = poseidon_config();
     let mut s = PoseidonSponge::<Fr>::new(&cfg);
     s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
     let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-    [Fr::zero(), Fr::zero(), policy_hash]
+    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero()]
 }
 
 // ---------------------------------------------------------------------------
