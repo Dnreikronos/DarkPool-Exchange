@@ -82,6 +82,11 @@ pub struct AuctionExternalInputs {
     pub min_size: Fr,
     pub min_price: Fr,
     pub position_limit: Fr,
+    /// The single uniform clearing price for this auction round. Every active
+    /// match row must settle at this price (#163). Derived from the first
+    /// match in [`from_witness`]; the honest engine applies one volume-
+    /// maximizing price to every match, so all rows already equal it.
+    pub clearing_price: Fr,
     pub matches: Vec<CircuitMatchNative>,
 }
 
@@ -91,6 +96,7 @@ impl Default for AuctionExternalInputs {
             min_size: Fr::zero(),
             min_price: Fr::zero(),
             position_limit: Fr::zero(),
+            clearing_price: Fr::zero(),
             matches: Vec::new(),
         }
     }
@@ -181,10 +187,20 @@ impl AuctionExternalInputs {
             matches.push(CircuitMatchNative::default());
         }
 
+        // The clearing price is the single price every match settles at. The
+        // engine applies one clearing price to all matches, so the first
+        // match's price is that value; the circuit then enforces every active
+        // row equals it.
+        let clearing_price = match match_prices.first() {
+            Some(p) => decimal_to_scalar(*p)?,
+            None => Fr::zero(),
+        };
+
         Ok(Self {
             min_size,
             min_price,
             position_limit,
+            clearing_price,
             matches,
         })
     }
@@ -224,6 +240,7 @@ pub struct AuctionExternalInputsVar {
     pub min_size: FpVar<Fr>,
     pub min_price: FpVar<Fr>,
     pub position_limit: FpVar<Fr>,
+    pub clearing_price: FpVar<Fr>,
     pub matches: Vec<CircuitMatchVar>,
 }
 
@@ -241,6 +258,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
         let min_size = FpVar::new_variable(cs.clone(), || Ok(native.min_size), mode)?;
         let min_price = FpVar::new_variable(cs.clone(), || Ok(native.min_price), mode)?;
         let position_limit = FpVar::new_variable(cs.clone(), || Ok(native.position_limit), mode)?;
+        let clearing_price = FpVar::new_variable(cs.clone(), || Ok(native.clearing_price), mode)?;
 
         let mut matches = Vec::with_capacity(native.matches.len());
         for cm in &native.matches {
@@ -279,6 +297,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
             min_size,
             min_price,
             position_limit,
+            clearing_price,
             matches,
         })
     }
@@ -451,6 +470,12 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             enforce_range_60(&bid_cross)?;
             let ask_cross = (&m_price - &ask_lp) * &is_active;
             enforce_range_60(&ask_cross)?;
+
+            // ── Family 3b: uniform clearing price ───────────────────────────
+            // Every active row must settle at the single auction clearing
+            // price. Without this the proof accepts a batch where the operator
+            // gives different prices to different traders (#163).
+            ((&m_price - &external_inputs.clearing_price) * &is_active).enforce_equal(&zero)?;
 
             // ── Family 5: commitment binding ─────────────────────────────────
             enforce_range_60(&bid_order_size)?;
@@ -752,6 +777,74 @@ mod tests {
         assert_ne!(
             z_next[0], z_0[0],
             "state_hash must change after a non-trivial step"
+        );
+    }
+
+    /// Two crossing matches at two different prices. Each crosses
+    /// individually, so without the uniform-price constraint the batch is
+    /// accepted — exactly the per-match price-discrimination gap (#163).
+    fn two_match_witness(
+        price0: Decimal,
+        price1: Decimal,
+    ) -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
+        let mk = |bid_key: &str, ask_key: &str| MatchWitness {
+            bid: OrderLegWitness {
+                trader_id: trader_id_hex(bid_key),
+                salt: "22".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(105),
+                order_size: Decimal::from(10),
+                side: 0,
+                commitment_key: bid_key.to_string(),
+            },
+            ask: OrderLegWitness {
+                trader_id: trader_id_hex(ask_key),
+                salt: "44".repeat(32),
+                balance: Decimal::from(1_000_000),
+                position: "0".into(),
+                limit_price: Decimal::from(95),
+                order_size: Decimal::from(10),
+                side: 1,
+                commitment_key: ask_key.to_string(),
+            },
+        };
+        let w = BatchWitness {
+            batch_id: Uuid::nil(),
+            auction_id: Uuid::nil(),
+            matches: vec![mk("bid0", "ask0"), mk("bid1", "ask1")],
+            policy: DEFAULT_POLICY.into_policy(),
+        };
+        (
+            w,
+            vec![price0, price1],
+            vec![Decimal::from(10), Decimal::from(10)],
+        )
+    }
+
+    #[test]
+    fn step_rejects_non_uniform_clearing_price() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(100), Decimal::from(101));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            !satisfied,
+            "expected unsatisfied: matches at different prices must be rejected"
+        );
+    }
+
+    #[test]
+    fn step_accepts_uniform_clearing_price() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(100), Decimal::from(100));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "expected satisfied: two active matches at the same price"
         );
     }
 }
