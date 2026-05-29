@@ -506,6 +506,47 @@ describe('methodOverridesFromEnv', () => {
   })
 })
 
+// ─── I2.4 wire test: NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false flips just  ──
+//      `getOrderBook` to the live RestClient while everything else stays
+//      on the StoreMockClient. Locks the documented Phase-2 ramp so a
+//      regression in either the env parser or the routing client surfaces
+//      here instead of as a silent mocked response in the browser.
+
+describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false', () => {
+  it('routes getOrderBook to REST while siblings stay on the StoreMockClient', async () => {
+    const overrides = methodOverridesFromEnv({
+      NEXT_PUBLIC_USE_MOCKS_ORDERBOOK: 'false',
+    })
+    expect(overrides).toEqual({ getOrderBook: false })
+
+    const { fetch, calls } = captureFetch(
+      makeJsonResponse({ pair: 'ETH/USDC', bids: [], asks: [] })
+    )
+    const mockCalls: DarkPoolMethod[] = []
+    const stubMock = makeRecordingClient((m) => mockCalls.push(m))
+
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: true,
+      mockClient: stubMock,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+      methodOverrides: overrides,
+    })
+
+    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`${BASE}/v1/orderbook?pair=ETH%2FUSDC`)
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['x-api-key']).toBe(KEY)
+    expect(mockCalls).toEqual(['getAuctionHistory'])
+  })
+})
+
 // ─── I2.5 wire test: NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false flips ──
 //      just `getAuctionHistory` to the live RestClient (siblings stay on
 //      the StoreMockClient). Mirrors the I2.4 orderbook flip so a

@@ -51,7 +51,7 @@ async fn place(
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
 }
 

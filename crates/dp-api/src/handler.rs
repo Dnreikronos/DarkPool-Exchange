@@ -64,11 +64,18 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<PlaceOrderRequest>,
     ) -> Result<Response<PlaceOrderResponse>, Status> {
+        let caller = req
+            .extensions()
+            .get::<crate::auth::AuthenticatedIdentity>()
+            .and_then(|id| match id {
+                crate::auth::AuthenticatedIdentity::Wallet(addr) => Some(*addr),
+                crate::auth::AuthenticatedIdentity::ApiKey => None,
+            });
         let req = req.into_inner();
         validate_place_order(&req)?;
         let order = self
             .engine
-            .place_encrypted_order(req.commitment, req.proof, req.encrypted_payload)
+            .place_encrypted_order(req.commitment, req.proof, req.encrypted_payload, caller)
             .await
             .map_err(engine_error_to_status)?;
         Ok(Response::new(PlaceOrderResponse {

@@ -56,20 +56,44 @@ fn key_precedence_api_key() {
     let mut h = HeaderMap::new();
     h.insert("x-api-key", HeaderValue::from_static("kkk"));
     let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 1234));
-    assert_eq!(client_key(&h, peer), "kkk");
+    assert_eq!(client_key(None, &h, peer), "kkk");
 }
 
 #[test]
 fn key_precedence_peer_when_no_header() {
     let h = HeaderMap::new();
     let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 1234));
-    assert_eq!(client_key(&h, peer), "1.2.3.4");
+    assert_eq!(client_key(None, &h, peer), "1.2.3.4");
 }
 
 #[test]
 fn key_precedence_anonymous() {
     let h = HeaderMap::new();
-    assert_eq!(client_key(&h, None), "anonymous");
+    assert_eq!(client_key(None, &h, None), "anonymous");
+}
+
+#[test]
+fn key_precedence_wallet_identity() {
+    use dp_api::auth::AuthenticatedIdentity;
+    let addr: alloy_primitives::Address = "0x6Da01670d8fc844e736095918bbE11fE8D564163"
+        .parse()
+        .unwrap();
+    let identity = AuthenticatedIdentity::Wallet(addr);
+    let mut h = HeaderMap::new();
+    h.insert("x-api-key", HeaderValue::from_static("kkk"));
+    let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 1234));
+    let key = client_key(Some(&identity), &h, peer);
+    assert_eq!(key, format!("{:#x}", addr));
+}
+
+#[test]
+fn key_precedence_apikey_identity_falls_through() {
+    use dp_api::auth::AuthenticatedIdentity;
+    let identity = AuthenticatedIdentity::ApiKey;
+    let mut h = HeaderMap::new();
+    h.insert("x-api-key", HeaderValue::from_static("kkk"));
+    let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 1234));
+    assert_eq!(client_key(Some(&identity), &h, peer), "kkk");
 }
 
 #[tokio::test]

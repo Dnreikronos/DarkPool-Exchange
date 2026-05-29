@@ -6,6 +6,7 @@ import { NumericText } from '@/components/NumericText'
 import { useInternalBalances, useWallet, useWalletBalances } from '@/lib/wallet/hooks'
 import type { Balances, TokenSymbol } from '@/lib/wallet/types'
 import { displayDecimalsFor } from '../../_lib/balances/format-balance'
+import { BalancesDisconnected } from './states'
 
 const TOKEN_ROWS: readonly TokenSymbol[] = ['WETH', 'USDC']
 
@@ -23,7 +24,11 @@ export function BalancesPanel() {
       className="flex h-full flex-col border border-brand-border bg-brand-surface"
     >
       <Header id={headerId} />
-      {isConnected ? <BalancesGrid wallet={wallet} internal={internal} /> : <Disconnected />}
+      {isConnected ? (
+        <BalancesGrid wallet={wallet} internal={internal} />
+      ) : (
+        <BalancesDisconnected />
+      )}
     </section>
   )
 }
@@ -35,16 +40,6 @@ function Header({ id }: { id: string }) {
         [ BALANCES ]
       </span>
     </header>
-  )
-}
-
-function Disconnected() {
-  return (
-    <div className="flex flex-1 items-center justify-center p-6">
-      <p role="status" className="font-mono text-label-md uppercase text-brand-muted">
-        [ CONNECT WALLET ]
-      </p>
-    </div>
   )
 }
 

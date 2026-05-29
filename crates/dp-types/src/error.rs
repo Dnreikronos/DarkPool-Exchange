@@ -33,6 +33,8 @@ pub enum DarkPoolError {
     PairAlreadyRegistered(String),
     #[error("cannot suspend delisted pair: {0}")]
     CannotSuspendDelistedPair(String),
+    #[error("trader address mismatch: expected {expected}, found {found}")]
+    TraderAddressMismatch { expected: String, found: String },
 }
 
 #[cfg(test)]

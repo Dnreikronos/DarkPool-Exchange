@@ -12,6 +12,8 @@ import { type DepthSeries, buildDepthSeries } from '../../_lib/charts/selectors'
 import { useMockStore } from '@/lib/mock-store'
 import { cn } from '@/components/ui/cn'
 
+import { DepthChartEmpty } from './states'
+
 const COLORS = {
   bidStroke: '#FFFFFF',
   bidFill: '#FFFFFF',
@@ -183,7 +185,11 @@ export function DepthChart({ className }: DepthChartProps = {}) {
             />
           )}
         </ParentSize>
-        {isEmpty && <DepthChartEmptyState />}
+        {isEmpty && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <DepthChartEmpty />
+          </div>
+        )}
       </div>
       <figcaption id="depth-chart-caption" className="sr-only">
         Cumulative bid and ask depth for the active pair.
@@ -203,19 +209,6 @@ function DepthChartHeader({ series }: { series: DepthSeries }) {
         {'  ·  '}
         {series.spread !== null ? `SPR ${series.spread.toFixed(2)}` : 'SPR —'}
       </span>
-    </div>
-  )
-}
-
-function DepthChartEmptyState() {
-  return (
-    <div className="absolute inset-0 flex items-center justify-center">
-      <p
-        role="status"
-        className="font-mono text-label-md uppercase tracking-[0.2em] text-brand-muted"
-      >
-        [ NO BOOK YET ]
-      </p>
     </div>
   )
 }
