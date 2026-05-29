@@ -771,6 +771,50 @@ mod tests {
         );
     }
 
+    /// The #153 binding property: if the operator settles a DIFFERENT set of
+    /// matches than the one proved, the chain the contract recomputes over
+    /// `matches[]` no longer equals the proof's `z_n[3]`, so settlement is
+    /// rejected. We model the contract's recompute with `settlement_chain`
+    /// over operator-supplied (tampered) tuples and assert it diverges from the
+    /// proved value.
+    #[test]
+    fn settlement_chain_detects_match_substitution() {
+        // Honest batch → the value bound into z_n[3] by the proof.
+        let (w, prices, sizes) = two_match_witness(Decimal::from(100), Decimal::from(100));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 3).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(3).unwrap();
+        let (ok, z_next) = run_step(&circuit, z_0.clone(), ext);
+        assert!(ok);
+        let bound = z_next[3];
+
+        // Operator swaps a settled counterparty to a colluding address.
+        let (mut w_addr, p_a, s_a) = two_match_witness(Decimal::from(100), Decimal::from(100));
+        w_addr.matches[0].ask.trader_addr = "cc".repeat(20);
+        let ext_addr = AuctionExternalInputs::from_witness(&w_addr, &p_a, &s_a, 3).unwrap();
+        assert_ne!(
+            settlement_chain(&ext_addr, z_0[3]),
+            bound,
+            "substituting a settled address must break the bound chain"
+        );
+
+        // Operator settles at a different price than was proved.
+        let (w_px, p_x, s_x) = two_match_witness(Decimal::from(100), Decimal::from(100));
+        let ext_px = AuctionExternalInputs::from_witness(
+            &w_px,
+            &[Decimal::from(100), Decimal::from(99)],
+            &s_x,
+            3,
+        )
+        .unwrap();
+        let _ = p_x;
+        assert_ne!(
+            settlement_chain(&ext_px, z_0[3]),
+            bound,
+            "substituting a settled price must break the bound chain"
+        );
+    }
+
     #[test]
     fn step_satisfied_with_valid_witness() {
         let (w, prices, sizes) = sample_witness();
