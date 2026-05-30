@@ -63,6 +63,10 @@ services:
       DARKPOOL_SUBMIT_TIMEOUT: ${DARKPOOL_SUBMIT_TIMEOUT:-0s}
       DARKPOOL_SUBMIT_GAS: ${DARKPOOL_SUBMIT_GAS:-500000}
       DARKPOOL_API_KEYS: ${DARKPOOL_API_KEYS:-}
+      DARKPOOL_OPERATOR_API_KEYS: ${DARKPOOL_OPERATOR_API_KEYS:-}
+      # Local stack defaults to unauthenticated admin; set real operator keys
+      # (and flip this to false) for any non-local deployment.
+      DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN: ${DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN:-true}
       DARKPOOL_RATE_LIMIT: ${DARKPOOL_RATE_LIMIT:-10}
       DARKPOOL_RATE_BURST: ${DARKPOOL_RATE_BURST:-20}
       DARKPOOL_RATE_STALE_AFTER: ${DARKPOOL_RATE_STALE_AFTER:-10m}
@@ -73,8 +77,11 @@ services:
       DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
     entrypoint: ["/usr/local/bin/darkpool-server"]
     ports:
-      - "${DARKPOOL_GRPC_PORT:-9090}:9090"
-      - "${DARKPOOL_HTTP_PORT:-8080}:8080"
+      # Bind to loopback: the local stack may run with unauthenticated admin
+      # (DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN), so /v1/admin/* must not be
+      # reachable from the LAN. Prefix the host IP to expose deliberately.
+      - "127.0.0.1:${DARKPOOL_GRPC_PORT:-9090}:9090"
+      - "127.0.0.1:${DARKPOOL_HTTP_PORT:-8080}:8080"
 
   jaeger:
     image: jaegertracing/all-in-one:1.62.0

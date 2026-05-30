@@ -43,10 +43,24 @@ pub struct Config {
 
     /// Comma-separated set of API keys with operator-admin scope. These
     /// keys are checked on `/v1/admin/*` paths instead of the public
-    /// `DARKPOOL_API_KEYS`. Empty disables admin authentication entirely
-    /// — fine for dev, never set this empty in production.
+    /// `DARKPOOL_API_KEYS`. An empty set is a hard boot failure
+    /// (fail-closed) unless `--allow-unauthenticated-admin` is set —
+    /// otherwise the admin router, including ECIES key rotation, would
+    /// authenticate every request. See [`Config::validate_admin_auth`].
     #[arg(long, env = "DARKPOOL_OPERATOR_API_KEYS", default_value = "")]
     operator_api_keys_raw: String,
+
+    /// Permit booting with an empty operator-admin key set. Without this
+    /// flag an empty `DARKPOOL_OPERATOR_API_KEYS` aborts boot, because
+    /// the admin router would otherwise accept unauthenticated requests
+    /// (the "empty = allow all" rule in [`crate::auth::AuthCore::check`]).
+    /// Local dev only — never set in production.
+    #[arg(
+        long,
+        env = "DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN",
+        default_value = "false"
+    )]
+    pub allow_unauthenticated_admin: bool,
 
     /// Comma-separated list of allowed CORS origins. When empty, no CORS
     /// headers are emitted (browser cross-origin requests will fail).
@@ -279,6 +293,25 @@ impl Config {
                 return Err("DARKPOOL_SESSION_SECRET must be at least 32 bytes".into());
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// Fail-closed validation of the operator-admin authentication
+    /// posture. An empty operator key set makes
+    /// [`crate::auth::AuthCore::check`] authenticate every `/v1/admin/*`
+    /// request — including ECIES key rotation. Reject it at boot unless
+    /// the operator explicitly opts into unauthenticated admin with
+    /// `--allow-unauthenticated-admin`.
+    pub fn validate_admin_auth(&self) -> Result<(), String> {
+        if self.operator_api_keys().is_empty() && !self.allow_unauthenticated_admin {
+            return Err(
+                "DARKPOOL_OPERATOR_API_KEYS is empty — admin endpoints (incl. ECIES key \
+                 rotation) would accept unauthenticated requests. Set operator keys, or pass \
+                 --allow-unauthenticated-admin / DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN=true for \
+                 local dev."
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -524,5 +557,47 @@ mod tests {
         assert_eq!(cfg.siwe_domain(), Some("app.darkpool.exchange"));
         let cfg2 = cfg_with_siwe(false, "", "");
         assert!(cfg2.siwe_domain().is_none());
+    }
+
+    fn cfg_with_admin(operator_keys: &str, allow_unauth: bool) -> Config {
+        // Pass the operator keys explicitly so the test is independent
+        // of any ambient DARKPOOL_OPERATOR_API_KEYS in the environment.
+        let mut args = vec![
+            "darkpool-server".to_string(),
+            "--operator-api-keys-raw".into(),
+            operator_keys.into(),
+        ];
+        if allow_unauth {
+            args.push("--allow-unauthenticated-admin".into());
+        }
+        Config::parse_from(args)
+    }
+
+    #[test]
+    fn admin_auth_empty_keys_without_flag_fails() {
+        let cfg = cfg_with_admin("", false);
+        let err = cfg.validate_admin_auth().unwrap_err();
+        assert!(err.contains("OPERATOR_API_KEYS"), "msg: {err}");
+    }
+
+    #[test]
+    fn admin_auth_empty_keys_with_flag_ok() {
+        let cfg = cfg_with_admin("", true);
+        assert!(cfg.allow_unauthenticated_admin);
+        assert!(cfg.validate_admin_auth().is_ok());
+    }
+
+    #[test]
+    fn admin_auth_with_keys_ok_without_flag() {
+        let cfg = cfg_with_admin("op-secret-1", false);
+        assert!(!cfg.allow_unauthenticated_admin);
+        assert!(cfg.validate_admin_auth().is_ok());
+    }
+
+    #[test]
+    fn admin_auth_with_keys_ignores_flag() {
+        let cfg = cfg_with_admin("op-secret-1", true);
+        assert!(cfg.validate_admin_auth().is_ok());
+        assert_eq!(cfg.operator_api_keys(), vec!["op-secret-1"]);
     }
 }
