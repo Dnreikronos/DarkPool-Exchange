@@ -51,32 +51,6 @@ pub fn notification_to_summary(n: &AuctionNotification) -> pb::AuctionSummary {
     notification_proto!(pb::AuctionSummary, n)
 }
 
-pub fn aggregate_levels(orders: Vec<Order>) -> Vec<pb::PriceLevel> {
-    use std::collections::HashMap;
-    let mut agg: HashMap<String, (rust_decimal::Decimal, i32)> = HashMap::new();
-    let mut order_seen: Vec<String> = Vec::new();
-    for o in orders {
-        let key = o.price.to_string();
-        let entry = agg.entry(key.clone()).or_insert_with(|| {
-            order_seen.push(key.clone());
-            (rust_decimal::Decimal::ZERO, 0)
-        });
-        entry.0 += o.remaining_size;
-        entry.1 += 1;
-    }
-    order_seen
-        .into_iter()
-        .map(|k| {
-            let (total, count) = agg.remove(&k).unwrap();
-            pb::PriceLevel {
-                price: k,
-                total_size: total.to_string(),
-                order_count: count,
-            }
-        })
-        .collect()
-}
-
 pub fn parse_uuid(s: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(s).map_err(|e| Status::invalid_argument(format!("invalid order_id: {}", e)))
 }

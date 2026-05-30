@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{MatchedPath, Path, Query, State};
+use axum::extract::{Extension, MatchedPath, Path, Query, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -23,13 +23,13 @@ use tower_http::request_id::{
 use tower_http::trace::TraceLayer;
 
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
-use crate::auth::{auth_axum_mw, AuthCore};
+use crate::auth::{auth_axum_mw, AuthCore, AuthenticatedIdentity};
 use crate::handler::ApiHandler;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
-    self, CancelOrderRequest, DelistPairRequest, GetAuctionHistoryRequest, GetOrderBookRequest,
-    GetOrderRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
+    self, CancelOrderRequest, DelistPairRequest, GetAuctionHistoryRequest, GetOrderRequest,
+    ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
 use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
@@ -60,12 +60,11 @@ pub fn router(handler: SharedHandler) -> Router {
     let place_order =
         post(rest_place_order).layer(RequestBodyLimitLayer::new(PLACE_ORDER_BODY_LIMIT));
     Router::new()
-        .route("/v1/orders", place_order)
+        .route("/v1/orders", place_order.get(rest_list_orders))
         .route(
             "/v1/orders/:order_id",
             delete(rest_cancel_order).get(rest_get_order),
         )
-        .route("/v1/orderbook", get(rest_get_orderbook))
         .route("/v1/auctions", get(rest_get_auction_history))
         .route("/v1/auctions/stream", get(rest_stream_auctions))
         .route("/v1/pairs", get(rest_list_pairs))
@@ -465,28 +464,8 @@ struct GetOrderRespJson {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PriceLevelJson {
-    price: String,
-    total_size: String,
-    order_count: i32,
-}
-
-impl From<pb::PriceLevel> for PriceLevelJson {
-    fn from(l: pb::PriceLevel) -> Self {
-        Self {
-            price: l.price,
-            total_size: l.total_size,
-            order_count: l.order_count,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OrderBookJson {
-    pair: String,
-    bids: Vec<PriceLevelJson>,
-    asks: Vec<PriceLevelJson>,
+struct ListOrdersRespJson {
+    orders: Vec<OrderInfoJson>,
 }
 
 #[derive(Serialize)]
@@ -593,7 +572,7 @@ struct CancelQuery {
 }
 
 #[derive(Deserialize)]
-struct OrderBookQuery {
+struct ListOrdersQuery {
     #[serde(default)]
     pair: String,
 }
@@ -669,16 +648,34 @@ impl IntoResponse for ApiError {
 
 // ---------- handlers ----------
 
+/// Carry the authenticated identity injected by `auth_axum_mw` (an axum
+/// request extension) into the tonic `Request` the gRPC handler reads. The
+/// REST layer builds a fresh tonic request, so without this the per-trader
+/// scoping in `place_order` / `cancel_order` / `get_order` / `list_orders`
+/// would never see the caller. Absent on routers mounted without the auth
+/// middleware.
+fn with_identity<T>(inner: T, identity: Option<Extension<AuthenticatedIdentity>>) -> Request<T> {
+    let mut req = Request::new(inner);
+    if let Some(Extension(id)) = identity {
+        req.extensions_mut().insert(id);
+    }
+    req
+}
+
 async fn rest_place_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Json(body): Json<PlaceOrderJson>,
 ) -> Result<Json<PlaceOrderRespJson>, ApiError> {
-    let req = PlaceOrderRequest {
-        commitment: body.commitment,
-        proof: body.proof,
-        encrypted_payload: body.encrypted_payload,
-    };
-    let resp = h.place_order(Request::new(req)).await?.into_inner();
+    let req = with_identity(
+        PlaceOrderRequest {
+            commitment: body.commitment,
+            proof: body.proof,
+            encrypted_payload: body.encrypted_payload,
+        },
+        identity,
+    );
+    let resp = h.place_order(req).await?.into_inner();
     Ok(Json(PlaceOrderRespJson {
         order: resp.order.map(Into::into),
     }))
@@ -686,38 +683,44 @@ async fn rest_place_order(
 
 async fn rest_cancel_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Path(order_id): Path<String>,
     Query(q): Query<CancelQuery>,
 ) -> Result<Json<CancelOrderRespJson>, ApiError> {
-    let req = CancelOrderRequest {
-        order_id,
-        reason: q.reason,
-    };
-    h.cancel_order(Request::new(req)).await?;
+    let req = with_identity(
+        CancelOrderRequest {
+            order_id,
+            reason: q.reason,
+        },
+        identity,
+    );
+    h.cancel_order(req).await?;
     Ok(Json(CancelOrderRespJson {}))
 }
 
 async fn rest_get_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Path(order_id): Path<String>,
 ) -> Result<Json<GetOrderRespJson>, ApiError> {
-    let req = GetOrderRequest { order_id };
-    let resp = h.get_order(Request::new(req)).await?.into_inner();
+    let req = with_identity(GetOrderRequest { order_id }, identity);
+    let resp = h.get_order(req).await?.into_inner();
     Ok(Json(GetOrderRespJson {
         order: resp.order.map(Into::into),
     }))
 }
 
-async fn rest_get_orderbook(
+/// `GET /v1/orders` — the caller's own resting orders ("my orders").
+/// Scoped to the authenticated wallet; there is no public order book.
+async fn rest_list_orders(
     State(h): State<SharedHandler>,
-    Query(q): Query<OrderBookQuery>,
-) -> Result<Json<OrderBookJson>, ApiError> {
-    let req = GetOrderBookRequest { pair: q.pair };
-    let resp = h.get_order_book(Request::new(req)).await?.into_inner();
-    Ok(Json(OrderBookJson {
-        pair: resp.pair,
-        bids: resp.bids.into_iter().map(Into::into).collect(),
-        asks: resp.asks.into_iter().map(Into::into).collect(),
+    identity: Option<Extension<AuthenticatedIdentity>>,
+    Query(q): Query<ListOrdersQuery>,
+) -> Result<Json<ListOrdersRespJson>, ApiError> {
+    let req = with_identity(ListOrdersRequest { pair: q.pair }, identity);
+    let resp = h.list_orders(req).await?.into_inner();
+    Ok(Json(ListOrdersRespJson {
+        orders: resp.orders.into_iter().map(Into::into).collect(),
     }))
 }
 
@@ -1072,19 +1075,6 @@ mod tests {
         let err = ApiError(tonic::Status::already_exists("dup"));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[test]
-    fn price_level_json_conversion() {
-        let lvl = pb::PriceLevel {
-            price: "100.5".into(),
-            total_size: "10".into(),
-            order_count: 3,
-        };
-        let json: PriceLevelJson = lvl.into();
-        assert_eq!(json.price, "100.5");
-        assert_eq!(json.total_size, "10");
-        assert_eq!(json.order_count, 3);
     }
 
     #[test]

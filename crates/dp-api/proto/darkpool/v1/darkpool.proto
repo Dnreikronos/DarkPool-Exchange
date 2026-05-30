@@ -27,9 +27,15 @@ service DarkPoolService {
     };
   }
 
-  rpc GetOrderBook(GetOrderBookRequest) returns (GetOrderBookResponse) {
+  // Lists the authenticated caller's own resting orders ("my orders").
+  // Scoped to the wallet identity; a trader never sees another trader's
+  // orders. There is deliberately no public pre-settlement order book —
+  // serving live cross-trader depth would defeat the dark pool (an
+  // observer could reconstruct incoming liquidity and cross it in the
+  // same auction round).
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse) {
     option (google.api.http) = {
-      get: "/v1/orderbook"
+      get: "/v1/orders"
     };
   }
 
@@ -114,22 +120,14 @@ message GetOrderResponse {
   OrderInfo order = 1;
 }
 
-// --- Order Book ---
+// --- List Orders (caller-scoped "my orders") ---
 
-message GetOrderBookRequest {
-  string pair = 1;
+message ListOrdersRequest {
+  string pair = 1;  // optional filter; empty = every pair
 }
 
-message GetOrderBookResponse {
-  string pair = 1;
-  repeated PriceLevel bids = 2;
-  repeated PriceLevel asks = 3;
-}
-
-message PriceLevel {
-  string price = 1;
-  string total_size = 2;
-  int32 order_count = 3;
+message ListOrdersResponse {
+  repeated OrderInfo orders = 1;
 }
 
 // --- Auction History ---

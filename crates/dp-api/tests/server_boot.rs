@@ -11,7 +11,7 @@ use dp_api::auth::{AuthLayer, AUTH_HEADER};
 use dp_api::handler::ApiHandler;
 use dp_api::pb::dark_pool_service_client::DarkPoolServiceClient;
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
-use dp_api::pb::{GetOrderBookRequest, PlaceOrderRequest};
+use dp_api::pb::{ListPairsRequest, PlaceOrderRequest};
 use dp_api::ratelimit::RateLimitLayer;
 use dp_api::rest;
 use dp_engine::Engine;
@@ -89,17 +89,13 @@ async fn grpc_server_accepts_real_client() {
         .expect_err("empty PlaceOrder should fail validation");
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
 
-    // Valid empty-state read: no orders for any pair.
+    // Valid public read crossing the wire: the registered pair is listed.
     let resp = client
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".to_string(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
-        .expect("get_order_book")
+        .expect("list_pairs")
         .into_inner();
-    assert_eq!(resp.pair, "ETH/USDC");
-    assert!(resp.bids.is_empty());
-    assert!(resp.asks.is_empty());
+    assert!(resp.pairs.iter().any(|p| p.pair == "ETH/USDC"));
 
     cancel.cancel();
     server_task.await.expect("join grpc task");
@@ -149,9 +145,7 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
     // No api key → Unauthenticated.
     let mut anon = DarkPoolServiceClient::new(channel.clone());
     let err = anon
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
         .expect_err("missing key must be rejected");
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
@@ -167,15 +161,11 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
         },
     );
     authed
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
         .expect("first authed request");
     let err = authed
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
         .expect_err("second request must be rate-limited");
     assert_eq!(err.code(), tonic::Code::ResourceExhausted);
@@ -203,13 +193,12 @@ async fn rest_server_accepts_real_http() {
         .expect("rest server");
     });
 
-    let body = http_get(addr, "/v1/orderbook?pair=ETH/USDC").await;
+    let body = http_get(addr, "/v1/pairs").await;
     let (status, payload) = parse_http_response(&body);
     assert_eq!(status, 200, "raw response: {body}");
     let json: serde_json::Value = serde_json::from_str(payload).expect("rest body should be JSON");
-    assert_eq!(json["pair"], "ETH/USDC");
-    assert!(json["bids"].as_array().unwrap().is_empty());
-    assert!(json["asks"].as_array().unwrap().is_empty());
+    let pairs = json["pairs"].as_array().expect("pairs array");
+    assert!(pairs.iter().any(|p| p["pair"] == "ETH/USDC"));
 
     cancel.cancel();
     server_task.await.expect("join rest task");
