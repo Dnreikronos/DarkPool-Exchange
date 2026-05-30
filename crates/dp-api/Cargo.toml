@@ -54,6 +54,7 @@ http-body.workspace = true
 humantime.workspace = true
 futures-util.workspace = true
 sha2 = { workspace = true }
+subtle = { workspace = true }
 ulid = { workspace = true }
 percent-encoding = "2"
 siwe = "0.6"
