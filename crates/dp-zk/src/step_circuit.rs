@@ -84,7 +84,7 @@ pub struct AuctionExternalInputs {
     pub position_limit: Fr,
     /// The single uniform clearing price for this auction round. Every active
     /// match row must settle at this price (#163). Derived from the first
-    /// match in [`from_witness`]; the honest engine applies one volume-
+    /// match in [`Self::from_witness`]; the honest engine applies one volume-
     /// maximizing price to every match, so all rows already equal it.
     pub clearing_price: Fr,
     pub matches: Vec<CircuitMatchNative>,
