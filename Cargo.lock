@@ -2341,6 +2341,7 @@ dependencies = [
  "sha2",
  "sha3",
  "siwe",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "time",
