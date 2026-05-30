@@ -171,12 +171,14 @@ async fn rest_place_get_cancel_round_trip() {
     let json = body_to_json(resp.into_body()).await;
     assert_eq!(json["order"]["id"], id);
 
-    // Cancel it
+    // Cancel it. Cancel is caller-scoped like GET, so the DELETE carries the
+    // owner's wallet identity; without it this would be 404.
     let resp = app
         .oneshot(
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/v1/orders/{id}?reason=testing"))
+                .extension(AuthenticatedIdentity::Wallet(Address::ZERO))
                 .body(Body::empty())
                 .unwrap(),
         )

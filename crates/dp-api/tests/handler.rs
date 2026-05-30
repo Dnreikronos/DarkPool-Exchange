@@ -235,11 +235,16 @@ async fn place_order_proof_too_large() {
 #[tokio::test]
 async fn cancel_order_success() {
     let h = new_handler();
+    // place_test_order owns the order as Address::ZERO; cancel is caller-
+    // scoped, so the request carries a matching wallet identity.
     let id = place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
-    h.cancel_order(Request::new(CancelOrderRequest {
-        order_id: id,
-        reason: "testing".into(),
-    }))
+    h.cancel_order(wallet_req(
+        CancelOrderRequest {
+            order_id: id,
+            reason: "testing".into(),
+        },
+        Address::ZERO,
+    ))
     .await
     .unwrap();
 }
@@ -265,6 +270,55 @@ async fn cancel_order_not_found() {
         .cancel_order(Request::new(CancelOrderRequest {
             order_id: Uuid::new_v4().to_string(),
             reason: "".into(),
+        }))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::NotFound);
+}
+
+/// A key-holder must not cancel another trader's order. Like `get_order`,
+/// the response is `not_found` (not `permission_denied`) so existence isn't
+/// leaked — and crucially the order survives the rejected cancel.
+#[tokio::test]
+async fn cancel_order_hides_other_traders_order() {
+    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    let attacker = Address::with_last_byte(0x22);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let err = h
+        .cancel_order(wallet_req(
+            CancelOrderRequest {
+                order_id: id.clone(),
+                reason: String::new(),
+            },
+            attacker,
+        ))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::NotFound);
+    // The order is still live and visible to its real owner.
+    let resp = h
+        .get_order(wallet_req(GetOrderRequest { order_id: id }, owner))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(resp.order.is_some());
+}
+
+/// Without a wallet identity (e.g. an operator API-key caller) no order is
+/// cancellable — every CancelOrder is `not_found`, never a cross-trader
+/// cancel.
+#[tokio::test]
+async fn cancel_order_without_wallet_identity_is_not_found() {
+    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let err = h
+        .cancel_order(Request::new(CancelOrderRequest {
+            order_id: id,
+            reason: String::new(),
         }))
         .await
         .err()

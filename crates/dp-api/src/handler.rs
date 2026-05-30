@@ -95,8 +95,27 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<CancelOrderRequest>,
     ) -> Result<Response<CancelOrderResponse>, Status> {
+        let caller = caller_address(&req);
         let req = req.into_inner();
         let id = parse_uuid(&req.order_id)?;
+        // Caller-scoped, mirroring `get_order`: only the order's owner may
+        // cancel it. A missing order and another trader's order are
+        // deliberately indistinguishable (both `not_found`) so a key-holder
+        // cannot use CancelOrder to cancel — or even probe for — orders they
+        // don't own. `o.trader` is immutable once placed, so the gap between
+        // this ownership check and the cancel below can't be raced into an
+        // authz bypass (a concurrent match/cancel just yields `not_found`).
+        if self
+            .engine
+            .get_order(id)
+            .filter(|o| caller == Some(o.trader))
+            .is_none()
+        {
+            return Err(Status::not_found(format!(
+                "order {} not found",
+                req.order_id
+            )));
+        }
         let reason = if req.reason.is_empty() {
             None
         } else {

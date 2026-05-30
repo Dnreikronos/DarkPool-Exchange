@@ -651,8 +651,9 @@ impl IntoResponse for ApiError {
 /// Carry the authenticated identity injected by `auth_axum_mw` (an axum
 /// request extension) into the tonic `Request` the gRPC handler reads. The
 /// REST layer builds a fresh tonic request, so without this the per-trader
-/// scoping in `place_order` / `get_order` / `list_orders` would never see
-/// the caller. Absent on routers mounted without the auth middleware.
+/// scoping in `place_order` / `cancel_order` / `get_order` / `list_orders`
+/// would never see the caller. Absent on routers mounted without the auth
+/// middleware.
 fn with_identity<T>(inner: T, identity: Option<Extension<AuthenticatedIdentity>>) -> Request<T> {
     let mut req = Request::new(inner);
     if let Some(Extension(id)) = identity {
@@ -682,14 +683,18 @@ async fn rest_place_order(
 
 async fn rest_cancel_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Path(order_id): Path<String>,
     Query(q): Query<CancelQuery>,
 ) -> Result<Json<CancelOrderRespJson>, ApiError> {
-    let req = CancelOrderRequest {
-        order_id,
-        reason: q.reason,
-    };
-    h.cancel_order(Request::new(req)).await?;
+    let req = with_identity(
+        CancelOrderRequest {
+            order_id,
+            reason: q.reason,
+        },
+        identity,
+    );
+    h.cancel_order(req).await?;
     Ok(Json(CancelOrderRespJson {}))
 }
 
