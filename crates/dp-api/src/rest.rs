@@ -112,6 +112,13 @@ pub fn router_with_middleware(
 /// Mount public + admin routes on the same listener. Public routes use
 /// the trader API keys (`AuthCore`); admin routes use the separate
 /// operator key set (`admin_auth`). The rate limiter is shared.
+///
+/// `admin_auth` must be non-empty unless the operator has explicitly
+/// opted into unauthenticated admin: an empty [`AuthCore`] authenticates
+/// every request, so a future non-`main` entrypoint that builds this
+/// router must first run
+/// [`crate::config::Config::validate_admin_auth`] (as `main` does) or
+/// the admin endpoints fail open.
 pub fn router_with_admin(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
