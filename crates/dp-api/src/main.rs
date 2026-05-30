@@ -38,6 +38,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let cfg = Config::parse();
 
+    // Validate the auth posture before any side effects (store
+    // connections, state recovery, pair seeding, task spawns) so an
+    // invalid auth config fails closed without ever writing or ticking.
+    cfg.validate_siwe_config()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_admin_auth()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
     // Resolve the TLS posture up-front: half-configured TLS (cert
     // without key, etc.) must surface at boot, not when the first
     // client connects. The plaintext branch logs a loud warning so a
@@ -285,11 +293,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         None
     };
-
-    cfg.validate_siwe_config()
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-    cfg.validate_admin_auth()
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
     let siwe_state = if cfg.siwe_enabled {
         let secret = cfg.session_secret().unwrap();
