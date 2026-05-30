@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use alloy_primitives::Address;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use dp_api::auth::AuthenticatedIdentity;
 use dp_api::handler::ApiHandler;
 use dp_api::rest;
 use dp_engine::Engine;
@@ -20,66 +22,6 @@ fn new_app() -> axum::Router {
 async fn body_to_json(b: Body) -> serde_json::Value {
     let bytes = b.collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
-}
-
-#[tokio::test]
-async fn orderbook_empty_pair_400() {
-    let app = new_app();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/orderbook")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn orderbook_unknown_pair_returns_404() {
-    // Behaviour change vs. prior implementation: an unknown pair now hits
-    // the registry check before reaching the (empty) sub-book and returns
-    // 404. The previous code returned 200 with empty bids/asks because
-    // `OrderBook` had a single shared book and the filter just produced
-    // an empty slice. With per-pair books + registry validation that
-    // shape is gone.
-    let app = new_app();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/orderbook?pair=ETH/USDC")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn orderbook_known_pair_returns_empty() {
-    let store = Arc::new(MemStore::new());
-    let engine = Engine::new(store, Duration::from_secs(1));
-    engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
-    let handler = ApiHandler::new(engine);
-    let app = rest::router(Arc::new(handler));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/orderbook?pair=ETH/USDC")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let json = body_to_json(resp.into_body()).await;
-    assert_eq!(json["pair"], "ETH/USDC");
-    assert!(json["bids"].as_array().unwrap().is_empty());
-    assert!(json["asks"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -211,12 +153,15 @@ async fn rest_place_get_cancel_round_trip() {
     assert_eq!(json["order"]["pair"], "ETH/USDC");
     assert_eq!(json["order"]["side"], "SIDE_BUY");
 
-    // GET it back
+    // GET it back. The order is owned by Address::ZERO; inject a matching
+    // wallet identity (normally set by auth_axum_mw) so the caller-scoped
+    // handler returns it. Without an identity this would be 404.
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/v1/orders/{id}"))
+                .extension(AuthenticatedIdentity::Wallet(Address::ZERO))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -240,21 +185,21 @@ async fn rest_place_get_cancel_round_trip() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// `GET /v1/orders` returns only the authenticated caller's own orders,
+/// and nothing at all without a wallet identity. There is no public book.
 #[tokio::test]
-async fn rest_orderbook_serializes_levels() {
+async fn rest_list_orders_is_scoped_to_caller() {
     let (app, _engine) = registered_app();
-    // Place a buy + sell via REST so the orderbook returns level rows
-    // (exercising PriceLevelJson::From + bids/asks serialization).
-    let make_body = |side: dp_types::Side, price: &str| {
+    let make_body = |trader: Address, side: dp_types::Side, price: &str| {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
         let d = dp_crypto::DecryptedOrder {
-            trader: alloy_primitives::Address::ZERO,
+            trader,
             pair: "ETH/USDC".into(),
             side,
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
-            commitment_key: format!("k-{}-{}", side as u8, price),
+            commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -265,9 +210,13 @@ async fn rest_orderbook_serializes_levels() {
         .to_string()
     };
 
-    for (side, price) in [
-        (dp_types::Side::Buy, "1800"),
-        (dp_types::Side::Sell, "1850"),
+    let me = Address::with_last_byte(0x11);
+    let other = Address::with_last_byte(0x22);
+    // me: a non-crossing buy + sell (both rest); other: one resting buy.
+    for (trader, side, price) in [
+        (me, dp_types::Side::Buy, "1800"),
+        (me, dp_types::Side::Sell, "1850"),
+        (other, dp_types::Side::Buy, "1790"),
     ] {
         let resp = app
             .clone()
@@ -276,7 +225,7 @@ async fn rest_orderbook_serializes_levels() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
-                    .body(Body::from(make_body(side, price)))
+                    .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )
             .await
@@ -284,10 +233,13 @@ async fn rest_orderbook_serializes_levels() {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    // As `me` → exactly my two orders, never `other`'s.
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/orderbook?pair=ETH/USDC")
+                .uri("/v1/orders")
+                .extension(AuthenticatedIdentity::Wallet(me))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -295,9 +247,21 @@ async fn rest_orderbook_serializes_levels() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_to_json(resp.into_body()).await;
-    assert_eq!(json["bids"].as_array().unwrap().len(), 1);
-    assert_eq!(json["asks"].as_array().unwrap().len(), 1);
-    assert_eq!(json["bids"][0]["price"], "1800");
+    assert_eq!(json["orders"].as_array().unwrap().len(), 2);
+
+    // Without a wallet identity → empty list, not the cross-trader book.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/orders")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_to_json(resp.into_body()).await;
+    assert!(json["orders"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

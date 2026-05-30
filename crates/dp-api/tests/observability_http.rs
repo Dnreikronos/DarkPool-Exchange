@@ -177,11 +177,7 @@ async fn request_id_is_present_on_error_responses() {
     // Hit an auth-gated route without a key → 401. The x-request-id
     // middleware wraps the entire router so the header must still appear.
     let resp = router
-        .oneshot(
-            Request::get("/v1/orderbook?pair=ETH/USDC")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/v1/pairs").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -216,14 +212,10 @@ async fn request_id_generated_is_valid_ulid() {
 #[tokio::test]
 async fn ops_endpoints_skip_auth_while_protected_routes_still_require_it() {
     let router = make_router(ReadinessProbes::new());
-    // No api key → /v1/orderbook must reject.
+    // No api key → an auth-gated public route must reject.
     let resp = router
         .clone()
-        .oneshot(
-            Request::get("/v1/orderbook?pair=ETH/USDC")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/v1/pairs").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(
