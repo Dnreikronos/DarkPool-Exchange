@@ -720,6 +720,21 @@ impl Engine {
         (state.book.bids(pair), state.book.asks(pair))
     }
 
+    /// Resting orders owned by `trader`, across every pair, oldest first.
+    /// Backs the caller-scoped "my orders" API surface: a trader may only
+    /// ever see their own orders, never the cross-trader book.
+    pub fn orders_by_trader(&self, trader: alloy_primitives::Address) -> Vec<Order> {
+        let state = self.inner.state.lock();
+        let mut out: Vec<Order> = state
+            .book
+            .iter_all()
+            .into_iter()
+            .filter(|o| o.trader == trader)
+            .collect();
+        out.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
+        out
+    }
+
     pub fn pair_status(&self, pair: &str) -> Option<crate::state::PairStatus> {
         self.inner.state.lock().pair_config(pair).map(|c| c.status)
     }
