@@ -79,6 +79,29 @@ fn wrong_key_same_length_denied() {
     assert_eq!(err.code(), Code::Unauthenticated);
 }
 
+#[test]
+fn all_empty_keys_fail_closed() {
+    // Keys were configured but every entry is empty. This is a misconfig, not a
+    // request to disable auth: it must deny all requests, never degrade to
+    // allow-all. Only a genuinely empty key list disables authentication.
+    let core = AuthCore::new(vec!["".into(), "".into()]);
+
+    let no_header = HeaderMap::new();
+    assert_eq!(
+        core.check(&no_header).err().unwrap().code(),
+        Code::Unauthenticated,
+        "no header must be denied, not waved through"
+    );
+
+    let mut with_key = HeaderMap::new();
+    with_key.insert("x-api-key", HeaderValue::from_static("anything"));
+    assert_eq!(
+        core.check(&with_key).err().unwrap().code(),
+        Code::Unauthenticated,
+        "no presented key can match an all-empty config"
+    );
+}
+
 fn jwt_manager() -> Arc<JwtManager> {
     Arc::new(JwtManager::new(
         "test-secret-32-bytes-long-xxxxx",

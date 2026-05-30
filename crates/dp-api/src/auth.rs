@@ -26,6 +26,12 @@ pub enum AuthenticatedIdentity {
 
 #[derive(Clone, Debug)]
 pub struct AuthCore {
+    /// `true` only when zero keys were configured — the deliberate
+    /// "authentication disabled" mode. Tracked separately from
+    /// `key_digests.is_empty()` so a config that supplies keys but whose
+    /// entries are all empty (e.g. `vec!["".into()]`) fails closed instead of
+    /// silently degrading to allow-all.
+    auth_disabled: bool,
     /// SHA-256 digests of the configured keys. Storing digests (not the
     /// plaintext keys) lets us compare in constant time over a fixed 32-byte
     /// width, so neither the matching key nor its length is a timing oracle —
@@ -37,6 +43,7 @@ pub struct AuthCore {
 impl AuthCore {
     pub fn new(keys: Vec<String>) -> Self {
         Self {
+            auth_disabled: keys.is_empty(),
             key_digests: Arc::new(digest_keys(keys)),
             jwt: None,
         }
@@ -44,6 +51,7 @@ impl AuthCore {
 
     pub fn new_with_jwt(keys: Vec<String>, jwt: Arc<crate::siwe::JwtManager>) -> Self {
         Self {
+            auth_disabled: keys.is_empty(),
             key_digests: Arc::new(digest_keys(keys)),
             jwt: Some(jwt),
         }
@@ -68,7 +76,7 @@ impl AuthCore {
             }
         }
 
-        if self.key_digests.is_empty() {
+        if self.auth_disabled {
             return Ok(AuthenticatedIdentity::ApiKey);
         }
         let key = match headers.get(AUTH_HEADER) {
