@@ -311,6 +311,7 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
 
     let expected = crate::engine::recompute_persisted_commitment(
         order.id,
+        d.trader.as_slice(),
         &d.commitment_key,
         d.side as u8,
         d.price,

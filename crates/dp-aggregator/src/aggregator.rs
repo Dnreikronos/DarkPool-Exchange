@@ -84,8 +84,8 @@ impl ProofAggregator for NoopAggregator {
             use ark_ff::Zero;
             Ok(dp_zk::folding::FinalProof {
                 proof_bytes: vec![0u8; 32],
-                z_0: [Fr::zero(); 3],
-                z_n: [Fr::zero(); 3],
+                z_0: [Fr::zero(); 4],
+                z_n: [Fr::zero(); 4],
                 n_steps: 0,
                 policy_hash: Fr::zero(),
             })

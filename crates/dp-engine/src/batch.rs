@@ -158,11 +158,24 @@ impl Engine {
             } = payload;
             let matches_hash = compute_matches_hash(auction_id, &settlement_matches)
                 .map_err(EngineError::Submit)?;
+            // TODO(#153 Phase 4): widen SubmitSessionParams + the contract's
+            // submitSession ABI to carry z[3] (settlement_acc) and recompute it
+            // on-chain in settleSession. Until then only the first three state
+            // elements are sent; the stub Decider verifier ignores public IO,
+            // so the on-chain binding check is not yet enforced.
             let session_params = SubmitSessionParams {
                 session_id: batch_id,
                 proof: proof_bytes,
-                z_0: z_0.map(U256::from_be_bytes),
-                z_n: z_n.map(U256::from_be_bytes),
+                z_0: [
+                    U256::from_be_bytes(z_0[0]),
+                    U256::from_be_bytes(z_0[1]),
+                    U256::from_be_bytes(z_0[2]),
+                ],
+                z_n: [
+                    U256::from_be_bytes(z_n[0]),
+                    U256::from_be_bytes(z_n[1]),
+                    U256::from_be_bytes(z_n[2]),
+                ],
                 n_steps,
                 policy_hash: B256::from(policy_hash),
                 matches_hash,
