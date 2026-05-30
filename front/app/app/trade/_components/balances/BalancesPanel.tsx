@@ -3,19 +3,17 @@
 import * as React from 'react'
 
 import { NumericText } from '@/components/NumericText'
-import { useInternalBalances, useWallet, useWalletBalances } from '@/lib/wallet/hooks'
 import type { Balances, TokenSymbol } from '@/lib/wallet/types'
+import { useBalances } from '../../_hooks/balances/useBalances'
 import { displayDecimalsFor } from '../../_lib/balances/format-balance'
-import { BalancesDisconnected } from './states'
+import { BalancesDisconnected, BalancesError, BalancesLoading } from './states'
 
 const TOKEN_ROWS: readonly TokenSymbol[] = ['WETH', 'USDC']
 
 const COLUMN_TAGS = ['[ WALLET ]', '[ DARKPOOL ]'] as const
 
 export function BalancesPanel() {
-  const { isConnected } = useWallet()
-  const wallet = useWalletBalances()
-  const internal = useInternalBalances()
+  const { wallet, internal, status, refetch } = useBalances()
   const headerId = React.useId()
 
   return (
@@ -24,11 +22,10 @@ export function BalancesPanel() {
       className="flex h-full flex-col border border-brand-border bg-brand-surface"
     >
       <Header id={headerId} />
-      {isConnected ? (
-        <BalancesGrid wallet={wallet} internal={internal} />
-      ) : (
-        <BalancesDisconnected />
-      )}
+      {status === 'disconnected' && <BalancesDisconnected />}
+      {status === 'loading' && <BalancesLoading />}
+      {status === 'error' && <BalancesError onRetry={refetch} />}
+      {status === 'ready' && <BalancesGrid wallet={wallet} internal={internal} />}
     </section>
   )
 }
