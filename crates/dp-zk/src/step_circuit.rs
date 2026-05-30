@@ -20,6 +20,17 @@ use crate::ZkError;
 const SIZE_BITS: usize = 60;
 const SOLVENCY_DIFF_BITS: usize = 120;
 
+/// Fixed number of match rows the IVC step circuit processes every round.
+///
+/// HyperNova derives the constraint system once, during preprocessing, by
+/// running the step circuit on [`AuctionExternalInputs::default`]. That CCS
+/// must be byte-for-byte the same shape as the one used while proving, so the
+/// circuit width cannot depend on how many real matches a given round carries.
+/// Every round is therefore padded to exactly `IVC_BATCH_SIZE` rows (inactive
+/// rows pass all constraints and contribute nothing to the state). A round's
+/// `batch_size` is a per-round capacity hint and must not exceed this width.
+pub const IVC_BATCH_SIZE: usize = 8;
+
 // ─── Native data types ───────────────────────────────────────────────────────
 
 /// Per-match native witness: 19 Fr fields.
@@ -266,8 +277,13 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
         let position_limit = FpVar::new_variable(cs.clone(), || Ok(native.position_limit), mode)?;
         let clearing_price = FpVar::new_variable(cs.clone(), || Ok(native.clearing_price), mode)?;
 
-        let mut matches = Vec::with_capacity(native.matches.len());
-        for cm in &native.matches {
+        // Always allocate a fixed `IVC_BATCH_SIZE` rows so the constraint system
+        // is identical whether `native` is the empty `default()` (used by
+        // HyperNova preprocessing to derive the CCS) or a real, padded witness.
+        // Short inputs are backfilled with inactive rows.
+        let mut matches = Vec::with_capacity(IVC_BATCH_SIZE);
+        for i in 0..IVC_BATCH_SIZE {
+            let cm = native.matches.get(i).cloned().unwrap_or_default();
             matches.push(CircuitMatchVar {
                 bid_trader: FpVar::new_variable(cs.clone(), || Ok(cm.bid_trader), mode)?,
                 bid_salt: FpVar::new_variable(cs.clone(), || Ok(cm.bid_salt), mode)?,
@@ -375,84 +391,42 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             computed_policy_hash.enforce_equal(&policy_hash)?;
         }
 
-        let mut all_leaves: Vec<FpVar<Fr>> = Vec::with_capacity(self.batch_size * 2);
-        let mut all_notionals: Vec<FpVar<Fr>> = Vec::with_capacity(self.batch_size);
+        debug_assert!(
+            self.batch_size <= IVC_BATCH_SIZE,
+            "batch_size {} exceeds IVC_BATCH_SIZE {}",
+            self.batch_size,
+            IVC_BATCH_SIZE
+        );
+
+        let mut all_leaves: Vec<FpVar<Fr>> = Vec::with_capacity(IVC_BATCH_SIZE * 2);
+        let mut all_notionals: Vec<FpVar<Fr>> = Vec::with_capacity(IVC_BATCH_SIZE);
         let mut active_count = FpVar::<Fr>::zero();
 
-        for idx in 0..self.batch_size {
-            // Either use a real match row or allocate a zero-filled inactive row
-            // so the constraint count is constant regardless of how many real
-            // matches external_inputs carries.
-            let (
-                bid_trader,
-                bid_salt,
-                bid_lp,
-                bid_side,
-                bid_balance,
-                bid_position,
-                bid_addr,
-                bid_order_size,
-                ask_trader,
-                ask_salt,
-                ask_lp,
-                ask_side,
-                ask_balance,
-                ask_position,
-                ask_addr,
-                ask_order_size,
-                m_price,
-                m_size,
-                is_active,
-            ) = if idx < external_inputs.matches.len() {
-                let cm = &external_inputs.matches[idx];
-                (
-                    cm.bid_trader.clone(),
-                    cm.bid_salt.clone(),
-                    cm.bid_limit_price.clone(),
-                    cm.bid_side.clone(),
-                    cm.bid_balance.clone(),
-                    cm.bid_position.clone(),
-                    cm.bid_trader_addr.clone(),
-                    cm.bid_order_size.clone(),
-                    cm.ask_trader.clone(),
-                    cm.ask_salt.clone(),
-                    cm.ask_limit_price.clone(),
-                    cm.ask_side.clone(),
-                    cm.ask_balance.clone(),
-                    cm.ask_position.clone(),
-                    cm.ask_trader_addr.clone(),
-                    cm.ask_order_size.clone(),
-                    cm.match_price.clone(),
-                    cm.match_size.clone(),
-                    cm.is_active.clone(),
-                )
-            } else {
-                // Pad with an inactive row (ask_side=1 so Family 2 is satisfied
-                // when is_active=0, which it is).
-                let z = || Ok(Fr::zero());
-                let o = || Ok(Fr::one());
-                (
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), o)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                    FpVar::new_witness(cs.clone(), z)?,
-                )
-            };
+        // `external_inputs.matches` always holds exactly `IVC_BATCH_SIZE` rows
+        // (allocated by `AuctionExternalInputsVar`), so every row is a real
+        // variable. Inactive padding rows carry `is_active = 0` and satisfy each
+        // gated constraint trivially.
+        for idx in 0..IVC_BATCH_SIZE {
+            let cm = &external_inputs.matches[idx];
+            let bid_trader = cm.bid_trader.clone();
+            let bid_salt = cm.bid_salt.clone();
+            let bid_lp = cm.bid_limit_price.clone();
+            let bid_side = cm.bid_side.clone();
+            let bid_balance = cm.bid_balance.clone();
+            let bid_position = cm.bid_position.clone();
+            let bid_addr = cm.bid_trader_addr.clone();
+            let bid_order_size = cm.bid_order_size.clone();
+            let ask_trader = cm.ask_trader.clone();
+            let ask_salt = cm.ask_salt.clone();
+            let ask_lp = cm.ask_limit_price.clone();
+            let ask_side = cm.ask_side.clone();
+            let ask_balance = cm.ask_balance.clone();
+            let ask_position = cm.ask_position.clone();
+            let ask_addr = cm.ask_trader_addr.clone();
+            let ask_order_size = cm.ask_order_size.clone();
+            let m_price = cm.match_price.clone();
+            let m_size = cm.match_size.clone();
+            let is_active = cm.is_active.clone();
 
             // ── Family 1: side bits ∈ {0,1}, is_active ∈ {0,1} ────────────
             (&bid_side * (&one - &bid_side)).enforce_equal(&zero)?;
