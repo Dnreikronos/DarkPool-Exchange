@@ -124,6 +124,11 @@ impl AuctionExternalInputs {
     ) -> Result<Self, ZkError> {
         use crate::encoding::{decimal_to_scalar, signed_to_scalar};
 
+        if batch_size > IVC_BATCH_SIZE {
+            return Err(ZkError::Witness(format!(
+                "batch_size {batch_size} exceeds circuit width IVC_BATCH_SIZE {IVC_BATCH_SIZE}"
+            )));
+        }
         if witness.matches.len() > batch_size {
             return Err(ZkError::Witness(format!(
                 "{} matches > circuit batch_size {}",
@@ -280,7 +285,15 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
         // Always allocate a fixed `IVC_BATCH_SIZE` rows so the constraint system
         // is identical whether `native` is the empty `default()` (used by
         // HyperNova preprocessing to derive the CCS) or a real, padded witness.
-        // Short inputs are backfilled with inactive rows.
+        // Short inputs are backfilled with inactive rows; over-long inputs would
+        // be silently truncated by the loop below, so reject them outright — a
+        // dropped match would settle on-chain without ever being proven.
+        assert!(
+            native.matches.len() <= IVC_BATCH_SIZE,
+            "AuctionExternalInputs carries {} matches, exceeds circuit width IVC_BATCH_SIZE {}",
+            native.matches.len(),
+            IVC_BATCH_SIZE
+        );
         let mut matches = Vec::with_capacity(IVC_BATCH_SIZE);
         for i in 0..IVC_BATCH_SIZE {
             let cm = native.matches.get(i).cloned().unwrap_or_default();
@@ -391,7 +404,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             computed_policy_hash.enforce_equal(&policy_hash)?;
         }
 
-        debug_assert!(
+        assert!(
             self.batch_size <= IVC_BATCH_SIZE,
             "batch_size {} exceeds IVC_BATCH_SIZE {}",
             self.batch_size,
