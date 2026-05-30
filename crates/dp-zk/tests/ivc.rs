@@ -142,6 +142,13 @@ fn fold_single_step_verifies() {
     );
     // policy_hash must be invariant
     assert_eq!(proof.z_n[2], z_0[2], "policy_hash must remain invariant");
+    // settlement_acc must survive the end-to-end fold/finalize path: folding
+    // one active match advances the hash-chain off its zero seed.
+    assert_ne!(
+        proof.z_n[3],
+        Fr::zero(),
+        "settlement_acc must change after folding an active match"
+    );
 }
 
 #[test]

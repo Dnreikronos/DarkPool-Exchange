@@ -97,7 +97,11 @@ async fn engine_subprocess_zk_pipeline() {
     // body is in OrderPlaced::ciphertext — that's covered by the
     // dedicated XOR/event-store canary in `tests.rs`.)
     let trader_id_bid = dp_zk::pedersen::derive_trader_id_bytes(bid_addr.as_slice());
+    let trader_id_bid_hex = hex::encode(trader_id_bid);
     let raw = bincode::serialize(&events).unwrap();
-    let leaked = raw.windows(trader_id_bid.len()).any(|w| w == trader_id_bid);
+    let leaked = raw.windows(trader_id_bid.len()).any(|w| w == trader_id_bid)
+        || raw
+            .windows(trader_id_bid_hex.len())
+            .any(|w| w == trader_id_bid_hex.as_bytes());
     assert!(!leaked, "ZK trader_id leaked into event log");
 }
