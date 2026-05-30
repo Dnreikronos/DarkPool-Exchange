@@ -47,6 +47,38 @@ fn empty_keys_filter() {
     assert_eq!(err.code(), Code::Unauthenticated);
 }
 
+#[test]
+fn any_configured_key_passes() {
+    // Every key in a multi-key set must authenticate, not just the first.
+    let core = AuthCore::new(vec!["k1".into(), "k2".into(), "k3".into()]);
+    for k in ["k1", "k2", "k3"] {
+        let mut h = HeaderMap::new();
+        h.insert("x-api-key", HeaderValue::from_str(k).unwrap());
+        assert!(core.check(&h).is_ok(), "key {k} should authenticate");
+    }
+}
+
+#[test]
+fn prefix_of_valid_key_denied() {
+    // A proper prefix of a real key must be rejected: hashing to a fixed width
+    // means length is never a side channel, and a prefix is a distinct secret.
+    let core = AuthCore::new(vec!["supersecretkey".into()]);
+    let mut h = HeaderMap::new();
+    h.insert("x-api-key", HeaderValue::from_static("supersecret"));
+    let err = core.check(&h).err().unwrap();
+    assert_eq!(err.code(), Code::Unauthenticated);
+}
+
+#[test]
+fn wrong_key_same_length_denied() {
+    // A guess that matches the secret's length but not its bytes is rejected.
+    let core = AuthCore::new(vec!["correct-horse".into()]);
+    let mut h = HeaderMap::new();
+    h.insert("x-api-key", HeaderValue::from_static("wrongo-horsey"));
+    let err = core.check(&h).err().unwrap();
+    assert_eq!(err.code(), Code::Unauthenticated);
+}
+
 fn jwt_manager() -> Arc<JwtManager> {
     Arc::new(JwtManager::new(
         "test-secret-32-bytes-long-xxxxx",
