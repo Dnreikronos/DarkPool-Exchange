@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,6 +8,8 @@ use axum::extract::{Request as AxumRequest, State as AxumState};
 use axum::middleware::Next;
 use axum::response::Response as AxumResponse;
 use http::{HeaderMap, Request, Response};
+use sha2::{Digest, Sha256};
+use subtle::{Choice, ConstantTimeEq};
 use tonic::body::BoxBody;
 use tonic::Status;
 use tower::{Layer, Service};
@@ -25,21 +26,25 @@ pub enum AuthenticatedIdentity {
 
 #[derive(Clone, Debug)]
 pub struct AuthCore {
-    keys: Arc<HashSet<String>>,
+    /// SHA-256 digests of the configured keys. Storing digests (not the
+    /// plaintext keys) lets us compare in constant time over a fixed 32-byte
+    /// width, so neither the matching key nor its length is a timing oracle —
+    /// and the keys never appear in `Debug` output.
+    key_digests: Arc<Vec<[u8; 32]>>,
     jwt: Option<Arc<crate::siwe::JwtManager>>,
 }
 
 impl AuthCore {
     pub fn new(keys: Vec<String>) -> Self {
         Self {
-            keys: Arc::new(keys.into_iter().filter(|k| !k.is_empty()).collect()),
+            key_digests: Arc::new(digest_keys(keys)),
             jwt: None,
         }
     }
 
     pub fn new_with_jwt(keys: Vec<String>, jwt: Arc<crate::siwe::JwtManager>) -> Self {
         Self {
-            keys: Arc::new(keys.into_iter().filter(|k| !k.is_empty()).collect()),
+            key_digests: Arc::new(digest_keys(keys)),
             jwt: Some(jwt),
         }
     }
@@ -63,7 +68,7 @@ impl AuthCore {
             }
         }
 
-        if self.keys.is_empty() {
+        if self.key_digests.is_empty() {
             return Ok(AuthenticatedIdentity::ApiKey);
         }
         let key = match headers.get(AUTH_HEADER) {
@@ -76,11 +81,43 @@ impl AuthCore {
         if key.is_empty() {
             return Err(Status::unauthenticated(MSG_MISSING_API_KEY));
         }
-        if !self.keys.contains(key) {
-            return Err(Status::unauthenticated(MSG_INVALID_API_KEY));
+        if self.verify_key(key) {
+            Ok(AuthenticatedIdentity::ApiKey)
+        } else {
+            Err(Status::unauthenticated(MSG_INVALID_API_KEY))
         }
-        Ok(AuthenticatedIdentity::ApiKey)
     }
+
+    /// Constant-time membership test for a presented API key.
+    ///
+    /// The presented key is hashed, then compared against every configured
+    /// digest with a constant-time equality, folding the results without an
+    /// early exit. The running time is therefore independent of which key (if
+    /// any) matched and of how many leading bytes happened to agree, closing
+    /// the timing side-channel that `HashSet::contains` exposes on a secret.
+    /// Hashing to a fixed 32-byte width also removes the key length as a side
+    /// channel.
+    fn verify_key(&self, key: &str) -> bool {
+        let presented = sha256(key.as_bytes());
+        let mut matched = Choice::from(0u8);
+        for digest in self.key_digests.iter() {
+            matched |= presented[..].ct_eq(&digest[..]);
+        }
+        bool::from(matched)
+    }
+}
+
+fn digest_keys(keys: Vec<String>) -> Vec<[u8; 32]> {
+    keys.into_iter()
+        .filter(|k| !k.is_empty())
+        .map(|k| sha256(k.as_bytes()))
+        .collect()
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 #[derive(Clone, Debug)]
