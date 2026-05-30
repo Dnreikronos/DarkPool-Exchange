@@ -137,7 +137,33 @@ pub fn verify_final(params: &HyperNovaPublicParams, proof: &FinalProof) -> Resul
     )
     .map_err(|e| ZkError::Serialize(format!("deserialize ivc_proof: {e}")))?;
 
+    // The authenticated public IO carried inside the proof. `HN::verify` binds
+    // the proof to exactly these `z_0` / `z_i` values (via the running-instance
+    // hash `H(i, z_0, z_i, U_i)`), so capture them before `verify` moves the
+    // proof. The `FinalProof` convenience copies — which flow on-chain through
+    // `ProofPayload::IvcFinal` — must equal them, otherwise a caller could
+    // rewrite the settlement-binding metadata (`z_n[3]`, `policy_hash`) while
+    // still presenting a valid `proof_bytes`.
+    let authentic_z_0 = ivc_proof.z_0.clone();
+    let authentic_z_n = ivc_proof.z_i.clone();
+
     HN::verify(params.verifier.clone(), ivc_proof)
         .map_err(|e| ZkError::Ivc(format!("verify: {e}")))?;
+
+    if authentic_z_0.as_slice() != proof.z_0.as_slice() {
+        return Err(ZkError::Ivc(
+            "z_0 mismatch: FinalProof.z_0 does not match the verified proof".into(),
+        ));
+    }
+    if authentic_z_n.as_slice() != proof.z_n.as_slice() {
+        return Err(ZkError::Ivc(
+            "z_n mismatch: FinalProof.z_n does not match the verified proof".into(),
+        ));
+    }
+    if proof.policy_hash != proof.z_n[2] {
+        return Err(ZkError::Ivc(
+            "policy_hash mismatch: FinalProof.policy_hash does not equal z_n[2]".into(),
+        ));
+    }
     Ok(())
 }
