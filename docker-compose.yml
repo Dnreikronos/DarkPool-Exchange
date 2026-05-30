@@ -77,8 +77,11 @@ services:
       DP_LOG_FORMAT: ${DP_LOG_FORMAT:-json}
     entrypoint: ["/usr/local/bin/darkpool-server"]
     ports:
-      - "${DARKPOOL_GRPC_PORT:-9090}:9090"
-      - "${DARKPOOL_HTTP_PORT:-8080}:8080"
+      # Bind to loopback: the local stack may run with unauthenticated admin
+      # (DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN), so /v1/admin/* must not be
+      # reachable from the LAN. Prefix the host IP to expose deliberately.
+      - "127.0.0.1:${DARKPOOL_GRPC_PORT:-9090}:9090"
+      - "127.0.0.1:${DARKPOOL_HTTP_PORT:-8080}:8080"
 
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
