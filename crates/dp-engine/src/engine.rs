@@ -643,6 +643,27 @@ impl Engine {
         })
     }
 
+    /// Commitment leaves for the orders admitted to a round — every order that
+    /// was live in the book at tick time (#157). These form the round's
+    /// admitted-set Merkle tree; membership of each settled leg is proven
+    /// against its root, binding the operator to the publicly admitted input.
+    ///
+    /// Reads only the `secrets` lock, so it must never be called while holding
+    /// the `state` lock: the established lock order is secrets→state (see
+    /// [`Self::prune_dead_secrets`]), and inverting it risks deadlock. The tick
+    /// captures the admitted order ids under the state lock and resolves their
+    /// commitments here, on the lock-free async proof path. An order whose
+    /// secret has already been pruned is skipped; a *matched* leg that ends up
+    /// absent is caught downstream by `from_witness_with_admitted`.
+    pub(crate) fn admitted_commitments(&self, order_ids: &[Uuid]) -> Vec<ark_bn254::Fr> {
+        let secrets = self.inner.secrets.lock();
+        order_ids
+            .iter()
+            .filter_map(|id| secrets.get(id))
+            .map(|s| dp_zk::pedersen::bytes_to_scalar(&s.commitment))
+            .collect()
+    }
+
     /// Drop ZK secrets whose backing order has left the book. Bounds the
     /// `secrets` map so it does not grow with every placed order.
     pub(crate) fn prune_dead_secrets(&self) {
