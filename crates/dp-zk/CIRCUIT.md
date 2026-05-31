@@ -31,6 +31,7 @@ uses `2^58`.
 | 3b| Uniform clearing price      | Active rows  | `(match_price - clearing_price) * is_active == 0` — every active row settles at the single auction clearing price (#163). |
 | 4 | Min-size, min-price         | All / active | 60-bit ranges on `size`, `price`; diff to floors gated by `is_active`. |
 | 5 | Leg commitment binding      | All rows     | In-circuit Poseidon over `(trader_id, side, lp, size, salt)` reconstructs the commitment, accumulated into `commitments_root`. |
+| 5b| Input-completeness membership (IVC step circuit, #157) | Active rows | Each active leg's reconstructed commitment is proven a leaf of the round's admitted-set Merkle root: `(merkle_root(leg_commit, path) - admitted_root) * is_active == 0`. Ties every settled order to the publicly admitted input set. |
 | 6 | Notional binding            | All rows     | `match_price * match_size` accumulates into `notionals_root`. |
 | 7 | Solvency                    | Active rows  | `balance < 2^60` (60-bit range) AND `balance * 1e8 - notional` fits 120-bit range. |
 | 8 | Position-limit (two-sided)  | Active rows  | For `new_pos = position ± match_size`, `(limit - new_pos)` and `(limit + new_pos)` each fit in 60 bits → `\|new_pos\| ≤ position_limit`. |
@@ -41,6 +42,47 @@ because the Poseidon-friendly `signed_to_scalar` representation puts
 positive integers in `[0, 2^60)` and negatives in `Fr - [1, 2^60]`, both
 range checks together pin `new_pos` to the signed integer interval
 `[-position_limit, position_limit]`.
+
+## IVC state vector (`AuctionStepCircuit`)
+
+The HyperNova step circuit carries a 5-element public state across rounds:
+
+| # | Slot             | Meaning                                                        |
+|---|------------------|----------------------------------------------------------------|
+| 0 | `state_hash`     | Running `poseidon(prev, commitments_root, notionals_root, active_count)`. |
+| 1 | `round_nonce`    | Increments by 1 each folded round.                             |
+| 2 | `policy_hash`    | `poseidon(min_size, min_price, position_limit)`; invariant.    |
+| 3 | `settlement_acc` | Hash-chain over each active match's `(bid_addr, ask_addr, price, size)` — binds on-chain settlement to the proof (#153). |
+| 4 | `admit_chain`    | Hash-chain over each round's admitted-set Merkle root — binds the input set to the proof (#157). |
+
+`z_0 = [0, 0, policy_hash, 0, 0]`. `verify_final` re-checks the whole
+authenticated `z_0`/`z_n` slice, so neither chain can be rewritten while
+presenting a valid proof.
+
+## Input-completeness binding (#157)
+
+The matching proof binds *match validity* and *which orders were settled*,
+but on its own says nothing about *which orders were eligible*. A semi-trusted
+operator could therefore match an order it never published (an off-log
+phantom) against a victim. To close that, each round commits to the
+**admitted set** — the commitments of every order live in the book when the
+auction ran — as a canonical fixed-depth (`2^MERKLE_DEPTH`) Poseidon Merkle
+root (`merkle::admitted_set_root`: leaves sorted by field value, padded with
+the empty leaf). Family 5b proves every settled leg is a member of that root,
+and the root is folded into `admit_chain` (`z[4]`).
+
+A watcher reconstructs the same root from the public `OrderPlaced` /
+`OrderCancelled` / expiry log (the per-round root is also published in the
+`BatchFolded` event) and folds the chain; if it matches the proof's `z_n[4]`,
+no off-log order was matched and the operator did not misrepresent the
+admitted set.
+
+**Scope boundary.** This binds *matched ⊆ admitted set* (no injection) and
+makes the input set transparent. It does **not** force the operator to match
+*every* crossing order — full maximal-matching is prohibitively expensive in
+circuit. Censorship-by-omission (declining to match an order that crosses)
+therefore remains detectable only by an external observer comparing the
+public book against the clearing price, not enforced by the proof.
 
 ## Poseidon vs. Pedersen
 
