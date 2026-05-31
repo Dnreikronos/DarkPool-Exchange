@@ -19,6 +19,7 @@ pub mod commitment_circuit;
 pub mod encoding;
 #[cfg(feature = "ivc")]
 pub mod folding;
+pub mod merkle;
 #[cfg(feature = "ivc")]
 pub mod params;
 pub mod pedersen;
@@ -31,6 +32,10 @@ pub use encoding::{decimal_to_scalar, fr_to_bytes32, EncodingError};
 pub use folding::{
     compress_and_finalize, fold_step, generate_params, init_accumulator, verify_final, FinalProof,
     FoldingAccumulator, HyperNovaPublicParams,
+};
+pub use merkle::{
+    admitted_chain_step, admitted_set_proof, admitted_set_root, root_from_proof, MerkleProof,
+    MERKLE_DEPTH, MERKLE_LEAVES,
 };
 pub use pedersen::{commit_native, OrderCommitmentInput};
 #[cfg(feature = "ivc")]
