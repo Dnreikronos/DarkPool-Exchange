@@ -615,8 +615,8 @@ mod ivc_tests {
                 use ark_ff::Zero;
                 Ok(dp_zk::folding::FinalProof {
                     proof_bytes: vec![0u8; 32],
-                    z_0: [Fr::zero(); 4],
-                    z_n: [Fr::zero(); 4],
+                    z_0: [Fr::zero(); 5],
+                    z_n: [Fr::zero(); 5],
                     n_steps: 1,
                     policy_hash: Fr::zero(),
                 })

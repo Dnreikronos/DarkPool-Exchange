@@ -84,15 +84,16 @@ fn sample_ext(batch_size: usize) -> AuctionExternalInputs {
         .expect("sample_ext: from_witness")
 }
 
-/// Compute `z_0 = [0, 0, policy_hash, 0]` where
-/// `policy_hash = poseidon(min_size, min_price, position_limit)` and the
-/// trailing slot is the empty settlement hash-chain accumulator.
-fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 4] {
+/// Compute `z_0 = [0, 0, policy_hash, 0, 0]` where
+/// `policy_hash = poseidon(min_size, min_price, position_limit)`; the two
+/// trailing slots are the empty settlement hash-chain (#153) and admitted-set
+/// chain (#157) accumulators.
+fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 5] {
     let cfg = poseidon_config();
     let mut s = PoseidonSponge::<Fr>::new(&cfg);
     s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
     let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero()]
+    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +149,13 @@ fn fold_single_step_verifies() {
         proof.z_n[3],
         Fr::zero(),
         "settlement_acc must change after folding an active match"
+    );
+    // admit_chain (#157) folds the round's admitted-set root, so it too leaves
+    // the zero seed after a real round.
+    assert_ne!(
+        proof.z_n[4],
+        Fr::zero(),
+        "admit_chain must change after folding a round with an admitted set"
     );
 }
 

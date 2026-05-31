@@ -63,4 +63,5 @@ pub enum ZkError {
 }
 
 /// Bumped any time the IVC circuit constraints change.
-pub const CIRCUIT_VERSION: &str = "v3-hypernova";
+/// v4: input-completeness membership + admitted-set chain in `z[4]` (#157).
+pub const CIRCUIT_VERSION: &str = "v4-hypernova";
