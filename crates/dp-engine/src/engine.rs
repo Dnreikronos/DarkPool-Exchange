@@ -372,9 +372,14 @@ impl Engine {
     ///
     /// Same blocking note as [`Engine::register_pair_with_event`]: the
     /// state mutex is held across the `Store::append` call. Holding the
-    /// lock is load-bearing here — otherwise a trader could place a new
-    /// order between the open-orders snapshot and the status flip and
-    /// survive the delist.
+    /// lock is load-bearing here — the open-orders snapshot, the cancel
+    /// events, and the status flip are one atomic critical section. The
+    /// other half of the invariant lives in `persist_order_placed`, which
+    /// re-checks the pair status under this same lock before inserting
+    /// (issue #162): an order that passed its earlier status check but only
+    /// reaches the insert after this delist commits is rejected, so it can
+    /// never land in the book after the snapshot that would have cancelled
+    /// it.
     pub fn delist_pair(&self, pair: &str) -> Result<usize, EngineError> {
         let canonical = dp_types::Pair::parse(pair)?;
         let key = canonical.as_str().to_string();
@@ -594,13 +599,23 @@ impl Engine {
 
         // Stamp the returned order with the same seq the book copy got, so a
         // caller inspecting the result sees the real priority key, not 0.
-        order.seq = self.persist_order_placed(
+        // If persistence rejects (e.g. the in-lock pair-status re-check fails
+        // because a delist/suspend raced in — issue #162), the order never
+        // enters the book, so drop the witness secret we just stashed rather
+        // than leak it until the next `prune_dead_secrets` sweep.
+        match self.persist_order_placed(
             order.clone(),
             commitment,
             proof,
             ciphertext,
             nonce.to_vec(),
-        )?;
+        ) {
+            Ok(seq) => order.seq = seq,
+            Err(e) => {
+                self.drop_secret(order.id);
+                return Err(e);
+            }
+        }
         Ok(order)
     }
 
@@ -688,7 +703,7 @@ impl Engine {
         self.inner.secrets.lock().remove(&order_id);
     }
 
-    fn persist_order_placed(
+    pub(crate) fn persist_order_placed(
         &self,
         mut order: Order,
         commitment: Vec<u8>,
@@ -710,6 +725,29 @@ impl Engine {
         }];
 
         let state = self.inner.state.lock();
+        // Re-validate the pair status under the *same* lock that does the
+        // append + insert. The status check in `place_encrypted_order` runs
+        // in an earlier, separately-acquired lock scope; between dropping
+        // that guard and taking this one, `suspend_pair` / `delist_pair` can
+        // flip the pair off `Active`. Re-checking here closes the TOCTOU
+        // (issue #162): a delist snapshots open-order ids and cancels them,
+        // and an order inserted after that snapshot would otherwise land in a
+        // delisted pair's book — never matched, never cancelled, escrow
+        // stranded. The check must be atomic with the insert, so it lives
+        // inside this guard rather than re-checking and then locking again.
+        match state.pair_config(&order.pair).map(|c| c.status) {
+            Some(crate::state::PairStatus::Active) => {}
+            Some(_) => {
+                return Err(EngineError::Validation(DarkPoolError::PairNotAccepting(
+                    order.pair.clone(),
+                )));
+            }
+            None => {
+                return Err(EngineError::Validation(DarkPoolError::PairNotRegistered(
+                    order.pair.clone(),
+                )));
+            }
+        }
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         // The store stamped the monotonic seq onto the event during append;
