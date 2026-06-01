@@ -445,6 +445,7 @@ mod tests {
             encrypted_payload: Vec::new(),
             submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::seconds(60),
+            seq: 0,
         }
     }
 

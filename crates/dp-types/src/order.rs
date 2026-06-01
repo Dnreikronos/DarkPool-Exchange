@@ -24,6 +24,19 @@ pub struct Order {
     pub encrypted_payload: Vec<u8>,
     pub submitted_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    /// Monotonic placement sequence — the event-store `seq` assigned to this
+    /// order's `OrderPlaced` event. Strictly increasing across every order and
+    /// identical on live placement and on event-log replay, so it is the
+    /// canonical price-time priority key for matching (see ADR 0005).
+    ///
+    /// `submitted_at` is a wall-clock instant for display and TTL only; it must
+    /// never drive matching priority because it is non-monotonic at
+    /// sub-millisecond granularity and is reconstructed from the (possibly
+    /// DB-write) event timestamp on recovery. `#[serde(default)]` keeps older
+    /// snapshots that predate this field deserialisable (they replay to the
+    /// correct `seq` from their `OrderPlaced` events).
+    #[serde(default)]
+    pub seq: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +66,7 @@ mod tests {
             encrypted_payload: vec![],
             submitted_at: DateTime::default(),
             expires_at: DateTime::default(),
+            seq: 0,
         };
         let json = serde_json::to_value(&order).unwrap();
         assert!(json.get("ID").is_some(), "expected ID field");
@@ -76,6 +90,7 @@ mod tests {
             "expected SubmittedAt field"
         );
         assert!(json.get("ExpiresAt").is_some(), "expected ExpiresAt field");
+        assert!(json.get("Seq").is_some(), "expected Seq field");
     }
 
     #[test]

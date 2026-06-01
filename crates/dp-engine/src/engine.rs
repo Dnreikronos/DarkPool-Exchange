@@ -569,6 +569,9 @@ impl Engine {
             encrypted_payload: ciphertext.clone(),
             submitted_at: now,
             expires_at,
+            // Adopted from the OrderPlaced event's store-assigned seq in
+            // `persist_order_placed`, once the append fixes it.
+            seq: 0,
         };
 
         // Capture ZK witness secrets in-memory only. Salt is derived
@@ -679,7 +682,7 @@ impl Engine {
 
     fn persist_order_placed(
         &self,
-        order: Order,
+        mut order: Order,
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
@@ -701,6 +704,10 @@ impl Engine {
         let state = self.inner.state.lock();
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
+        // The store stamped the monotonic seq onto the event during append;
+        // adopt it as the order's price-time priority key so the live book and
+        // a replayed book agree on matching order (issue #161, ADR 0005).
+        order.seq = evt.seq;
         state.book.apply(evt);
         let side_label = match order.side {
             Side::Buy => "buy",
