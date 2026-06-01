@@ -1,21 +1,15 @@
 'use client'
 
-// Drives the multi-stage mock submission (PREPARING WITNESS → GENERATING
-// PROOF → ENCRYPTING → SUBMITTING → success/error). The same state shape
-// will be reused by F1.12 (#79) onboarding so the stage IDs are stable.
+// Drives the multi-stage submission (PREPARING WITNESS → GENERATING PROOF →
+// ENCRYPTING → SUBMITTING → success/error). The orchestrator walks an
+// injected ordered list of StageStep — the mock path (buildMockSteps) and
+// the real path (createRealSteps, see _lib/entry/build-submission.ts) both
+// assemble that list, so one node-testable state machine drives both.
 //
-// The orchestration runs inside `runSubmission` — a pure async function
-// that emits each phase transition to an `onPhase` callback. The hook
-// itself is a thin wrapper that pipes those emissions into React state.
-// That split lets unit tests drive the state machine without a DOM and
-// without React Testing Library (the project's vitest setup is
-// node-only).
-//
-// Two dependencies are injected so tests can run synchronously and the
-// real submission path can be swapped in Phase 2:
-//   - `placeOrder`: mock-store mutation today, real RPC after #99.
-//   - `delay`:      defaults to setTimeout-based sleep; tests pass a
-//                   manually-pumped scheduler.
+// `stageStartedAtMs` is stamped on each running emission so the view can
+// show real elapsed seconds per stage. Errors are routed through an
+// injectable `mapError` (default mapSubmissionError) so a DarkPoolError
+// becomes specific copy + structured detail for the inline error area.
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
@@ -26,12 +20,19 @@ import {
   SUCCESS_HOLD_MS,
   type SubmitStageId,
 } from '../../_lib/entry/policy'
+import {
+  randomHex,
+  type StageStep,
+} from '../../_lib/entry/build-submission'
+import { mapSubmissionError, type SubmitErrorDetail } from '../../_lib/entry/submit-error'
+
+export type { StageStep } from '../../_lib/entry/build-submission'
 
 export type SubmissionPhase =
   | { kind: 'idle' }
-  | { kind: 'running'; stage: SubmitStageId; progress: number }
+  | { kind: 'running'; stage: SubmitStageId; progress: number; stageStartedAtMs?: number }
   | { kind: 'success' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; detail?: SubmitErrorDetail }
 
 export interface SubmitPayload {
   side: 'buy' | 'sell'
@@ -39,29 +40,16 @@ export interface SubmitPayload {
   size: string
 }
 
-export interface ProvePayload {
-  commitment_key: string
-  side: number
-  price: string
-  size: string
-  salt_hex: string
-}
-
-export interface SubmissionDeps {
-  placeOrder: (payload: SubmitPayload) => void | Promise<void>
-  /** Real ZK prover. When provided, replaces the mock delay during the proving stage. */
-  prove?: (witness: ProvePayload) => Promise<{ proof: Uint8Array; commitment: Uint8Array }>
-  /** Returns a promise that resolves after `ms`. Defaults to setTimeout. */
-  delay?: (ms: number) => Promise<void>
-}
-
-export interface RunSubmissionOptions extends SubmissionDeps {
+export interface RunSubmissionOptions {
   onPhase: (phase: SubmissionPhase) => void
-  /**
-   * `true` aborts the run between awaits. Used by the hook to drop
-   * stale runs when `submit` fires while another run is still in flight.
-   */
+  /** Resolves after `ms`. Defaults to setTimeout. */
+  delay?: (ms: number) => Promise<void>
+  /** Monotonic clock for the elapsed ticker. Defaults to Date.now. */
+  now?: () => number
+  /** `true` aborts the run between awaits (drops stale runs). */
   shouldAbort?: () => boolean
+  /** Maps a thrown value to an error phase. Defaults to mapSubmissionError. */
+  mapError?: (err: unknown) => { message: string; detail?: SubmitErrorDetail }
 }
 
 export function progressAtStartOfStage(stage: SubmitStageId): number {
@@ -83,29 +71,33 @@ export function progressAtEndOfStage(stage: SubmitStageId): number {
 }
 
 const defaultDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+const defaultNow = () => Date.now()
 
 /**
- * Pure orchestrator. Emits each phase change through `onPhase` and
- * resolves once the run lands on a terminal state (success / error) and
- * the post-success hold has elapsed.
+ * Mock steps: a fixed delay per stage (matching STAGE_DURATIONS_MS) with the
+ * mock placeOrder fired during `submitting`. Reproduces the F1.9 behaviour
+ * for the demo/Storybook path. `prove`, when supplied, replaces the proving
+ * delay (legacy parity).
  */
-export async function runSubmission(
+export function buildMockSteps(
   payload: SubmitPayload,
-  opts: RunSubmissionOptions
-): Promise<void> {
+  opts: {
+    placeOrder: (payload: SubmitPayload) => void | Promise<void>
+    prove?: (witness: {
+      commitment_key: string
+      side: number
+      price: string
+      size: string
+      salt_hex: string
+    }) => Promise<unknown>
+    delay?: (ms: number) => Promise<void>
+  }
+): StageStep[] {
   const delay = opts.delay ?? defaultDelay
-  const aborted = () => (opts.shouldAbort ? opts.shouldAbort() : false)
-
-  try {
-    for (const stage of STAGE_ORDER) {
-      if (aborted()) return
-      opts.onPhase({ kind: 'running', stage, progress: progressAtStartOfStage(stage) })
-
-      if (stage === 'proving' && opts.prove) {
-        const randomHex = (n: number) =>
-          Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) =>
-            b.toString(16).padStart(2, '0')
-          ).join('')
+  return STAGE_ORDER.map((id) => ({
+    id,
+    run: async () => {
+      if (id === 'proving' && opts.prove) {
         await opts.prove({
           commitment_key: randomHex(32),
           side: payload.side === 'buy' ? 0 : 1,
@@ -113,15 +105,46 @@ export async function runSubmission(
           size: payload.size,
           salt_hex: randomHex(32),
         })
-      } else if (stage === 'submitting') {
+        return
+      }
+      if (id === 'submitting') {
         await Promise.resolve(opts.placeOrder(payload))
       }
+      await delay(STAGE_DURATIONS_MS[id])
+    },
+  }))
+}
 
-      if (!(stage === 'proving' && opts.prove)) {
-        await delay(STAGE_DURATIONS_MS[stage])
-      }
+/**
+ * Pure orchestrator. Emits each phase change through `onPhase` and resolves
+ * once the run lands on a terminal state and the post-success hold elapses.
+ */
+export async function runSubmission(steps: StageStep[], opts: RunSubmissionOptions): Promise<void> {
+  const delay = opts.delay ?? defaultDelay
+  const now = opts.now ?? defaultNow
+  const mapError = opts.mapError ?? mapSubmissionError
+  const aborted = () => (opts.shouldAbort ? opts.shouldAbort() : false)
+
+  try {
+    for (const step of steps) {
       if (aborted()) return
-      opts.onPhase({ kind: 'running', stage, progress: progressAtEndOfStage(stage) })
+      const stageStartedAtMs = now()
+      opts.onPhase({
+        kind: 'running',
+        stage: step.id,
+        progress: progressAtStartOfStage(step.id),
+        stageStartedAtMs,
+      })
+
+      await step.run({ aborted })
+
+      if (aborted()) return
+      opts.onPhase({
+        kind: 'running',
+        stage: step.id,
+        progress: progressAtEndOfStage(step.id),
+        stageStartedAtMs,
+      })
     }
 
     if (aborted()) return
@@ -132,14 +155,18 @@ export async function runSubmission(
     opts.onPhase({ kind: 'idle' })
   } catch (err) {
     if (aborted()) return
-    const message = err instanceof Error ? err.message : String(err)
-    opts.onPhase({ kind: 'error', message })
+    const { message, detail } = mapError(err)
+    opts.onPhase({ kind: 'error', message, detail })
   }
 }
 
-export interface UseSubmitStagesParams extends SubmissionDeps {
+export interface UseSubmitStagesParams {
+  /** Build the ordered steps for a given form payload (mock or real). */
+  buildSteps: (payload: SubmitPayload) => StageStep[]
   onSuccess?: (payload: SubmitPayload) => void
   onError?: (error: Error) => void
+  delay?: (ms: number) => Promise<void>
+  now?: () => number
 }
 
 export interface UseSubmitStagesResult {
@@ -168,17 +195,17 @@ export function useSubmitStages(params: UseSubmitStagesParams): UseSubmitStagesR
   const submit = useCallback(async (payload: SubmitPayload) => {
     const myRunId = ++runIdRef.current
     const isStale = () => runIdRef.current !== myRunId
+    const p = paramsRef.current
 
-    await runSubmission(payload, {
-      placeOrder: paramsRef.current.placeOrder,
-      prove: paramsRef.current.prove,
-      delay: paramsRef.current.delay,
+    await runSubmission(p.buildSteps(payload), {
+      delay: p.delay,
+      now: p.now,
       shouldAbort: isStale,
       onPhase: (next) => {
         if (isStale()) return
         setPhase(next)
-        if (next.kind === 'success') paramsRef.current.onSuccess?.(payload)
-        if (next.kind === 'error') paramsRef.current.onError?.(new Error(next.message))
+        if (next.kind === 'success') p.onSuccess?.(payload)
+        if (next.kind === 'error') p.onError?.(new Error(next.message))
       },
     })
   }, [])
