@@ -32,9 +32,14 @@ pub struct Order {
     /// `submitted_at` is a wall-clock instant for display and TTL only; it must
     /// never drive matching priority because it is non-monotonic at
     /// sub-millisecond granularity and is reconstructed from the (possibly
-    /// DB-write) event timestamp on recovery. `#[serde(default)]` keeps older
-    /// snapshots that predate this field deserialisable (they replay to the
-    /// correct `seq` from their `OrderPlaced` events).
+    /// DB-write) event timestamp on recovery.
+    ///
+    /// `#[serde(default)]` only matters for self-describing formats (JSON): a
+    /// missing field decodes to `0`. The book snapshot is bincode (positional,
+    /// not self-describing), so a pre-`seq` snapshot does NOT gain the field
+    /// here — it fails to decode and the recover path treats it as corrupt,
+    /// falling back to a full event replay that restores the real `seq` from
+    /// each `OrderPlaced` event. See ADR 0005 for the snapshot/replay caveat.
     #[serde(default)]
     pub seq: u64,
 }

@@ -93,12 +93,19 @@ in the matcher (no release-build cost) and covered by unit tests in
   Recovery is deterministic with respect to fill allocation.
 - Priority is unambiguous at any placement granularity; there is no
   sub-millisecond race for liquidity.
-- Adding a field to `Order` changes its serialized shape. `seq` is
-  `#[serde(default)]`, so snapshots written before this change still
-  deserialize (with `seq = 0`); on the next full replay each order recovers
-  its real `seq` from its `OrderPlaced` event. `seq` is **not** part of the
-  ZK commitment (the commitment is derived from id / key / side / price /
-  size), so proofs are unaffected.
+- Adding a field to `Order` changes its serialized shape. The book snapshot
+  is bincode (positional, not self-describing), so `#[serde(default)]` does
+  **not** make a pre-`seq` snapshot decode; it only covers self-describing
+  formats such as JSON. A stale snapshot fails to decode, the recover path
+  treats that envelope as corrupt and tries older envelopes, and ultimately
+  falls back to a full event replay, which reconstructs each order's real
+  `seq` from its `OrderPlaced` event. The one gap: if events were compacted
+  past the snapshot point (`compact_before`), full replay can no longer
+  rebuild the book and recovery fails. This is pre-prod with no snapshots in
+  existence yet, but the wire-shape change is real and snapshot compatibility
+  rests on the replay fallback, not on `serde(default)`. `seq` is **not**
+  part of the ZK commitment (derived from id / key / side / price / size), so
+  proofs are unaffected.
 - The marginal-time advantage at the clearing price is now deliberate and
   documented (price-time), not an accident of timestamp resolution. If the
   protocol later wants to remove it, pro-rata is the lever — a separate ADR.
