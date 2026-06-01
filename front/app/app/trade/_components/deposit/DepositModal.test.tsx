@@ -10,8 +10,22 @@
 // transitions; Ladle stories cover the visual states end-to-end.
 
 import * as React from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+
+// The wired form pulls config + wagmi into its import graph (via useBalances
+// and the live controller, both called unconditionally). Pin mock mode and
+// stub wagmi inert so the node SSR render stays on the walletStore path.
+vi.mock('@/lib/config', () => ({
+  config: { useMocks: true, chainId: 31337, contracts: null },
+}))
+vi.mock('wagmi', () => ({
+  useReadContracts: () => ({ data: undefined, isLoading: false, isError: false, refetch: () => {} }),
+  useWatchContractEvent: () => {},
+  useWriteContract: () => ({ writeContractAsync: async () => '0x' }),
+  useConfig: () => ({}),
+}))
+vi.mock('wagmi/actions', () => ({ waitForTransactionReceipt: async () => ({}) }))
 
 import { walletStore } from '@/lib/wallet/mock-store'
 

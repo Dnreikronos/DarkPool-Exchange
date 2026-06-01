@@ -6,14 +6,15 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/components/ui/cn'
 import { Input } from '@/components/ui/input'
 import { NumericText } from '@/components/NumericText'
-import { useWallet, useWalletBalances } from '@/lib/wallet/hooks'
+import { useWallet } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
+import { useBalances } from '../../_hooks/balances/useBalances'
 import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
 import {
   useDepositController,
-  useTxState,
+  useDepositTxState,
   type DepositRevertReason,
 } from '../../_hooks/deposit/hooks'
 import { StepIndicator, type Step } from './StepIndicator'
@@ -49,8 +50,8 @@ export function DepositForm({ initialToken = 'USDC', onConfirmed, titleId }: Dep
   const [token, setToken] = React.useState<TokenSymbol>(initialToken)
   const [amount, setAmount] = React.useState('')
   const { isConnected } = useWallet()
-  const wallet = useWalletBalances()
-  const tx = useTxState()
+  const { wallet } = useBalances()
+  const tx = useDepositTxState()
   const controller = useDepositController()
 
   React.useEffect(() => {
@@ -169,6 +170,7 @@ export function DepositForm({ initialToken = 'USDC', onConfirmed, titleId }: Dep
         <Button type="submit" variant="primary" disabled={!canStart} aria-busy={isInFlight}>
           {primaryLabel({
             stage: controller.stage.kind,
+            phase: controller.stage.phase,
             requiresApproval,
             paused: isPaused,
             connected: isConnected,
@@ -310,17 +312,24 @@ function DevRevertControls({
 
 function primaryLabel({
   stage,
+  phase,
   requiresApproval,
   paused,
   connected,
 }: {
   stage: 'idle' | 'approving' | 'submitting' | 'confirmed' | 'error'
+  phase?: 'signing' | 'mining'
   requiresApproval: boolean
   paused: boolean
   connected: boolean
 }): string {
   if (paused) return 'PAUSED'
   if (!connected) return 'CONNECT WALLET'
+  // `signing` is the open wallet prompt (isPending); `mining` is the tx
+  // awaiting confirmation (isConfirming).
+  if ((stage === 'approving' || stage === 'submitting') && phase === 'signing') {
+    return 'CONFIRM IN WALLET…'
+  }
   switch (stage) {
     case 'approving':
       return 'APPROVING…'
