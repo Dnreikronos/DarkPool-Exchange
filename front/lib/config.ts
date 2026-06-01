@@ -8,6 +8,14 @@ const booleanFromEnv = z
   .enum(['true', 'false', '1', '0'])
   .transform((value) => value === 'true' || value === '1')
 
+// Like booleanFromEnv but optional: an unset var resolves to `false` rather
+// than throwing, so existing .env.local files keep booting when a new opt-in
+// flag is added.
+const optionalBooleanFromEnv = z
+  .enum(['true', 'false', '1', '0'])
+  .optional()
+  .transform((value) => value === 'true' || value === '1')
+
 const chainIdSchema = z
   .string()
   .regex(/^\d+$/, 'must be a positive integer')
@@ -22,6 +30,9 @@ const baseSchema = z.object({
   NEXT_PUBLIC_DARKPOOL_API_KEY: z.string().min(1),
   NEXT_PUBLIC_CHAIN_ID: chainIdSchema,
   NEXT_PUBLIC_OPERATOR_PUBKEY_URL: urlSchema,
+  // Opt-in per-user SIWE auth. Defaults false so mocks and non-SIWE
+  // deployments keep using the static x-api-key.
+  NEXT_PUBLIC_SIWE_ENABLED: optionalBooleanFromEnv,
 })
 
 const contractsSchema = z.object({
@@ -37,6 +48,7 @@ const rawEnv = {
   NEXT_PUBLIC_DARKPOOL_API_KEY: process.env.NEXT_PUBLIC_DARKPOOL_API_KEY,
   NEXT_PUBLIC_CHAIN_ID: process.env.NEXT_PUBLIC_CHAIN_ID,
   NEXT_PUBLIC_OPERATOR_PUBKEY_URL: process.env.NEXT_PUBLIC_OPERATOR_PUBKEY_URL,
+  NEXT_PUBLIC_SIWE_ENABLED: process.env.NEXT_PUBLIC_SIWE_ENABLED,
   NEXT_PUBLIC_DARKPOOL_ADDRESS: process.env.NEXT_PUBLIC_DARKPOOL_ADDRESS,
   NEXT_PUBLIC_VERIFIER_PROXY_ADDRESS: process.env.NEXT_PUBLIC_VERIFIER_PROXY_ADDRESS,
   NEXT_PUBLIC_USDC_ADDRESS: process.env.NEXT_PUBLIC_USDC_ADDRESS,
@@ -56,6 +68,7 @@ type MockConfig = {
   apiKey: string
   chainId: number
   operatorPubkeyUrl: string
+  siweEnabled: boolean
   contracts: null
 }
 
@@ -65,6 +78,7 @@ type LiveConfig = {
   apiKey: string
   chainId: number
   operatorPubkeyUrl: string
+  siweEnabled: boolean
   contracts: ContractAddresses
 }
 
@@ -96,6 +110,7 @@ function parseConfig(): Config {
       apiKey: base.data.NEXT_PUBLIC_DARKPOOL_API_KEY,
       chainId: base.data.NEXT_PUBLIC_CHAIN_ID,
       operatorPubkeyUrl: base.data.NEXT_PUBLIC_OPERATOR_PUBKEY_URL,
+      siweEnabled: base.data.NEXT_PUBLIC_SIWE_ENABLED,
       contracts: null,
     }
   }
@@ -111,6 +126,7 @@ function parseConfig(): Config {
     apiKey: base.data.NEXT_PUBLIC_DARKPOOL_API_KEY,
     chainId: base.data.NEXT_PUBLIC_CHAIN_ID,
     operatorPubkeyUrl: base.data.NEXT_PUBLIC_OPERATOR_PUBKEY_URL,
+    siweEnabled: base.data.NEXT_PUBLIC_SIWE_ENABLED,
     contracts: {
       darkPool: contracts.data.NEXT_PUBLIC_DARKPOOL_ADDRESS as `0x${string}`,
       verifierProxy: contracts.data.NEXT_PUBLIC_VERIFIER_PROXY_ADDRESS as `0x${string}`,

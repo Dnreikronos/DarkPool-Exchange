@@ -3,6 +3,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
 
 import { config } from '../config'
+import { clearSession, getSessionToken } from '../wallet/session'
 import { createDarkPoolClient, methodOverridesFromEnv, type DarkPoolClient } from './client'
 
 const DarkPoolClientContext = createContext<DarkPoolClient | null>(null)
@@ -47,6 +48,11 @@ function getDefaultClient(): DarkPoolClient {
     apiKey: config.apiKey,
     useMocks: config.useMocks,
     methodOverrides: methodOverridesFromEnv(),
+    // When SIWE is on, send the live session token (read per-request) and
+    // clear it on a 401 so the UI can prompt a re-sign. Otherwise stay on
+    // the static x-api-key.
+    getToken: config.siweEnabled ? getSessionToken : undefined,
+    onUnauthenticated: config.siweEnabled ? clearSession : undefined,
   })
   return cachedDefault
 }
