@@ -12,7 +12,12 @@ vi.mock('@/lib/config', () => ({
   config: { useMocks: true, chainId: 31337, contracts: null },
 }))
 vi.mock('wagmi', () => ({
-  useReadContracts: () => ({ data: undefined, isLoading: false, isError: false, refetch: () => {} }),
+  useReadContracts: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    refetch: () => {},
+  }),
   useWatchContractEvent: () => {},
   useWriteContract: () => ({ writeContractAsync: async () => '0x' }),
   useConfig: () => ({}),
