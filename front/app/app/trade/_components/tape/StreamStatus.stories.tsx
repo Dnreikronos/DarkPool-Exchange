@@ -1,15 +1,21 @@
-import type { Meta, StoryObj } from '@storybook/react'
+import * as React from 'react'
 
 import { StreamStatus } from './StreamStatus'
 
-const meta: Meta<typeof StreamStatus> = {
-  title: 'Trade/Tape/StreamStatus',
-  component: StreamStatus,
-}
-export default meta
+export const Live = () => (
+  <div className="w-[320px] bg-brand-bg p-4">
+    <StreamStatus status="live" />
+  </div>
+)
 
-type Story = StoryObj<typeof StreamStatus>
+export const Connecting = () => (
+  <div className="w-[320px] bg-brand-bg p-4">
+    <StreamStatus status="connecting" />
+  </div>
+)
 
-export const Live: Story = { args: { status: 'live' } }
-export const Connecting: Story = { args: { status: 'connecting' } }
-export const Degraded: Story = { args: { status: 'degraded' } }
+export const Degraded = () => (
+  <div className="w-[320px] bg-brand-bg p-4">
+    <StreamStatus status="degraded" />
+  </div>
+)
