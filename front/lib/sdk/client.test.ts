@@ -186,22 +186,139 @@ describe('RestClient.getAuctionHistory', () => {
   })
 })
 
+function sseResponse(chunks: string[], init: ResponseInit = {}): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(encoder.encode(c))
+      controller.close()
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+    ...init,
+  })
+}
+
+const AUCTION_FRAME =
+  'event: auction\n' +
+  'data: {"auctionId":"a1","pair":"ETH/USDC","clearingPrice":"3000.5",' +
+  '"matchedVolume":"2.5","matchCount":3,"timestampUnix":"1717200000"}\n\n'
+
+async function drain(iter: AsyncIterable<unknown>): Promise<unknown[]> {
+  const out: unknown[] = []
+  for await (const x of iter) out.push(x)
+  return out
+}
+
 describe('RestClient.streamAuctions', () => {
-  it('throws UNIMPLEMENTED — SSE bridge is not wired yet', async () => {
-    const { fetch } = captureFetch(makeJsonResponse({}))
+  it('yields AuctionEvents parsed from SSE auction frames (decimals stay strings)', async () => {
+    const { fetch, calls } = captureFetch(sseResponse([AUCTION_FRAME]))
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
-    const iter = client.streamAuctions({ $typeName: 'darkpool.v1.StreamAuctionsRequest', pair: '' })
+    const events = (await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: 'ETH/USDC' }))
+    )) as Array<{
+      auctionId: string
+      clearingPrice: string
+      matchedVolume: string
+      matchCount: number
+      timestampUnix: bigint
+    }>
+    expect(events).toHaveLength(1)
+    expect(events[0].auctionId).toBe('a1')
+    expect(events[0].clearingPrice).toBe('3000.5')
+    expect(events[0].matchedVolume).toBe('2.5')
+    expect(events[0].matchCount).toBe(3)
+    expect(events[0].timestampUnix).toBe(1717200000n)
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions/stream?pair=ETH%2FUSDC`)
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers.accept).toBe('text/event-stream')
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits the query string when no pair is given', async () => {
+    const { fetch, calls } = captureFetch(sseResponse([AUCTION_FRAME]))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions/stream`)
+  })
+
+  it('ignores keep-alive comments and unknown event types', async () => {
+    const chunks = [': keep-alive\n\n', 'event: ping\ndata: nope\n\n', AUCTION_FRAME]
+    const { fetch } = captureFetch(sseResponse(chunks))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const events = await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }))
+    )
+    expect(events).toHaveLength(1)
+  })
+
+  it('reassembles a frame split across chunks', async () => {
+    const chunks = [
+      'event: auction\ndata: {"auctionId":"a1"',
+      ',"pair":"ETH/USDC","clearingPrice":"1","matchedVolume":"1","matchCount":0,"timestampUnix":"5"}\n\n',
+    ]
+    const { fetch } = captureFetch(sseResponse(chunks))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const events = (await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }))
+    )) as Array<{ auctionId: string }>
+    expect(events).toHaveLength(1)
+    expect(events[0].auctionId).toBe('a1')
+  })
+
+  it('throws DATA_LOSS on a lagged error frame', async () => {
+    const { fetch } = captureFetch(sseResponse(['event: error\ndata: {"lagged":7}\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
     await expect(
-      (async () => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for await (const _event of iter) {
-          // unreachable
-        }
-      })()
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
     ).rejects.toMatchObject({
       name: 'DarkPoolError',
-      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+      code: DARK_POOL_ERROR_CODES.DATA_LOSS,
     })
+  })
+
+  it('maps an HTTP error response to a DarkPoolError', async () => {
+    const { fetch } = captureFetch(new Response('', { status: 401 }))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.UNAUTHENTICATED, httpStatus: 401 })
+  })
+
+  it('maps a fetch rejection to UNAVAILABLE', async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError('connection refused')
+    }) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.UNAVAILABLE })
+  })
+
+  it('terminates cleanly when the abort signal fires', async () => {
+    const controller = new AbortController()
+    const neverEnds = new ReadableStream<Uint8Array>({ start() {} })
+    const fetch = vi.fn(
+      async () => new Response(neverEnds, { status: 200 })
+    ) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const iter = client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }), {
+      signal: controller.signal,
+    })
+    let done = false
+    const drained = (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of iter) {
+        // unreachable
+      }
+      done = true
+    })()
+    await Promise.resolve()
+    controller.abort()
+    await drained
+    expect(done).toBe(true)
   })
 })
 
