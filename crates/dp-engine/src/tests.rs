@@ -1167,6 +1167,167 @@ fn take_snapshot_for_bench_delegates_to_take_snapshot() {
     assert!(!snap_store.list_seqs().unwrap().is_empty());
 }
 
+// Issue #162: `place_encrypted_order` validates the pair status in one lock
+// scope and then persists in a *later* one, so a `delist_pair`/`suspend_pair`
+// that commits in the gap could strand an order on an inactive pair. The fix
+// re-checks the status inside the same lock that does the append + insert
+// (`persist_order_placed`). The race window has no `.await` in it, so it can
+// only be hit by a second OS thread; these tests pin the in-lock guard
+// directly instead of relying on a flaky thread interleaving.
+mod delist_toctou {
+    use super::*;
+    use crate::state::{PairConfig, PairStatus};
+    use chrono::Utc;
+    use dp_types::{DarkPoolError, Order};
+
+    fn dummy_order(pair: &str) -> Order {
+        let now = Utc::now();
+        Order {
+            id: Uuid::new_v4(),
+            trader: Address::ZERO,
+            pair: pair.to_string(),
+            side: Side::Buy,
+            price: dec(100),
+            size: dec(1),
+            remaining_size: dec(1),
+            commitment_key: "ck".to_string(),
+            encrypted_payload: vec![1, 2, 3],
+            submitted_at: now,
+            expires_at: now + chrono::Duration::seconds(600),
+            seq: 0,
+        }
+    }
+
+    // Simulates the lost race: the order passed its earlier `Active` check,
+    // but by the time `persist_order_placed` takes the lock the pair has been
+    // delisted. The in-lock re-check must reject and insert nothing.
+    #[tokio::test]
+    async fn persist_rejects_when_pair_delisted_in_the_gap() {
+        let (engine, store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+        engine.delist_pair("BTC-USD").unwrap();
+
+        let err = engine
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+            ),
+            "delisted pair must be rejected at insert, got: {err}"
+        );
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "no order may enter the book"
+        );
+        assert_eq!(
+            count_events(store.as_ref(), EventType::OrderPlaced),
+            0,
+            "no OrderPlaced event may be written for a rejected order"
+        );
+    }
+
+    // Same guard, suspended rather than delisted.
+    #[tokio::test]
+    async fn persist_rejects_when_pair_suspended_in_the_gap() {
+        let (engine, _store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+        engine.suspend_pair("BTC-USD").unwrap();
+
+        let err = engine
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+        ));
+        assert_eq!(engine.active_order_count(), 0);
+    }
+
+    // The unregistered branch of the same match arm: a pair that vanishes
+    // entirely (defensive — the registry never removes keys today, but the
+    // guard must still reject rather than insert under `None`).
+    #[tokio::test]
+    async fn persist_rejects_when_pair_unregistered() {
+        let (engine, _store) = make_engine();
+        let err = engine
+            .persist_order_placed(
+                dummy_order("DOGE/USDC"),
+                vec![0u8; 32],
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotRegistered(_))
+        ));
+        assert_eq!(engine.active_order_count(), 0);
+    }
+
+    // The full public path must still reject when the pair is already
+    // inactive at call time — the in-lock re-check must not have broken the
+    // happy-path acceptance for an Active pair, nor weakened rejection.
+    #[tokio::test]
+    async fn place_accepts_active_and_rejects_inactive_end_to_end() {
+        let (engine, _store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+
+        // Active: accepted, lands in the book.
+        place_plaintext_order(
+            &engine,
+            "BTC-USD",
+            Side::Buy,
+            dec(100),
+            dec(1),
+            "ck",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        assert_eq!(engine.active_order_count(), 1);
+        assert_eq!(engine.pair_status("BTC-USD"), Some(PairStatus::Active));
+
+        // Delist, then a fresh placement is rejected and the book is unchanged.
+        engine.delist_pair("BTC-USD").unwrap();
+        let err = place_plaintext_order(
+            &engine,
+            "BTC-USD",
+            Side::Buy,
+            dec(100),
+            dec(1),
+            "ck2",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+        ));
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "delist cancelled the resting order; none added"
+        );
+    }
+}
+
 mod snapshot_recover {
     //! Verifies that `recover()` produces the same projection state when
     //! starting from a snapshot+tail as it does when replaying every
