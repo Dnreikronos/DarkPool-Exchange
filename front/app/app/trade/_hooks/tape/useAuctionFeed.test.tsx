@@ -9,7 +9,7 @@ vi.mock('@/lib/config', () => ({ config: { useMocks: true, contracts: null, chai
 
 import { useAuctionFeed } from './useAuctionFeed'
 import { DarkPoolClientProvider } from '@/lib/sdk/provider'
-import type { DarkPoolClient } from '@/lib/sdk/client'
+import { DARK_POOL_ERROR_CODES, DarkPoolError, type DarkPoolClient } from '@/lib/sdk/client'
 import {
   AuctionEventSchema,
   AuctionSummarySchema,
@@ -106,5 +106,42 @@ describe('useAuctionFeed', () => {
     const callsWhenLive = getAuctionHistory.mock.calls.length
     await vi.advanceTimersByTimeAsync(5000)
     expect(getAuctionHistory.mock.calls.length).toBe(callsWhenLive) // no further polls while live
+  })
+
+  it('keeps polling history while the stream stays disconnected (degrade)', async () => {
+    // Every connection attempt ends immediately → status never reaches 'live',
+    // so the REST poll must stay enabled (the degrade-to-polling path).
+    async function* stream() {
+      // yields nothing, returns → graceful drop → FSM degrades + reconnects
+    }
+    const { client, getAuctionHistory } = fakeClient({ stream })
+    const { result } = renderHook(() => useAuctionFeed({ limit: 50, refetchIntervalMs: 100 }), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(getAuctionHistory.mock.calls.length).toBeGreaterThanOrEqual(1))
+    await vi.advanceTimersByTimeAsync(350)
+    expect(getAuctionHistory.mock.calls.length).toBeGreaterThanOrEqual(3) // polls kept firing
+    expect(result.current.status).not.toBe('live')
+  })
+
+  it('backfills history once when the stream reports lag', async () => {
+    let connects = 0
+    async function* stream(signal?: AbortSignal) {
+      connects++
+      if (connects === 1) {
+        // Wait for the initial mount fetch to settle before reporting lag —
+        // otherwise the onLag refetch is coalesced into the still-in-flight
+        // mount fetch (TanStack in-flight dedup) and never hits getAuctionHistory.
+        await new Promise<void>((r) => setTimeout(r, 20))
+        throw new DarkPoolError(DARK_POOL_ERROR_CODES.DATA_LOSS, 'lagged')
+      }
+      yield ev('live1', 20n)
+      await new Promise<void>((r) => signal?.addEventListener('abort', () => r(), { once: true }))
+    }
+    const { client, getAuctionHistory } = fakeClient({ stream })
+    renderHook(() => useAuctionFeed({ limit: 50 }), { wrapper: makeWrapper(client) })
+    // initial mount fetch settles (1), then lag fires → onLag → history.refetch() (1) ⇒ ≥ 2 calls
+    await vi.advanceTimersByTimeAsync(30)
+    await waitFor(() => expect(getAuctionHistory.mock.calls.length).toBeGreaterThanOrEqual(2))
   })
 })
