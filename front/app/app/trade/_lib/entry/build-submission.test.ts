@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { DecryptedOrderPayload } from '@/lib/crypto'
+import { serializeOrder } from '@/lib/crypto'
 
 import { buildOrderPayload, buildWitness, createRealSteps, randomHex } from './build-submission'
 import { ORDER_PAIR, ORDER_TTL_NS } from './policy'
@@ -59,6 +60,19 @@ describe('buildOrderPayload', () => {
       commitment_key: 'aa'.repeat(32),
       ttl: 300_000_000_000,
     })
+  })
+
+  it('produces a trader the real serializeOrder accepts (0x-prefixed)', () => {
+    const payload = buildOrderPayload({
+      trader: '0x1234567890123456789012345678901234567890',
+      pair: ORDER_PAIR,
+      side: 'buy',
+      price: '3000',
+      size: '0.5',
+      commitmentKey: 'aa'.repeat(32),
+      ttlNs: ORDER_TTL_NS,
+    })
+    expect(() => serializeOrder(payload)).not.toThrow()
   })
 })
 

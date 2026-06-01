@@ -8,7 +8,7 @@ import { encryptOrder, serializeOrder, useOperatorPubkey } from '@/lib/crypto'
 import { useProver } from '@/lib/prover'
 import { PlaceOrderRequestSchema } from '@/lib/sdk'
 import { useDarkPoolClient } from '@/lib/api-client'
-import { useTraderId } from '@/lib/wallet/hooks'
+import { useWallet } from '@/lib/wallet/hooks'
 
 import { createRealSteps, randomHex, type StageStep } from '../../_lib/entry/build-submission'
 import { ORDER_PAIR, ORDER_TTL_NS } from '../../_lib/entry/policy'
@@ -21,7 +21,7 @@ export interface UseRealSubmissionResult {
 }
 
 export function useRealSubmission(): UseRealSubmissionResult {
-  const trader = useTraderId()
+  const { address } = useWallet()
   const { prove, progress } = useProver()
   const client = useDarkPoolClient()
 
@@ -35,7 +35,7 @@ export function useRealSubmission(): UseRealSubmissionResult {
   const buildSteps = useCallback(
     (payload: SubmitPayload): StageStep[] =>
       createRealSteps({
-        trader: trader ?? '',
+        trader: address ?? '',
         pair: ORDER_PAIR,
         ttlNs: ORDER_TTL_NS,
         side: payload.side,
@@ -52,7 +52,7 @@ export function useRealSubmission(): UseRealSubmissionResult {
         encrypt: encryptOrder,
         placeOrder: (trio) => client.placeOrder(create(PlaceOrderRequestSchema, trio)),
       }),
-    [trader, prove, client]
+    [address, prove, client]
   )
 
   const provingPct = progress ? progress.pct : null
