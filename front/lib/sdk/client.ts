@@ -309,11 +309,21 @@ export class RestClient implements DarkPoolClient {
               )
             }
             if ((frame.event === 'auction' || frame.event === '') && frame.data !== '') {
-              const json = JSON.parse(frame.data) as unknown
-              yield fromJson(
-                AuctionEventSchema,
-                json as Parameters<typeof fromJson<typeof AuctionEventSchema>>[1]
-              )
+              let event: AuctionEvent
+              try {
+                const json = JSON.parse(frame.data) as unknown
+                event = fromJson(
+                  AuctionEventSchema,
+                  json as Parameters<typeof fromJson<typeof AuctionEventSchema>>[1]
+                )
+              } catch (cause) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.INTERNAL,
+                  `Auction frame parse failed: ${(cause as Error)?.message ?? cause}`,
+                  { cause }
+                )
+              }
+              yield event
             }
             // any other event type is ignored
           }
@@ -322,6 +332,7 @@ export class RestClient implements DarkPoolClient {
       }
     } finally {
       signal?.removeEventListener('abort', onAbort)
+      void reader.cancel()
       reader.releaseLock()
     }
   }

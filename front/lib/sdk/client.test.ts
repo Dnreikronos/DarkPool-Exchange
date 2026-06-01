@@ -320,6 +320,39 @@ describe('RestClient.streamAuctions', () => {
     await drained
     expect(done).toBe(true)
   })
+
+  it('cancels the response body when the consumer breaks early', async () => {
+    let cancelled = false
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(AUCTION_FRAME))
+        // intentionally left open — only a break/cancel ends it
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const fetch = vi.fn(
+      async () => new Response(stream, { status: 200 })
+    ) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    for await (const _ev of client.streamAuctions(
+      create(StreamAuctionsRequestSchema, { pair: '' })
+    )) {
+      void _ev
+      break
+    }
+    expect(cancelled).toBe(true)
+  })
+
+  it('throws INTERNAL on a malformed auction frame', async () => {
+    const { fetch } = captureFetch(sseResponse(['event: auction\ndata: {not json}\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.INTERNAL })
+  })
 })
 
 // ─── RestClient: error mapping ────────────────────────────────────────────
