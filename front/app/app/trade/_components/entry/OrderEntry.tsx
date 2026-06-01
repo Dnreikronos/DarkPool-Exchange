@@ -2,28 +2,17 @@
 
 // Order entry composition root.
 //
-// Phase 1 wiring:
-//   - reads internal balances via the mock wallet store (F1.3 / #70)
-//   - pushes new orders into the mock store (F1.2 / #69) where they
-//     immediately surface in the orderbook (F1.6 / #73) and the
-//     my-orders panel (F1.10 / #77).
-//   - surfaces the staged mock UX (ENCRYPT → PROVE → SUBMIT → ACK) so
-//     the WASM prover delay (5–30s in Phase 2) has a UX rehearsed before
-//     the real flow lands at #99.
-//
-// Click-to-fill: the orderbook (#73) calls `onPriceSelect(price, side)`.
-// `OrderEntry` exposes an imperative `fill(price, side?)` via forwardRef
-// so a parent composing the trade layout can pipe that callback in:
-//
-//   const ref = React.useRef<OrderEntryHandle>(null)
-//   <OrderBook onPriceSelect={(p, s) => ref.current?.fill(p, ...)} />
-//   <OrderEntry ref={ref} />
-//
-// Shell.tsx (F1.1) is out of this issue's file scope — the wiring lands
-// in a follow-up that owns Shell.
+// Submission gate: when the placeOrder RPC is mocked (config.useMocks or
+// NEXT_PUBLIC_USE_MOCKS_PLACE_ORDER) — or a `placeOrder` prop is injected by
+// Storybook/tests — the staged MOCK pipeline runs (fixed delays, mock-store
+// push). Otherwise the REAL pipeline runs: build witness → WASM prove →
+// ECIES encrypt → POST /v1/orders (#99). Failures surface inline below the
+// button via <SubmitError>; success keeps the toast.
 
 import * as React from 'react'
 
+import { config } from '@/lib/config'
+import { methodOverridesFromEnv } from '@/lib/api-client'
 import { mockStore } from '@/lib/mock-store'
 import { Side } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 import { Decimal } from '@/lib/units'
@@ -35,33 +24,32 @@ import { BuySellTabs } from './BuySellTabs'
 import { errorMessage } from '../../_lib/entry/errors'
 import { DecimalInput } from './inputs'
 import { BASE_TOKEN, FEE_BPS, QUOTE_TOKEN } from '../../_lib/entry/policy'
-import { PlaceButton } from './ProveSubmitStages'
+import { PlaceButton, SubmitError } from './ProveSubmitStages'
 import { TotalRow } from './TotalRow'
+import { buildMockSteps, useSubmitStages, type SubmitPayload } from '../../_hooks/entry/useSubmitStages'
+import { useRealSubmission } from '../../_hooks/entry/useRealSubmission'
 import { useOrderForm } from '../../_hooks/entry/useOrderForm'
-import { useSubmitStages, type SubmitPayload } from '../../_hooks/entry/useSubmitStages'
 import type { OrderSide } from '../../_lib/entry/validate'
 
 export interface OrderEntryHandle {
-  /** Fill the form from an external source (orderbook click-to-fill). */
   fill: (price: string, side?: OrderSide) => void
 }
 
 export interface OrderEntryProps {
-  /**
-   * Injectable side-effect: where to push the placed order. Defaults to
-   * the singleton mock store. Tests and Storybook variants override
-   * this to stub the mutation.
-   */
+  /** Inject the mock-store mutation (Storybook/tests). Forces the mock path. */
   placeOrder?: (payload: SubmitPayload) => void
-  /**
-   * Injectable wait function for the staged submission. Defaults to
-   * setTimeout-based sleep. Storybook variants pass `() => Promise.resolve()`
-   * to step through stages without the real timings.
-   */
+  /** Injectable wait for the staged mock submission. */
   delay?: (ms: number) => Promise<void>
 }
 
 const FEE_FACTOR = new Decimal(1).plus(new Decimal(FEE_BPS).div(10_000))
+
+/** True when the real pipeline should run for placeOrder. */
+function realPlaceOrderEnabled(): boolean {
+  const override = methodOverridesFromEnv().placeOrder
+  const mocked = override ?? config.useMocks
+  return !mocked
+}
 
 export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(function OrderEntry(
   { placeOrder, delay },
@@ -84,7 +72,12 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
   const formStateRef = React.useRef(form)
   formStateRef.current = form
 
-  const effectivePlaceOrder = React.useCallback(
+  // Real deps are read unconditionally (hooks rules); inert in mock mode.
+  // `realBuildSteps` is already memoized inside the hook (deps: trader/prove/client).
+  const { buildSteps: realBuildSteps, provingPct: realProvingPct } = useRealSubmission()
+
+  // Mock path: injected placeOrder, else the singleton mock store.
+  const effectiveMockPlaceOrder = React.useCallback(
     (payload: SubmitPayload) => {
       if (placeOrder) {
         placeOrder(payload)
@@ -99,8 +92,18 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
     [placeOrder]
   )
 
+  const useReal = !placeOrder && realPlaceOrderEnabled()
+
+  const buildSteps = React.useCallback(
+    (payload: SubmitPayload) =>
+      useReal
+        ? realBuildSteps(payload)
+        : buildMockSteps(payload, { placeOrder: effectiveMockPlaceOrder, delay }),
+    [useReal, realBuildSteps, effectiveMockPlaceOrder, delay]
+  )
+
   const submit = useSubmitStages({
-    placeOrder: effectivePlaceOrder,
+    buildSteps,
     delay,
     onSuccess: () => {
       toast({
@@ -110,12 +113,7 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
       })
       form.reset()
     },
-    onError: (error) => {
-      toast({
-        title: 'Order rejected',
-        description: error.message,
-      })
-    },
+    // Errors render inline via <SubmitError> (no toast) per #99 design.
   })
 
   React.useImperativeHandle(
@@ -135,11 +133,6 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
   }
 
   const handleMax = () => {
-    // Sell: cap size at the available WETH balance.
-    // Buy: derive size = quoteBalance / (price * (1 + fee_bps/10000)),
-    // snap down to 4dp so the displayed value matches the size column.
-    // If price isn't set we leave the field alone — populating it from
-    // a stale or zero price would mislead the user.
     try {
       if (form.side === 'sell') {
         form.setSize(balances.weth)
@@ -244,8 +237,11 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
           phase={submit.phase}
           disabled={!form.validation.ok}
           accent={accentActive}
+          provingPct={useReal ? realProvingPct : undefined}
           onClick={() => formRef.current?.requestSubmit()}
         />
+
+        <SubmitError phase={submit.phase} />
       </form>
     </section>
   )
