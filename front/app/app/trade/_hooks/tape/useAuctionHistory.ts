@@ -29,8 +29,12 @@ export interface UseAuctionHistoryOptions {
   pair?: string
   /** Max rows to request from the backend. Defaults to {@link DEFAULT_AUCTION_HISTORY_LIMIT}. */
   limit?: number
-  /** Override polling cadence — primarily for Storybook + tests. */
-  refetchIntervalMs?: number
+  /**
+   * Override polling cadence — primarily for Storybook + tests. Pass `false`
+   * to disable polling entirely (used by useAuctionFeed while the live SSE
+   * stream is connected).
+   */
+  refetchIntervalMs?: number | false
 }
 
 /**
