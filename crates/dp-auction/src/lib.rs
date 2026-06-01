@@ -22,6 +22,22 @@ pub struct Match {
     pub size: Decimal,
 }
 
+/// Run one batch auction over the orders for `pair` and return the matches,
+/// or `None` if the book does not cross.
+///
+/// Matching is **strict price-time priority** under the deterministic total
+/// order `(price, seq)`: best price first, ties broken by the monotonic
+/// placement `seq` (earliest placement wins). That ordering is established
+/// here, inside `run`, rather than relying on the caller passing pre-sorted
+/// slices — so the result is identical regardless of input order, and
+/// identical between live execution and event-log replay. `seq` is unique per
+/// order, making this a strict total order with no dependence on sort
+/// stability. See ADR 0005 for why price-time (not pro-rata) and why `seq`
+/// (not `submitted_at`).
+///
+/// Allocation is greedy under that order: the highest-priority order on each
+/// side is filled as far as the opposing liquidity allows before the next is
+/// considered. There is no pro-rata split.
 #[must_use]
 pub fn run(auction_id: Uuid, pair: &str, bids: &[Order], asks: &[Order]) -> Option<AuctionResult> {
     if bids.is_empty() || asks.is_empty() {
@@ -30,8 +46,11 @@ pub fn run(auction_id: Uuid, pair: &str, bids: &[Order], asks: &[Order]) -> Opti
 
     let mut bids = bids.to_vec();
     let mut asks = asks.to_vec();
-    bids.sort_by_key(|o| std::cmp::Reverse(o.price));
-    asks.sort_by_key(|o| o.price);
+    // Total order: best price first, then earliest placement (seq asc). `seq`
+    // is unique per order, so this fully determines priority without relying
+    // on the caller's input order or on sort stability.
+    bids.sort_by(|a, b| b.price.cmp(&a.price).then(a.seq.cmp(&b.seq)));
+    asks.sort_by(|a, b| a.price.cmp(&b.price).then(a.seq.cmp(&b.seq)));
 
     if bids[0].price < asks[0].price {
         return None;
@@ -100,6 +119,11 @@ fn cumulative_volume(orders: &[Order], pred: impl Fn(&Order) -> bool) -> Decimal
         .sum()
 }
 
+/// Greedy fill under strict price-time priority. `bids`/`asks` arrive already
+/// in `(price, seq)` order (established in [`run`]); each order is matched in
+/// that order against the opposing side, highest priority first, until its
+/// remaining size is exhausted. Self-trades (orders sharing a
+/// `commitment_key`) are skipped.
 fn match_orders(bids: &[Order], asks: &[Order], price: Decimal) -> Vec<Match> {
     let mut eligible_bids: Vec<Order> = bids
         .iter()
@@ -149,6 +173,23 @@ fn match_orders(bids: &[Order], asks: &[Order], price: Decimal) -> Vec<Match> {
         }
     }
 
+    // Conservation invariant: every match debits the bid and credits the ask
+    // by the same `fill_size` and prices at the clearing price, so volume is
+    // conserved leg-for-leg (Σ bid fills == Σ ask fills) and no fill happens
+    // off the clearing price. True by construction here; asserted in
+    // debug/test builds to catch any regression, with no release-build cost.
+    debug_assert!(
+        matches
+            .iter()
+            .all(|m| m.price == price && m.bid.size == m.ask.size),
+        "every fill must price at the clearing price with equal bid/ask legs"
+    );
+    debug_assert_eq!(
+        matches.iter().map(|m| m.bid.size).sum::<Decimal>(),
+        matches.iter().map(|m| m.ask.size).sum::<Decimal>(),
+        "sum of bid fills must equal sum of ask fills"
+    );
+
     matches
 }
 
@@ -171,6 +212,7 @@ mod tests {
             encrypted_payload: vec![],
             submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(10),
+            seq: 0,
         }
     }
 
@@ -258,5 +300,112 @@ mod tests {
         let result = run(test_auction_id(), "TEST/USD", &bids, &asks).expect("expected result");
         assert_eq!(result.clearing_price, Decimal::from(100));
         assert_eq!(result.matched_volume, Decimal::from(20));
+    }
+
+    /// Issue #161: every auction must conserve volume leg-for-leg and price
+    /// every fill at the single clearing price.
+    #[test]
+    fn fills_conserve_volume_and_clear_at_one_price() {
+        let bids = vec![
+            new_order(Side::Buy, 1810, 5),
+            new_order(Side::Buy, 1800, 10),
+        ];
+        let asks = vec![
+            new_order(Side::Sell, 1790, 8),
+            new_order(Side::Sell, 1795, 4),
+        ];
+
+        let result = run(test_auction_id(), "TEST/USD", &bids, &asks).expect("expected result");
+
+        let bid_total: Decimal = result.matches.iter().map(|m| m.bid.size).sum();
+        let ask_total: Decimal = result.matches.iter().map(|m| m.ask.size).sum();
+
+        assert_eq!(bid_total, ask_total, "Σ bid fills must equal Σ ask fills");
+        assert_eq!(
+            bid_total, result.matched_volume,
+            "matched_volume must equal the conserved fill total"
+        );
+        assert!(
+            result
+                .matches
+                .iter()
+                .all(|m| m.price == result.clearing_price),
+            "every fill must price at the clearing price"
+        );
+    }
+
+    /// Issue #161: among same-price orders the lower `seq` (earlier placement)
+    /// fills first; the marginal order takes the remainder. This is the
+    /// documented price-time priority rule.
+    #[test]
+    fn strict_price_time_priority_breaks_ties_by_seq() {
+        let mut bid = new_order(Side::Buy, 1790, 8);
+        bid.seq = 1;
+        let mut ask_early = new_order(Side::Sell, 1790, 6);
+        ask_early.seq = 2;
+        let mut ask_late = new_order(Side::Sell, 1790, 6);
+        ask_late.seq = 3;
+
+        let result = run(
+            test_auction_id(),
+            "TEST/USD",
+            &[bid],
+            &[ask_early.clone(), ask_late.clone()],
+        )
+        .expect("expected result");
+
+        let early_fill: Decimal = result
+            .matches
+            .iter()
+            .filter(|m| m.ask.order_id == ask_early.id)
+            .map(|m| m.ask.size)
+            .sum();
+        let late_fill: Decimal = result
+            .matches
+            .iter()
+            .filter(|m| m.ask.order_id == ask_late.id)
+            .map(|m| m.ask.size)
+            .sum();
+
+        assert_eq!(
+            early_fill,
+            Decimal::from(6),
+            "earlier seq fills fully first"
+        );
+        assert_eq!(late_fill, Decimal::from(2), "later seq takes the remainder");
+    }
+
+    /// Issue #161: the result is a function of `(price, seq)` alone — feeding
+    /// the same orders in a different input order must produce an identical
+    /// matching. Guards against the old reliance on caller sort-stability.
+    #[test]
+    fn result_independent_of_input_order() {
+        let mut b1 = new_order(Side::Buy, 1800, 5);
+        b1.seq = 10;
+        let mut b2 = new_order(Side::Buy, 1800, 5);
+        b2.seq = 11;
+        let mut a1 = new_order(Side::Sell, 1790, 5);
+        a1.seq = 12;
+        let mut a2 = new_order(Side::Sell, 1790, 5);
+        a2.seq = 13;
+
+        let forward = run(
+            test_auction_id(),
+            "TEST/USD",
+            &[b1.clone(), b2.clone()],
+            &[a1.clone(), a2.clone()],
+        )
+        .expect("expected result");
+        let reversed = run(
+            test_auction_id(),
+            "TEST/USD",
+            &[b2.clone(), b1.clone()],
+            &[a2.clone(), a1.clone()],
+        )
+        .expect("expected result");
+
+        assert_eq!(forward.matches, reversed.matches);
+        assert_eq!(forward.clearing_price, reversed.clearing_price);
+        assert_eq!(forward.matched_volume, reversed.matched_volume);
     }
 }

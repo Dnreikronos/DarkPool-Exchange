@@ -557,7 +557,7 @@ impl Engine {
         let expires_at = now
             + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::seconds(600));
 
-        let order = Order {
+        let mut order = Order {
             id: Uuid::new_v4(),
             trader: decrypted.trader,
             pair: pair_key,
@@ -569,6 +569,9 @@ impl Engine {
             encrypted_payload: ciphertext.clone(),
             submitted_at: now,
             expires_at,
+            // Placeholder; the real seq is the store-assigned OrderPlaced seq,
+            // stamped onto both the book copy and this returned order below.
+            seq: 0,
         };
 
         // Capture ZK witness secrets in-memory only. Salt is derived
@@ -589,7 +592,15 @@ impl Engine {
         let commitment = secrets.commitment.to_vec();
         self.inner.secrets.lock().insert(order.id, secrets);
 
-        self.persist_order_placed(order.clone(), commitment, proof, ciphertext, nonce.to_vec())?;
+        // Stamp the returned order with the same seq the book copy got, so a
+        // caller inspecting the result sees the real priority key, not 0.
+        order.seq = self.persist_order_placed(
+            order.clone(),
+            commitment,
+            proof,
+            ciphertext,
+            nonce.to_vec(),
+        )?;
         Ok(order)
     }
 
@@ -679,12 +690,12 @@ impl Engine {
 
     fn persist_order_placed(
         &self,
-        order: Order,
+        mut order: Order,
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
         salt_nonce: Vec<u8>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<u64, EngineError> {
         let mut events = [Event {
             seq: 0,
             event_type: EventType::OrderPlaced,
@@ -701,6 +712,11 @@ impl Engine {
         let state = self.inner.state.lock();
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
+        // The store stamped the monotonic seq onto the event during append;
+        // adopt it as the order's price-time priority key so the live book and
+        // a replayed book agree on matching order (issue #161, ADR 0005).
+        order.seq = evt.seq;
+        let assigned_seq = order.seq;
         state.book.apply(evt);
         let side_label = match order.side {
             Side::Buy => "buy",
@@ -708,7 +724,7 @@ impl Engine {
         };
         state.book.insert_order(order);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
-        Ok(())
+        Ok(assigned_seq)
     }
 
     pub fn cancel_order(&self, order_id: Uuid, reason: Option<String>) -> Result<(), EngineError> {

@@ -431,6 +431,11 @@ impl Engine {
                     encrypted_payload: ciphertext.clone(),
                     submitted_at: ev.timestamp,
                     expires_at,
+                    // Priority key is the event's own seq — the same value the
+                    // live path stamped at placement (issue #161, ADR 0005), so
+                    // replay reconstructs the identical matching order even
+                    // though `submitted_at` here is the (DB-write) event time.
+                    seq: ev.seq,
                 };
                 placed_orders.insert(order.id, order.clone());
                 let mut state = self.inner.state.lock();
@@ -740,6 +745,7 @@ mod tests {
             encrypted_payload: Vec::new(),
             submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::seconds(600),
+            seq: 0,
         }
     }
 
