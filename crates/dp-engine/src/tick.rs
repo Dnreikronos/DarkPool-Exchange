@@ -47,6 +47,16 @@ impl Engine {
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
         let (notifications, pending, aggregator) = self.tick_under_lock();
 
+        // Broadcast the auction summaries before the ZK fold/finalize loop and
+        // on-chain submission below. Matching and the clearing price are fully
+        // settled once `tick_under_lock` returns; proving and settlement are
+        // downstream concerns a subscriber must not wait on. Folding a batch
+        // can take tens of seconds, so sending here keeps `StreamAuctions`
+        // latency bounded by the matching step rather than the proof pipeline.
+        for n in &notifications {
+            let _ = self.inner.subscribers.send(n.clone());
+        }
+
         let mut batches_to_submit = Vec::with_capacity(pending.len());
 
         for p in &pending {
@@ -198,10 +208,6 @@ impl Engine {
 
                 batches_to_submit.push(p.batch_id);
             }
-        }
-
-        for n in &notifications {
-            let _ = self.inner.subscribers.send(n.clone());
         }
 
         let mut submit_set: HashSet<Uuid> = HashSet::with_capacity(batches_to_submit.len());
