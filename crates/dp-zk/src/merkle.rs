@@ -67,6 +67,15 @@ fn canonical_leaves(commitments: &[Fr]) -> Result<Vec<Fr>, ZkError> {
             commitments.len()
         )));
     }
+    // The padding leaf is `empty_leaf()` (zero), and membership is decided by
+    // field-element equality. A real commitment equal to the empty leaf would
+    // be indistinguishable from a padded slot, so reject it rather than rely on
+    // the "Poseidon commitments are ~never zero" assumption holding silently.
+    if commitments.iter().any(|c| *c == empty_leaf()) {
+        return Err(ZkError::Witness(
+            "admitted-set commitment collides with the empty (padding) leaf".to_string(),
+        ));
+    }
     let mut leaves = commitments.to_vec();
     leaves.sort_by_key(|a| a.into_bigint());
     leaves.resize(MERKLE_LEAVES, empty_leaf());
@@ -196,6 +205,13 @@ mod tests {
     fn non_member_yields_no_proof() {
         let set = leaves(&[1, 2, 3]);
         assert!(admitted_set_proof(&set, Fr::from(99u64)).unwrap().is_none());
+    }
+
+    #[test]
+    fn commitment_colliding_with_empty_leaf_is_rejected() {
+        let set = vec![Fr::from(1u64), empty_leaf(), Fr::from(3u64)];
+        assert!(admitted_set_root(&set).is_err());
+        assert!(admitted_set_proof(&set, Fr::from(1u64)).is_err());
     }
 
     #[test]
