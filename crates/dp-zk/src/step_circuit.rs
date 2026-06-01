@@ -3,6 +3,7 @@ use std::borrow::Borrow;
 use ark_bn254::Fr;
 use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
 use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::{One, Zero};
 use ark_r1cs_std::alloc::{AllocVar, AllocationMode};
 use ark_r1cs_std::eq::EqGadget;
@@ -13,7 +14,8 @@ use ark_relations::gr1cs::{ConstraintSystemRef, Namespace, SynthesisError};
 use folding_schemes::{frontend::FCircuit, Error};
 
 use crate::encoding::SCALE_FACTOR_I128;
-use crate::pedersen::{bytes_to_scalar, poseidon_config};
+use crate::merkle::{admitted_set_proof, admitted_set_root, MerkleProof, MERKLE_DEPTH};
+use crate::pedersen::{bytes_to_scalar, commit_native, poseidon_config, OrderCommitmentInput};
 use crate::witness::BatchWitness;
 use crate::ZkError;
 
@@ -57,6 +59,12 @@ pub struct CircuitMatchNative {
     pub match_price: Fr,
     pub match_size: Fr,
     pub is_active: Fr,
+
+    /// Membership paths proving the `bid` / `ask` commitments are leaves of the
+    /// round's admitted-set Merkle root (#157). Default (all-zero) on inactive
+    /// padding rows — the in-circuit membership check is gated by `is_active`.
+    pub bid_path: MerkleProof,
+    pub ask_path: MerkleProof,
 }
 
 impl Default for CircuitMatchNative {
@@ -83,6 +91,8 @@ impl Default for CircuitMatchNative {
             match_price: zero,
             match_size: zero,
             is_active: zero,
+            bid_path: MerkleProof::default(),
+            ask_path: MerkleProof::default(),
         }
     }
 }
@@ -98,6 +108,11 @@ pub struct AuctionExternalInputs {
     /// match in [`Self::from_witness`]; the honest engine applies one volume-
     /// maximizing price to every match, so all rows already equal it.
     pub clearing_price: Fr,
+    /// Canonical Merkle root over the commitments of every order admitted to
+    /// this auction round (#157). Folded into `z[4]` so a watcher can recompute
+    /// it from the public `OrderPlaced` log and confirm the operator did not
+    /// match an order outside the publicly admitted set.
+    pub admitted_root: Fr,
     pub matches: Vec<CircuitMatchNative>,
 }
 
@@ -108,15 +123,18 @@ impl Default for AuctionExternalInputs {
             min_price: Fr::zero(),
             position_limit: Fr::zero(),
             clearing_price: Fr::zero(),
+            admitted_root: Fr::zero(),
             matches: Vec::new(),
         }
     }
 }
 
 impl AuctionExternalInputs {
-    /// Convert a [`BatchWitness`] + per-match prices/sizes into
-    /// [`AuctionExternalInputs`], padding inactive rows to `batch_size`.
-    pub fn from_witness(
+    /// Build the policy + match rows from a [`BatchWitness`], padding inactive
+    /// rows to `batch_size`. Leaves `admitted_root` and every per-row
+    /// membership path at their defaults; callers finish the value via
+    /// [`Self::attach_membership`].
+    fn build_rows(
         witness: &BatchWitness,
         match_prices: &[rust_decimal::Decimal],
         match_sizes: &[rust_decimal::Decimal],
@@ -201,6 +219,8 @@ impl AuctionExternalInputs {
                 match_price: decimal_to_scalar(match_prices[i])?,
                 match_size: decimal_to_scalar(match_sizes[i])?,
                 is_active: Fr::one(),
+                bid_path: MerkleProof::default(),
+                ask_path: MerkleProof::default(),
             });
         }
 
@@ -223,9 +243,105 @@ impl AuctionExternalInputs {
             min_price,
             position_limit,
             clearing_price,
+            admitted_root: Fr::zero(),
             matches,
         })
     }
+
+    /// Convert a [`BatchWitness`] + per-match prices/sizes into
+    /// [`AuctionExternalInputs`]. The admitted set defaults to *exactly the
+    /// matched legs*, so every settled order is trivially a member — useful in
+    /// tests and as a safe fallback. The engine instead calls
+    /// [`Self::from_witness_with_admitted`] with the full live order book (a
+    /// superset), which is what turns membership into a real
+    /// input-completeness constraint (#157).
+    pub fn from_witness(
+        witness: &BatchWitness,
+        match_prices: &[rust_decimal::Decimal],
+        match_sizes: &[rust_decimal::Decimal],
+        batch_size: usize,
+    ) -> Result<Self, ZkError> {
+        let mut ext = Self::build_rows(witness, match_prices, match_sizes, batch_size)?;
+        let admitted: Vec<Fr> = ext
+            .matches
+            .iter()
+            .filter(|m| m.is_active == Fr::one())
+            .flat_map(|m| [leaf_of(m, true), leaf_of(m, false)])
+            .collect();
+        ext.attach_membership(&admitted)?;
+        Ok(ext)
+    }
+
+    /// Like [`Self::from_witness`] but binds the round to an explicit admitted
+    /// set — the commitments of *every* order live in the book at tick time.
+    /// Membership then proves each settled leg was drawn from the publicly
+    /// admitted set, not injected off-log (#157). Errors if a matched leg's
+    /// commitment is absent from `admitted_commitments` (an operator bug — a
+    /// settled order that was never admitted) or if the set exceeds the tree
+    /// capacity.
+    pub fn from_witness_with_admitted(
+        witness: &BatchWitness,
+        match_prices: &[rust_decimal::Decimal],
+        match_sizes: &[rust_decimal::Decimal],
+        batch_size: usize,
+        admitted_commitments: &[Fr],
+    ) -> Result<Self, ZkError> {
+        let mut ext = Self::build_rows(witness, match_prices, match_sizes, batch_size)?;
+        ext.attach_membership(admitted_commitments)?;
+        Ok(ext)
+    }
+
+    /// Compute the admitted-set root and fill in each active row's membership
+    /// path against `admitted_commitments`.
+    fn attach_membership(&mut self, admitted_commitments: &[Fr]) -> Result<(), ZkError> {
+        let root = admitted_set_root(admitted_commitments)?;
+        for m in self.matches.iter_mut() {
+            if m.is_active != Fr::one() {
+                // Padding rows keep default (all-zero) paths; the in-circuit
+                // membership check is gated off by `is_active`.
+                continue;
+            }
+            let bid_leaf = leaf_of(m, true);
+            let ask_leaf = leaf_of(m, false);
+            let (_, bid_path) =
+                admitted_set_proof(admitted_commitments, bid_leaf)?.ok_or_else(|| {
+                    ZkError::Witness("matched bid leg absent from admitted set".into())
+                })?;
+            let (_, ask_path) =
+                admitted_set_proof(admitted_commitments, ask_leaf)?.ok_or_else(|| {
+                    ZkError::Witness("matched ask leg absent from admitted set".into())
+                })?;
+            m.bid_path = bid_path;
+            m.ask_path = ask_path;
+        }
+        self.admitted_root = root;
+        Ok(())
+    }
+}
+
+/// The Poseidon commitment of one leg of a match, computed from the row's
+/// scalar fields. Identical to the in-circuit `bid_commit` / `ask_commit`
+/// (and to the engine's persisted `OrderPlaced` commitment), so a matched
+/// leg's leaf lines up with its entry in the admitted set.
+fn leaf_of(m: &CircuitMatchNative, is_bid: bool) -> Fr {
+    let input = if is_bid {
+        OrderCommitmentInput {
+            trader_id: m.bid_trader,
+            side: m.bid_side,
+            limit_price: m.bid_limit_price,
+            size: m.bid_order_size,
+            salt: m.bid_salt,
+        }
+    } else {
+        OrderCommitmentInput {
+            trader_id: m.ask_trader,
+            side: m.ask_side,
+            limit_price: m.ask_limit_price,
+            size: m.ask_order_size,
+            salt: m.ask_salt,
+        }
+    };
+    commit_native(&input)
 }
 
 // ─── In-circuit (variable) data types ────────────────────────────────────────
@@ -254,6 +370,17 @@ pub struct CircuitMatchVar {
     pub match_price: FpVar<Fr>,
     pub match_size: FpVar<Fr>,
     pub is_active: FpVar<Fr>,
+    pub bid_path: MerklePathVar,
+    pub ask_path: MerklePathVar,
+}
+
+/// In-circuit version of [`MerkleProof`]: a fixed `MERKLE_DEPTH` siblings and
+/// position bits. Allocated at constant width so the constraint system shape
+/// never depends on the admitted set's size.
+#[derive(Clone, Debug)]
+pub struct MerklePathVar {
+    pub siblings: Vec<FpVar<Fr>>,
+    pub index_bits: Vec<Boolean<Fr>>,
 }
 
 /// In-circuit version of [`AuctionExternalInputs`].
@@ -263,7 +390,35 @@ pub struct AuctionExternalInputsVar {
     pub min_price: FpVar<Fr>,
     pub position_limit: FpVar<Fr>,
     pub clearing_price: FpVar<Fr>,
+    pub admitted_root: FpVar<Fr>,
     pub matches: Vec<CircuitMatchVar>,
+}
+
+/// Allocate a fixed-width membership path. Always exactly `MERKLE_DEPTH` rows
+/// so preprocessing (run on the empty default) and proving derive the same CCS.
+fn alloc_merkle_path(
+    cs: &ConstraintSystemRef<Fr>,
+    proof: &MerkleProof,
+    mode: AllocationMode,
+) -> Result<MerklePathVar, SynthesisError> {
+    let mut siblings = Vec::with_capacity(MERKLE_DEPTH);
+    let mut index_bits = Vec::with_capacity(MERKLE_DEPTH);
+    for d in 0..MERKLE_DEPTH {
+        siblings.push(FpVar::new_variable(
+            cs.clone(),
+            || Ok(proof.siblings[d]),
+            mode,
+        )?);
+        index_bits.push(Boolean::new_variable(
+            cs.clone(),
+            || Ok(proof.index_bits[d]),
+            mode,
+        )?);
+    }
+    Ok(MerklePathVar {
+        siblings,
+        index_bits,
+    })
 }
 
 impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
@@ -281,6 +436,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
         let min_price = FpVar::new_variable(cs.clone(), || Ok(native.min_price), mode)?;
         let position_limit = FpVar::new_variable(cs.clone(), || Ok(native.position_limit), mode)?;
         let clearing_price = FpVar::new_variable(cs.clone(), || Ok(native.clearing_price), mode)?;
+        let admitted_root = FpVar::new_variable(cs.clone(), || Ok(native.admitted_root), mode)?;
 
         // Always allocate a fixed `IVC_BATCH_SIZE` rows so the constraint system
         // is identical whether `native` is the empty `default()` (used by
@@ -317,6 +473,8 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
                 match_price: FpVar::new_variable(cs.clone(), || Ok(cm.match_price), mode)?,
                 match_size: FpVar::new_variable(cs.clone(), || Ok(cm.match_size), mode)?,
                 is_active: FpVar::new_variable(cs.clone(), || Ok(cm.is_active), mode)?,
+                bid_path: alloc_merkle_path(&cs, &cm.bid_path, mode)?,
+                ask_path: alloc_merkle_path(&cs, &cm.ask_path, mode)?,
             });
         }
 
@@ -325,6 +483,7 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
             min_price,
             position_limit,
             clearing_price,
+            admitted_root,
             matches,
         })
     }
@@ -334,8 +493,9 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
 
 /// IVC step circuit for HyperNova.
 ///
-/// IVC state: `z_i = [state_hash, round_nonce, policy_hash, settlement_acc]`
-/// (4 Fr elements).
+/// IVC state:
+/// `z_i = [state_hash, round_nonce, policy_hash, settlement_acc, admit_chain]`
+/// (5 Fr elements).
 ///
 /// Each step folds one auction batch, enforcing the constraint families, then
 /// updates the state:
@@ -345,7 +505,10 @@ impl AllocVar<AuctionExternalInputs, Fr> for AuctionExternalInputsVar {
 /// new_state_hash = poseidon(z_i[0], commitments_root, notionals_root, active_count)
 /// // settlement_acc folds each active row's tuple (bid_addr, ask_addr,
 /// // match_price, match_size) into a running Poseidon chain (#153)
-/// z_{i+1} = [new_state_hash, z_i[1] + 1, z_i[2], settlement_acc']
+/// // each active leg's commitment is proven a member of the round's
+/// // admitted-set Merkle root (#157); admit_chain folds that root in:
+/// //   admit_chain' = poseidon(z_i[4], admitted_root)
+/// z_{i+1} = [new_state_hash, z_i[1] + 1, z_i[2], settlement_acc', admit_chain']
 /// ```
 #[derive(Clone, Debug)]
 pub struct AuctionStepCircuit {
@@ -362,7 +525,7 @@ impl FCircuit<Fr> for AuctionStepCircuit {
     }
 
     fn state_len(&self) -> usize {
-        4 // [state_hash, round_nonce, policy_hash, settlement_acc]
+        5 // [state_hash, round_nonce, policy_hash, settlement_acc, admit_chain]
     }
 
     fn generate_step_constraints(
@@ -383,6 +546,11 @@ impl FCircuit<Fr> for AuctionStepCircuit {
         // means the contract folds only real matches, with no padding-length
         // coupling to the circuit's fixed `batch_size`.
         let mut settlement_acc = z_i[3].clone();
+        // Running chain over each round's admitted-set Merkle root (#157). The
+        // root is also the value each active leg's membership path must verify
+        // to, so folding it here binds the proof to the exact input set a
+        // watcher recomputes from the public OrderPlaced log.
+        let admit_chain_prev = z_i[4].clone();
 
         let cfg = poseidon_config();
         let one = FpVar::<Fr>::one();
@@ -507,6 +675,21 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             )?;
             let ask_commit = ask_sponge.squeeze_field_elements(1)?[0].clone();
 
+            // ── Family 5b: input-completeness membership (#157) ──────────────
+            // Each active leg's commitment must be a leaf of the round's
+            // admitted-set Merkle root. Together with a watcher recomputing
+            // that root from the public OrderPlaced log (and `admit_chain`
+            // binding it into z_n), this proves every settled order was part of
+            // the publicly admitted set — the operator cannot match an off-log
+            // phantom order. Gated by `is_active`: padding rows carry a
+            // default all-zero path and impose no constraint on the root.
+            let bid_member_root = merkle_root_var(cs.clone(), &cfg, &bid_commit, &cm.bid_path)?;
+            ((&bid_member_root - &external_inputs.admitted_root) * &is_active)
+                .enforce_equal(&zero)?;
+            let ask_member_root = merkle_root_var(cs.clone(), &cfg, &ask_commit, &cm.ask_path)?;
+            ((&ask_member_root - &external_inputs.admitted_root) * &is_active)
+                .enforce_equal(&zero)?;
+
             // ── Family 6: notional = price * size ────────────────────────────
             let notional = &m_price * &m_size;
 
@@ -598,13 +781,42 @@ impl FCircuit<Fr> for AuctionStepCircuit {
 
         let new_round_nonce = &round_nonce + &one;
 
+        // ── Admitted-set chain (#157) ───────────────────────────────────────
+        // Fold this round's admitted-set root into the running chain. Mirrors
+        // the native `admitted_chain_step` (poseidon(prev, root)) so a watcher
+        // reproduces z_n[4] by folding each round's recomputed root in order.
+        let mut admit_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
+        admit_sponge.absorb(&[admit_chain_prev, external_inputs.admitted_root.clone()].as_ref())?;
+        let new_admit_chain = admit_sponge.squeeze_field_elements(1)?[0].clone();
+
         Ok(vec![
             new_state_hash,
             new_round_nonce,
             policy_hash,
             settlement_acc,
+            new_admit_chain,
         ])
     }
+}
+
+/// Recompute a Merkle root from a leaf and its membership path — the in-circuit
+/// mirror of `merkle::root_from_proof`. `index_bit == 1` means the current node
+/// is the right child (sibling on the left), matching the native convention.
+fn merkle_root_var(
+    cs: ConstraintSystemRef<Fr>,
+    cfg: &PoseidonConfig<Fr>,
+    leaf: &FpVar<Fr>,
+    path: &MerklePathVar,
+) -> Result<FpVar<Fr>, SynthesisError> {
+    let mut cur = leaf.clone();
+    for (sib, bit) in path.siblings.iter().zip(path.index_bits.iter()) {
+        let left = FpVar::conditionally_select(bit, sib, &cur)?;
+        let right = FpVar::conditionally_select(bit, &cur, sib)?;
+        let mut s = PoseidonSpongeVar::<Fr>::new(cs.clone(), cfg);
+        s.absorb(&[left, right].as_ref())?;
+        cur = s.squeeze_field_elements(1)?[0].clone();
+    }
+    Ok(cur)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -626,6 +838,7 @@ fn enforce_range_n(value: &FpVar<Fr>, n: usize) -> Result<(), SynthesisError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::merkle::admitted_chain_step;
     use crate::pedersen::derive_trader_id;
     use crate::witness::{BatchWitness, MatchWitness, OrderLegWitness, DEFAULT_POLICY};
     use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
@@ -710,8 +923,8 @@ mod tests {
         let mut s = PoseidonSponge::<Fr>::new(&cfg);
         s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
         let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-        // [state_hash, round_nonce, policy_hash, settlement_acc]
-        vec![Fr::zero(), Fr::zero(), policy_hash, Fr::zero()]
+        // [state_hash, round_nonce, policy_hash, settlement_acc, admit_chain]
+        vec![Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
     }
 
     /// Native mirror of the in-circuit settlement hash-chain (#153): folds
@@ -966,6 +1179,101 @@ mod tests {
         assert!(
             satisfied,
             "expected satisfied: two active matches at the same price"
+        );
+    }
+
+    // ── Input-completeness membership (#157) ─────────────────────────────────
+
+    #[test]
+    fn admit_chain_advances_with_round_root() {
+        let (w, prices, sizes) = sample_witness();
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let root = ext.admitted_root;
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, z_next) = run_step(&circuit, z_0.clone(), ext);
+        assert!(satisfied, "valid round with membership paths must satisfy");
+        assert_eq!(
+            z_next[4],
+            admitted_chain_step(z_0[4], root),
+            "z[4] must fold poseidon(prev, admitted_root) — the watcher recomputes this"
+        );
+        assert_ne!(
+            z_next[4], z_0[4],
+            "a real round must advance the admit chain"
+        );
+    }
+
+    /// The engine's real case: the admitted set is the full live book, a
+    /// superset of the matched legs. Membership still holds for every settled
+    /// leg.
+    #[test]
+    fn step_accepts_admitted_superset() {
+        let (w, prices, sizes) = sample_witness();
+        let base = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let mut admitted: Vec<Fr> = base
+            .matches
+            .iter()
+            .filter(|m| m.is_active == Fr::one())
+            .flat_map(|m| [leaf_of(m, true), leaf_of(m, false)])
+            .collect();
+        // Unrelated commitments standing in for other admitted-but-unmatched
+        // orders that sit in the book this round.
+        admitted.extend([Fr::from(7u64), Fr::from(99u64), Fr::from(123_456u64)]);
+        let ext =
+            AuctionExternalInputs::from_witness_with_admitted(&w, &prices, &sizes, 2, &admitted)
+                .unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "matched legs must be members of the larger admitted set"
+        );
+    }
+
+    /// A settled order whose commitment was never admitted is rejected at
+    /// witness-build time — there is no membership path to give it.
+    #[test]
+    fn from_witness_with_admitted_rejects_unadmitted_match() {
+        let (w, prices, sizes) = sample_witness();
+        let admitted = vec![Fr::from(1u64), Fr::from(2u64)]; // omits the matched legs
+        let res =
+            AuctionExternalInputs::from_witness_with_admitted(&w, &prices, &sizes, 2, &admitted);
+        assert!(
+            res.is_err(),
+            "a settled order absent from the admitted set must be rejected"
+        );
+    }
+
+    /// The binding property: if the operator claims a different admitted root
+    /// than the one the membership paths actually prove (e.g. to hide a
+    /// censored input set), the in-circuit membership check fails.
+    #[test]
+    fn step_rejects_tampered_admitted_root() {
+        let (w, prices, sizes) = sample_witness();
+        let mut ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        ext.admitted_root += Fr::from(1u64);
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            !satisfied,
+            "membership must fail when the bound root is not the one the paths prove"
+        );
+    }
+
+    #[test]
+    fn step_rejects_tampered_membership_path() {
+        let (w, prices, sizes) = sample_witness();
+        let mut ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        ext.matches[0].bid_path.siblings[0] += Fr::from(1u64);
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            !satisfied,
+            "a corrupted membership path must not verify to the bound root"
         );
     }
 }
