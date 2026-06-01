@@ -21,7 +21,7 @@ The `position_limit` is encoded via `signed_to_scalar`: positive integers
 go in the canonical range, negatives via `Fr - x`. The default policy
 uses `2^58`.
 
-## Constraint families (v2)
+## Constraint families (v4)
 
 | # | Family                      | Active-only? | Mechanism                                           |
 |---|-----------------------------|--------------|-----------------------------------------------------|
