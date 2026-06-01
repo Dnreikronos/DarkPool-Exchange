@@ -30,9 +30,9 @@ pub struct ParamsMetadata {
 /// companion `<dir>/params_metadata.json` with a SHA-256 checksum and
 /// circuit version string.
 ///
-/// On a subsequent load the caller should verify `metadata.circuit_version`
-/// matches [`CIRCUIT_VERSION`] and re-compute the SHA-256 before trusting
-/// the bytes.
+/// On a subsequent load [`load_metadata`] verifies `circuit_version` matches
+/// [`CIRCUIT_VERSION`]; the caller should still re-compute the SHA-256 before
+/// trusting the bytes.
 pub fn save(
     params: &HyperNovaPublicParams,
     dir: &Path,
@@ -63,9 +63,23 @@ pub fn save(
 
 /// Load the [`ParamsMetadata`] from `<dir>/params_metadata.json` without
 /// deserializing the (potentially large) params binary.
+///
+/// Rejects params whose `circuit_version` does not match this crate's
+/// [`CIRCUIT_VERSION`], so a stale on-disk cache from an earlier circuit
+/// revision can never be silently trusted. The caller is still responsible
+/// for re-computing and checking the SHA-256 before trusting the bytes.
 pub fn load_metadata(dir: &Path) -> Result<ParamsMetadata, ZkError> {
     let raw = fs::read_to_string(dir.join(META_FILE))?;
-    serde_json::from_str(&raw).map_err(|e| ZkError::Serialize(e.to_string()))
+    let meta: ParamsMetadata =
+        serde_json::from_str(&raw).map_err(|e| ZkError::Serialize(e.to_string()))?;
+    if meta.circuit_version != CIRCUIT_VERSION {
+        return Err(ZkError::Setup(format!(
+            "params circuit version mismatch: expected {CIRCUIT_VERSION}, found {} \
+             (regenerate params for the current circuit)",
+            meta.circuit_version
+        )));
+    }
+    Ok(meta)
 }
 
 /// Read the raw prover-param bytes from `<dir>/public_params.bin`.
