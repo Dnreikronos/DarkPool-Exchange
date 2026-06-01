@@ -615,6 +615,41 @@ describe('DarkPoolError', () => {
   })
 })
 
+// ─── error header capture (#99 / C7) ──────────────────────────────────────
+
+describe('RestClient error header capture', () => {
+  it('captures retry-after on a 429 response', async () => {
+    const { fetch } = captureFetch(
+      new Response(JSON.stringify({ code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED, message: 'slow down' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'retry-after': '30', 'x-request-id': 'req-429' },
+      })
+    )
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      client.getOrder(create(GetOrderRequestSchema, { orderId: 'x' }))
+    ).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED,
+      retryAfter: '30',
+      requestId: 'req-429',
+    })
+  })
+
+  it('captures x-request-id on a 500 response', async () => {
+    const { fetch } = captureFetch(
+      new Response('', { status: 500, headers: { 'x-request-id': 'req-500' } })
+    )
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      client.getOrder(create(GetOrderRequestSchema, { orderId: 'x' }))
+    ).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.INTERNAL,
+      requestId: 'req-500',
+      retryAfter: null,
+    })
+  })
+})
+
 beforeEach(() => {
   // No-op; vi.restoreAllMocks() would clobber the spies created in each test.
 })
