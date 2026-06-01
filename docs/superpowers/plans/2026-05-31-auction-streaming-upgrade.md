@@ -693,7 +693,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as React from 'react'
 
 import { useAuctionHistory } from './useAuctionHistory'
-import { DarkPoolProvider } from '@/lib/sdk/provider'
+import { DarkPoolClientProvider } from '@/lib/sdk/provider'
 import type { DarkPoolClient } from '@/lib/sdk/client'
 import {
   create,
@@ -713,7 +713,7 @@ function makeWrapper(client: DarkPoolClient) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return (
       <QueryClientProvider client={qc}>
-        <DarkPoolProvider client={client}>{children}</DarkPoolProvider>
+        <DarkPoolClientProvider client={client}>{children}</DarkPoolClientProvider>
       </QueryClientProvider>
     )
   }
@@ -807,7 +807,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as React from 'react'
 
 import { useAuctionStream } from './useAuctionStream'
-import { DarkPoolProvider } from '@/lib/sdk/provider'
+import { DarkPoolClientProvider } from '@/lib/sdk/provider'
 import { DARK_POOL_ERROR_CODES, DarkPoolError, type DarkPoolClient } from '@/lib/sdk/client'
 import {
   AuctionEventSchema,
@@ -839,7 +839,7 @@ function scriptClient(streams: StreamFn[]): DarkPoolClient {
 
 function makeWrapper(client: DarkPoolClient) {
   return function Wrapper({ children }: { children: React.ReactNode }): JSX.Element {
-    return <DarkPoolProvider client={client}>{children}</DarkPoolProvider>
+    return <DarkPoolClientProvider client={client}>{children}</DarkPoolClientProvider>
   }
 }
 
@@ -1089,7 +1089,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as React from 'react'
 
 import { useAuctionFeed } from './useAuctionFeed'
-import { DarkPoolProvider } from '@/lib/sdk/provider'
+import { DarkPoolClientProvider } from '@/lib/sdk/provider'
 import type { DarkPoolClient } from '@/lib/sdk/client'
 import {
   AuctionEventSchema,
@@ -1145,7 +1145,7 @@ function makeWrapper(client: DarkPoolClient) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return (
       <QueryClientProvider client={qc}>
-        <DarkPoolProvider client={client}>{children}</DarkPoolProvider>
+        <DarkPoolClientProvider client={client}>{children}</DarkPoolClientProvider>
       </QueryClientProvider>
     )
   }
@@ -1320,11 +1320,11 @@ import { describe, expect, it } from 'vitest'
 import { StreamStatus } from './StreamStatus'
 
 describe('StreamStatus', () => {
-  it('shows a blinking lime pill labelled LIVE when live', () => {
+  it('shows a blinking white pill labelled LIVE when live', () => {
     const { container } = render(<StreamStatus status="live" />)
     expect(screen.getByText('LIVE')).toBeTruthy()
     const pill = container.querySelector('span[aria-hidden="true"]')
-    expect(pill?.className).toContain('bg-brand-accent')
+    expect(pill?.className).toContain('bg-brand-fg')
     expect(pill?.className).toContain('animate-blink')
   })
 
@@ -1357,14 +1357,16 @@ import * as React from 'react'
 
 import type { StreamConnectionStatus } from '../../_hooks/tape/useAuctionStream'
 
-// Mirrors DESIGN.md `status-pill-*` / `status-label-*`: a 6×6 square
-// (h-1.5 w-1.5) that reads "live" through the lime accent + 1 Hz blink, and
-// "delayed" through a static muted square. Lime appears only in the live
-// state, so the panel spends its single accent on the one fact that matters.
-const SQUARE_BASE = 'inline-block h-1.5 w-1.5 shrink-0'
+// Mirrors `my-orders/StatusPill` and DESIGN.md `status-pill-*`: a 6×6 square
+// (h-1.5 w-1.5, borderRadius 0) paired with a mono body-sm label. Per
+// DESIGN-INSPIRATIONS §"Accent budget per view", the /app/trade surface
+// already spends its single lime accent on the auction Countdown — so "live"
+// reads through shape + motion (white square, 1 Hz blink), NOT colour.
+// "Delayed" is a static muted square.
+const SQUARE_BASE = 'inline-block h-1.5 w-1.5 shrink-0 align-middle [border-radius:0px]'
 
 const PILL: Record<StreamConnectionStatus, string> = {
-  live: `${SQUARE_BASE} bg-brand-accent animate-blink motion-reduce:animate-none`,
+  live: `${SQUARE_BASE} bg-brand-fg animate-blink motion-reduce:animate-none`,
   connecting: `${SQUARE_BASE} bg-brand-muted`,
   degraded: `${SQUARE_BASE} bg-brand-muted`,
 }
@@ -1376,7 +1378,7 @@ const LABEL: Record<StreamConnectionStatus, string> = {
 }
 
 const LABEL_COLOR: Record<StreamConnectionStatus, string> = {
-  live: 'text-brand-accent',
+  live: 'text-brand-fg',
   connecting: 'text-brand-muted',
   degraded: 'text-brand-muted',
 }
@@ -1387,13 +1389,9 @@ export interface StreamStatusProps {
 
 export function StreamStatus({ status }: StreamStatusProps): JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1.5" aria-live="polite">
+    <span className="inline-flex items-center gap-2 font-mono text-body-sm" aria-live="polite">
       <span className={PILL[status]} aria-hidden="true" />
-      <span
-        className={`font-mono text-label-md uppercase tracking-labelWide ${LABEL_COLOR[status]}`}
-      >
-        {LABEL[status]}
-      </span>
+      <span className={`uppercase tracking-label ${LABEL_COLOR[status]}`}>{LABEL[status]}</span>
     </span>
   )
 }
@@ -1444,56 +1442,69 @@ git commit -m "Add StreamStatus LIVE/DELAYED badge for the tape"
 
 - [ ] **Step 1: Add an optional `status` prop to Countdown**
 
-In `front/app/app/trade/_components/tape/Countdown.tsx`, add the imports below the existing `formatCountdown` import:
+The real `Countdown` is a centered bracketed bar (`[ NEXT AUCTION IN xx ]`)
+that already uses the lime accent for the active state. Add the badge at its
+right edge via absolute positioning so the centered label is undisturbed.
+
+In `front/app/app/trade/_components/tape/Countdown.tsx`, add imports below the
+existing `secondsToNextAuction` import:
 
 ```ts
 import { StreamStatus } from './StreamStatus'
 import type { StreamConnectionStatus } from '../../_hooks/tape/useAuctionStream'
 ```
 
-Extend the props:
+Extend the props (keep the existing `intervalSeconds`):
 
 ```ts
 export interface CountdownProps {
   latestAuctionUnixSeconds: bigint | null
   nowUnixSeconds: number
-  /** Live-feed status; renders the LIVE/DELAYED badge beside the label. */
+  /** Cadence of the auction tick. Mock store defaults to 5s. */
+  intervalSeconds?: number
+  /** Live-feed status; renders the LIVE/DELAYED badge at the bar's right edge. */
   status?: StreamConnectionStatus
 }
 ```
 
-Update the signature and the left side of the header row. Replace the
-`<span … >LAST CLEAR</span>` element with a grouped left cluster:
+Replace the function body (signature + `return`) with — note `relative` added
+to the bar and the absolutely-positioned badge appended after `{label}`:
 
 ```tsx
 export function Countdown({
   latestAuctionUnixSeconds,
   nowUnixSeconds,
+  intervalSeconds = DEFAULT_INTERVAL_SECONDS,
   status,
 }: CountdownProps): JSX.Element {
-  const elapsed =
-    latestAuctionUnixSeconds === null
-      ? null
-      : Math.max(0, nowUnixSeconds - Number(latestAuctionUnixSeconds))
+  const waiting = latestAuctionUnixSeconds === null
+
+  const label = waiting
+    ? '[ WAITING FOR FIRST AUCTION ]'
+    : `[ NEXT AUCTION IN ${pad2(
+        secondsToNextAuction(latestAuctionUnixSeconds, nowUnixSeconds, intervalSeconds)
+      )} ]`
 
   return (
     <div
-      className="flex items-center justify-between border-b border-brand-border bg-brand-surface px-4 py-2"
       aria-live="polite"
+      aria-atomic="true"
+      className={`relative flex h-9 items-center justify-center border-b border-brand-border bg-brand-bg px-4 font-mono text-label-lg uppercase tracking-label ${
+        waiting ? 'text-brand-muted' : 'text-brand-accent'
+      }`}
     >
-      <span className="flex items-center gap-3">
-        <span className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
-          LAST CLEAR
+      {label}
+      {status ? (
+        <span className="absolute right-3 top-1/2 -translate-y-1/2">
+          <StreamStatus status={status} />
         </span>
-        {status ? <StreamStatus status={status} /> : null}
-      </span>
-      <span className="font-mono text-stat-sm tabular-nums text-brand-fg">
-        {elapsed === null ? '—' : `${elapsed}s`}
-      </span>
+      ) : null}
     </div>
   )
 }
 ```
+
+Leave the `pad2` helper at the bottom of the file unchanged.
 
 - [ ] **Step 2: Switch Tape to `useAuctionFeed`**
 

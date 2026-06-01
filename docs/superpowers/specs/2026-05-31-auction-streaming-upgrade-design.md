@@ -167,15 +167,17 @@ output `{ auctions, status }`.
 ### UI (`_components/tape/`)
 
 - **`StreamStatus.tsx`** (new, + story): a `body-sm` badge mirroring the
-  DESIGN.md `status-pill-*` / `status-label-*` tokens, following the existing
-  `my-orders/StatusPill.tsx` pattern (tape-scoped — different semantics, no
-  cross-feature import):
-  - `live` → 6×6 `bg-brand-accent` square, `animate-blink
-    motion-reduce:animate-none`, lime `LIVE` label.
+  DESIGN.md `status-pill-*` tokens and the existing `my-orders/StatusPill.tsx`
+  pattern (tape-scoped — different semantics, no cross-feature import). The
+  `/app/trade` surface already spends its single lime accent on the auction
+  `Countdown` (per DESIGN-INSPIRATIONS §"Accent budget per view"), so "live"
+  reads through **shape + motion, not colour**:
+  - `live` → 6×6 `bg-brand-fg` (white) square, `animate-blink
+    motion-reduce:animate-none`, white `LIVE` label.
   - `connecting` / `degraded` → 6×6 `bg-brand-muted` static square, muted
     `DELAYED` label.
-  - Lime appears only in the live state, so the panel's accent budget (≤1 lime
-    element per surface) is respected.
+  - No lime here — the accent stays on the Countdown, keeping the panel to ≤1
+    lime element.
 - **`Tape.tsx`**: swap `useAuctionHistory` for `useAuctionFeed`; render
   `StreamStatus` in the header row (beside the Countdown). Rows, Countdown,
   Drawer, empty state, and the `QueryClientProvider` scoping are unchanged.
