@@ -15,42 +15,92 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_NONCES: usize = 10_000;
 
+/// Per-source-IP ceiling on outstanding nonces. Bounds a single IP's
+/// share of the global [`MAX_NONCES`] pool so one peer cannot fill the
+/// store and 429 every other user (issue #159). A real login consumes a
+/// handful of nonces, so 128 is generous headroom.
+const MAX_NONCES_PER_IP: usize = 128;
+
+#[derive(Debug)]
+struct NonceEntry {
+    created: Instant,
+    /// IP key (see [`crate::ratelimit::ip_client_key`]) that issued this
+    /// nonce, so `consume`/`evict_stale` can credit the slot back.
+    owner: String,
+}
+
+#[derive(Debug, Default)]
+struct NonceInner {
+    nonces: HashMap<String, NonceEntry>,
+    per_ip: HashMap<String, usize>,
+}
+
 #[derive(Debug)]
 pub struct NonceStore {
-    inner: Arc<Mutex<HashMap<String, Instant>>>,
+    inner: Arc<Mutex<NonceInner>>,
     ttl: Duration,
 }
 
 impl NonceStore {
     pub fn new(ttl: Duration) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(NonceInner::default())),
             ttl,
         }
     }
 
-    pub fn generate(&self) -> Option<String> {
-        let mut map = self.inner.lock();
-        if map.len() >= MAX_NONCES {
+    /// Issue a nonce attributed to `client_key` (the caller's IP). Returns
+    /// `None` if the global store is full or this key already holds
+    /// [`MAX_NONCES_PER_IP`] outstanding nonces.
+    pub fn generate_for(&self, client_key: &str) -> Option<String> {
+        let mut inner = self.inner.lock();
+        if inner.nonces.len() >= MAX_NONCES {
+            return None;
+        }
+        if inner.per_ip.get(client_key).copied().unwrap_or(0) >= MAX_NONCES_PER_IP {
             return None;
         }
         let nonce = siwe::generate_nonce();
-        map.insert(nonce.clone(), Instant::now());
+        inner.nonces.insert(
+            nonce.clone(),
+            NonceEntry {
+                created: Instant::now(),
+                owner: client_key.to_string(),
+            },
+        );
+        *inner.per_ip.entry(client_key.to_string()).or_insert(0) += 1;
         Some(nonce)
     }
 
+    /// Issue a nonce not attributed to any IP. Convenience for callers
+    /// without a resolved peer (tests); shares one `"anonymous"` per-IP
+    /// budget.
+    pub fn generate(&self) -> Option<String> {
+        self.generate_for("anonymous")
+    }
+
     pub fn consume(&self, nonce: &str) -> bool {
-        let mut map = self.inner.lock();
-        match map.remove(nonce) {
-            Some(created) => created.elapsed() <= self.ttl,
+        let mut inner = self.inner.lock();
+        match inner.nonces.remove(nonce) {
+            Some(entry) => {
+                decrement_owner(&mut inner.per_ip, &entry.owner);
+                entry.created.elapsed() <= self.ttl
+            }
             None => false,
         }
     }
 
     pub fn evict_stale(&self) {
-        let mut map = self.inner.lock();
         let ttl = self.ttl;
-        map.retain(|_, created| created.elapsed() <= ttl);
+        let mut inner = self.inner.lock();
+        let NonceInner { nonces, per_ip } = &mut *inner;
+        nonces.retain(|_, entry| {
+            let keep = entry.created.elapsed() <= ttl;
+            if !keep {
+                decrement_owner(per_ip, &entry.owner);
+            }
+            keep
+        });
     }
 
     pub fn start_cleanup(&self, cancel: CancellationToken, interval: Duration) {
@@ -71,11 +121,22 @@ impl NonceStore {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.lock().nonces.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner.lock().nonces.is_empty()
+    }
+}
+
+/// Decrement an owner's outstanding-nonce count, dropping the entry at
+/// zero so the per-IP map cannot grow unbounded across distinct peers.
+fn decrement_owner(per_ip: &mut HashMap<String, usize>, owner: &str) {
+    if let Some(count) = per_ip.get_mut(owner) {
+        *count -= 1;
+        if *count == 0 {
+            per_ip.remove(owner);
+        }
     }
 }
 
@@ -283,12 +344,60 @@ mod tests {
     }
 
     #[test]
-    fn nonce_rejects_when_full() {
+    fn nonce_rejects_when_ip_cap_reached() {
         let store = NonceStore::new(Duration::from_secs(300));
-        for _ in 0..MAX_NONCES {
-            assert!(store.generate().is_some());
+        for _ in 0..MAX_NONCES_PER_IP {
+            assert!(store.generate_for("1.2.3.4").is_some());
         }
-        assert!(store.generate().is_none());
+        // The capped IP is shut out...
+        assert!(store.generate_for("1.2.3.4").is_none());
+        // ...but a different IP still gets served.
+        assert!(store.generate_for("5.6.7.8").is_some());
+    }
+
+    #[test]
+    fn nonce_rejects_when_global_cap_reached() {
+        let store = NonceStore::new(Duration::from_secs(300));
+        // Spread issuance across distinct keys so the per-IP cap never
+        // trips before the global one.
+        let mut issued = 0usize;
+        'fill: for ip in 0..1024u32 {
+            let key = format!("10.0.{}.{}", ip / 256, ip % 256);
+            for _ in 0..MAX_NONCES_PER_IP {
+                if store.generate_for(&key).is_none() {
+                    break 'fill;
+                }
+                issued += 1;
+            }
+        }
+        assert_eq!(issued, MAX_NONCES);
+        assert!(store.generate_for("fresh-ip").is_none());
+    }
+
+    #[test]
+    fn nonce_consume_frees_ip_budget() {
+        let store = NonceStore::new(Duration::from_secs(300));
+        let mut nonces = Vec::new();
+        for _ in 0..MAX_NONCES_PER_IP {
+            nonces.push(store.generate_for("1.2.3.4").unwrap());
+        }
+        assert!(store.generate_for("1.2.3.4").is_none());
+        // Consuming one returns a slot to that IP's budget.
+        assert!(store.consume(&nonces[0]));
+        assert!(store.generate_for("1.2.3.4").is_some());
+    }
+
+    #[test]
+    fn nonce_evict_frees_ip_budget() {
+        let store = NonceStore::new(Duration::from_secs(0));
+        for _ in 0..MAX_NONCES_PER_IP {
+            assert!(store.generate_for("1.2.3.4").is_some());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        store.evict_stale();
+        assert_eq!(store.len(), 0);
+        // Eviction credited the slots back, so the IP can issue again.
+        assert!(store.generate_for("1.2.3.4").is_some());
     }
 
     #[test]
