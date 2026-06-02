@@ -97,6 +97,11 @@ service DarkPoolAdminService {
 // accepted unverified. Order validity is operator-enforced, not
 // proof-enforced. A verified per-order proof is deferred to ADR 0001 /
 // issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
+//
+// Both fields are still SYNTACTICALLY required: `validate_place_order`
+// rejects an empty `commitment` or `proof`. Until real verification lands,
+// clients must keep sending non-empty bytes for both (placeholder bytes are
+// fine — they are not checked, only their presence is).
 message PlaceOrderRequest {
   bytes commitment        = 1; // client commitment; re-derived & overridden server-side (unverified)
   bytes proof             = 2; // per-order ZK proof; ACCEPTED UNVERIFIED (see note)
