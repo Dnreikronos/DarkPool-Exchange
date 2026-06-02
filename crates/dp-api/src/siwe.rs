@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy_primitives::Address;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -264,7 +264,10 @@ impl std::fmt::Debug for JwtManager {
 
 impl JwtManager {
     pub fn new(secret: &str, ttl: Duration) -> Self {
-        let mut validation = Validation::default();
+        // Pin the algorithm explicitly so a token cannot dictate it
+        // (defends against alg-confusion / `alg: none`). This matches the
+        // jsonwebtoken default but is stated for clarity (issue #160).
+        let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[JWT_ISSUER]);
         validation.set_audience(&[JWT_ISSUER]);
         Self {
