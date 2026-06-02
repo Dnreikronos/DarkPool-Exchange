@@ -457,18 +457,40 @@ impl Engine {
         self.inner.subscribers.subscribe()
     }
 
+    /// Decrypt, validate, and book an order.
+    ///
+    /// ## What is and isn't cryptographically enforced (issue #158)
+    ///
+    /// Order validity here is **operator-enforced, not proof-enforced**. The
+    /// operator decrypts the ciphertext and re-derives the canonical Poseidon
+    /// commitment over the decrypted fields (`derive_order_secrets` below);
+    /// that re-derived value — never the client's — is what gets persisted and
+    /// carried into the settlement-grade batch IVC proof.
+    ///
+    /// The per-order `proof` argument is **accepted and not verified**. It is a
+    /// placeholder (`dp-client::PLACEHOLDER_PROOF`) on the live path; we record
+    /// only its byte length for observability. A genuinely verified per-order
+    /// proof is deferred to ADR 0001 / issues #97–#98: it needs either richer
+    /// circuit public inputs (so the engine can bind the proof to the decrypted
+    /// fields) or a client-reproducible commitment, plus a one-time trusted
+    /// setup ceremony to pin a canonical VK. The sound keygen/verify primitives
+    /// for that work already exist (`dp_zk::commitment_circuit::generate_keys`
+    /// / `verify_proof_with_vk`, `dp-zk-cli setup-commitment-circuit`); the
+    /// missing piece is the binding, which the post-#153 server-derived salt
+    /// makes incompatible with the current single-public-input circuit.
     #[tracing::instrument(
         name = "dp_engine.place_encrypted_order",
-        skip(self, _client_commitment, proof, ciphertext, caller),
+        skip(self, _client_commitment, _unverified_proof, ciphertext, caller),
         fields(
             ciphertext_bytes = ciphertext.len(),
-            proof_bytes = proof.len(),
+            // Byte length only — the proof is NOT verified (see doc comment).
+            unverified_proof_bytes = _unverified_proof.len(),
         )
     )]
     pub async fn place_encrypted_order(
         &self,
         _client_commitment: Vec<u8>,
-        proof: Vec<u8>,
+        _unverified_proof: Vec<u8>,
         ciphertext: Vec<u8>,
         caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
@@ -489,10 +511,11 @@ impl Engine {
             }
         }
 
-        // Client-supplied commitment is accepted (proto requires it) but no
-        // longer verified content-wise: the engine recomputes the canonical
-        // Poseidon commitment over decrypted fields and that value is what
-        // gets persisted + carried into the ZK circuit.
+        // Neither the client-supplied commitment nor the per-order `proof` is
+        // verified content-wise (issue #158): the commitment is recomputed
+        // from decrypted fields below, and the proof is operator-enforced by
+        // that same re-derivation — see this method's doc comment. The fields
+        // below are the actual validity gate.
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
@@ -606,7 +629,8 @@ impl Engine {
         match self.persist_order_placed(
             order.clone(),
             commitment,
-            proof,
+            // Persisted verbatim for the audit log / replay; still unverified.
+            _unverified_proof,
             ciphertext,
             nonce.to_vec(),
         ) {
