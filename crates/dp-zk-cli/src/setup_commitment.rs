@@ -47,23 +47,52 @@ pub fn run_setup_commitment(args: SetupCommitmentArgs) -> ExitCode {
 /// Generate the canonical key pair and write both files. Returns the written
 /// paths on success. Factored out of [`run_setup_commitment`] so it is
 /// testable without process IO.
+///
+/// This is one-time setup: it refuses to run if either output already exists
+/// (a partial/duplicate run that clobbered one of the pair would leave provers
+/// and the operator pinned to mismatched keys, turning every proof into a
+/// false negative). Each file is written via a temp sibling + atomic rename so
+/// a crash mid-write can never leave a half-written key on the canonical path.
+///
+/// The `--seed` insecurity gate lives at the [`run_setup_commitment`] CLI
+/// boundary; this helper stays freely seedable so tests can pin deterministic
+/// fixtures.
 pub fn generate_and_write(
     out: &std::path::Path,
     seed: Option<u64>,
 ) -> Result<(PathBuf, PathBuf), String> {
+    std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
+    let pk_path = out.join(PK_FILENAME);
+    let vk_path = out.join(VK_FILENAME);
+    if pk_path.exists() || vk_path.exists() {
+        return Err(format!(
+            "refusing to overwrite existing key material: {} / {} \
+             (delete them explicitly to re-run setup)",
+            pk_path.display(),
+            vk_path.display()
+        ));
+    }
+
     let mut rng = make_rng(seed);
     let (pk, vk) = generate_keys(&mut rng).map_err(|e| format!("key generation: {e}"))?;
 
     let pk_bytes = serialize_pk(&pk).map_err(|e| format!("serialize proving key: {e}"))?;
     let vk_bytes = serialize_vk(&vk).map_err(|e| format!("serialize verifying key: {e}"))?;
 
-    std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
-    let pk_path = out.join(PK_FILENAME);
-    let vk_path = out.join(VK_FILENAME);
-    std::fs::write(&pk_path, &pk_bytes).map_err(|e| format!("write {}: {e}", pk_path.display()))?;
-    std::fs::write(&vk_path, &vk_bytes).map_err(|e| format!("write {}: {e}", vk_path.display()))?;
+    write_atomic(&pk_path, &pk_bytes)?;
+    write_atomic(&vk_path, &vk_bytes)?;
 
     Ok((pk_path, vk_path))
+}
+
+/// Write `bytes` to `path` atomically: write a `<stem>.tmp` sibling first, then
+/// rename it into place. Same-directory rename is atomic on the target FS.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
+    Ok(())
 }
 
 fn make_rng(seed: Option<u64>) -> ark_std::rand::rngs::StdRng {
@@ -116,6 +145,15 @@ mod tests {
         let mut rng = make_rng(Some(7));
         let (commitment, proof) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
         assert!(verify_proof_with_vk(&vk, &proof, commitment).unwrap());
+    }
+
+    #[test]
+    fn refuses_to_overwrite_existing_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_and_write(dir.path(), Some(42)).unwrap();
+        // A second run against the same dir must refuse rather than clobber.
+        let err = generate_and_write(dir.path(), Some(42)).unwrap_err();
+        assert!(err.contains("refusing to overwrite"), "got: {err}");
     }
 
     #[test]
