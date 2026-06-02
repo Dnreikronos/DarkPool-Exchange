@@ -112,11 +112,25 @@ async fn verify_rejects_unparseable_siwe_message() {
 }
 
 #[tokio::test]
-async fn nonce_store_cap_returns_429() {
+async fn nonce_store_global_cap_returns_429() {
     let nonce_store = Arc::new(NonceStore::new(Duration::from_secs(300)));
-    for _ in 0..10_000 {
-        nonce_store.generate();
+    // Fill the global store (MAX_NONCES = 10_000) across *distinct* IP keys
+    // so the global ceiling trips before any single key's per-IP cap. The
+    // handler below keys by "anonymous" (no ConnectInfo on `oneshot`), which
+    // holds zero nonces, so its 429 must come from the global cap — not the
+    // per-IP cap. Filling via `generate()` here would instead exhaust the
+    // shared anonymous budget at 128 and never exercise the global path.
+    let mut issued = 0usize;
+    'fill: for ip in 0..1024u32 {
+        let key = format!("10.0.{}.{}", ip / 256, ip % 256);
+        for _ in 0..128 {
+            if nonce_store.generate_for(&key).is_none() {
+                break 'fill;
+            }
+            issued += 1;
+        }
     }
+    assert_eq!(issued, 10_000, "expected to fill the global nonce store");
     let state = SiweState {
         nonce_store,
         jwt_manager: Arc::new(JwtManager::new(
