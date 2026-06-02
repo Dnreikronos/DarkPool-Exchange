@@ -84,6 +84,17 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_RATE_STALE_AFTER", default_value = "10m", value_parser = parse_duration)]
     pub rate_stale_after: Duration,
 
+    /// Comma/whitespace-separated CIDRs or IPs of trusted reverse
+    /// proxies / load balancers. When the TCP peer matches one of these,
+    /// rate limiting and the SIWE nonce cap key on the client IP from
+    /// `X-Forwarded-For` / `X-Real-IP` instead of the proxy's address.
+    /// Empty (the default) means the listener is directly exposed and
+    /// forwarding headers are ignored — set this whenever a TLS-terminating
+    /// proxy or LB sits in front, or per-IP limits collapse onto the proxy
+    /// IP and become a single shared budget (issue #159).
+    #[arg(long, env = "DARKPOOL_TRUSTED_PROXIES", default_value = "")]
+    pub trusted_proxies: String,
+
     #[arg(long, env = "DARKPOOL_EVENT_LOG", default_value = "")]
     pub event_log: String,
 

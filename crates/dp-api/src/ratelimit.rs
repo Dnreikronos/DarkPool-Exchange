@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -10,6 +10,7 @@ use axum::extract::{ConnectInfo, Request as AxumRequest, State as AxumState};
 use axum::middleware::Next;
 use axum::response::Response as AxumResponse;
 use http::{HeaderMap, Request, Response};
+use ipnet::IpNet;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tonic::body::BoxBody;
@@ -37,10 +38,23 @@ struct State {
 #[derive(Clone, Debug)]
 pub struct RateLimitCore {
     state: Arc<Mutex<State>>,
+    trusted: TrustedProxies,
 }
 
 impl RateLimitCore {
     pub fn new(rate: f64, burst: f64, stale_after: Duration) -> Self {
+        Self::with_trusted_proxies(rate, burst, stale_after, TrustedProxies::none())
+    }
+
+    /// As [`RateLimitCore::new`], but treats `trusted` as reverse-proxy
+    /// source ranges whose forwarding headers are believed when keying
+    /// requests (see [`TrustedProxies`]).
+    pub fn with_trusted_proxies(
+        rate: f64,
+        burst: f64,
+        stale_after: Duration,
+        trusted: TrustedProxies,
+    ) -> Self {
         let stale_after = if stale_after.is_zero() {
             Duration::from_secs(600)
         } else {
@@ -53,7 +67,12 @@ impl RateLimitCore {
                 capacity: burst,
                 stale_after,
             })),
+            trusted,
         }
+    }
+
+    pub fn trusted_proxies(&self) -> &TrustedProxies {
+        &self.trusted
     }
 
     pub fn allow(&self, key: &str) -> Result<(), Status> {
@@ -107,10 +126,145 @@ impl RateLimitCore {
     }
 }
 
+/// Set of trusted reverse-proxy / load-balancer source ranges. When the
+/// TCP peer falls inside one of these, the limiter believes the
+/// `X-Forwarded-For` / `X-Real-IP` headers that proxy sets and keys on the
+/// real client IP instead of the proxy IP. Empty (the default) means
+/// **directly exposed**: forwarding headers are ignored entirely and the
+/// peer IP is authoritative — `X-Forwarded-For` is attacker-controlled
+/// when no trusted proxy sits in front, so trusting it unconditionally
+/// would let any caller forge their rate-limit key.
+#[derive(Clone, Debug, Default)]
+pub struct TrustedProxies {
+    nets: Arc<Vec<IpNet>>,
+}
+
+impl TrustedProxies {
+    /// The directly-exposed default: no proxy is trusted.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Parse a comma/whitespace-separated list of CIDRs or bare IPs
+    /// (e.g. `"10.0.0.0/8, 192.168.1.1, ::1"`). A bare IP becomes a host
+    /// route (`/32` for IPv4, `/128` for IPv6). Blank entries are skipped;
+    /// an unparseable entry is a hard error so a typo fails boot loudly
+    /// rather than silently trusting nothing.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let mut nets = Vec::new();
+        for tok in spec.split([',', ' ', '\t', '\n']) {
+            let tok = tok.trim();
+            if tok.is_empty() {
+                continue;
+            }
+            let net = if tok.contains('/') {
+                tok.parse::<IpNet>()
+                    .map_err(|e| format!("invalid trusted-proxy CIDR '{tok}': {e}"))?
+            } else {
+                let ip = tok
+                    .parse::<IpAddr>()
+                    .map_err(|e| format!("invalid trusted-proxy IP '{tok}': {e}"))?;
+                let prefix = if ip.is_ipv4() { 32 } else { 128 };
+                IpNet::new(ip, prefix).expect("host prefix length is always valid")
+            };
+            nets.push(net);
+        }
+        Ok(Self {
+            nets: Arc::new(nets),
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nets.is_empty()
+    }
+
+    fn contains(&self, ip: IpAddr) -> bool {
+        self.nets.iter().any(|n| n.contains(&ip))
+    }
+}
+
+/// Resolve the client IP the limiter should key on.
+///
+/// With no trusted proxies, this is always the TCP peer. When the peer is
+/// a trusted proxy, walk its `X-Forwarded-For` chain right-to-left and
+/// return the rightmost address that is **not** itself a trusted hop —
+/// that is the real client as seen by the outermost proxy we trust, and
+/// the only entry an attacker upstream of our proxies cannot forge. Falls
+/// back to `X-Real-IP`, then the peer IP, when no usable forwarding header
+/// is present. Returns `None` only when there is no peer at all (e.g. unit
+/// tests using `oneshot` without `ConnectInfo`).
+pub fn resolve_client_ip(
+    trusted: &TrustedProxies,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> Option<IpAddr> {
+    let peer_ip = peer?.ip();
+    if trusted.is_empty() || !trusted.contains(peer_ip) {
+        return Some(peer_ip);
+    }
+    if let Some(ip) = forwarded_for_client(trusted, headers) {
+        return Some(ip);
+    }
+    if let Some(ip) = real_ip(headers) {
+        return Some(ip);
+    }
+    Some(peer_ip)
+}
+
+/// Rightmost untrusted entry of the `X-Forwarded-For` chain. If every hop
+/// is trusted, the originating client is the leftmost entry.
+fn forwarded_for_client(trusted: &TrustedProxies, headers: &HeaderMap) -> Option<IpAddr> {
+    let mut chain: Vec<IpAddr> = Vec::new();
+    for v in headers.get_all("x-forwarded-for") {
+        let Ok(s) = v.to_str() else { continue };
+        for part in s.split(',') {
+            if let Some(ip) = parse_forwarded_ip(part) {
+                chain.push(ip);
+            }
+        }
+    }
+    if chain.is_empty() {
+        return None;
+    }
+    chain
+        .iter()
+        .rev()
+        .find(|ip| !trusted.contains(**ip))
+        .or_else(|| chain.first())
+        .copied()
+}
+
+fn real_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    parse_forwarded_ip(headers.get("x-real-ip")?.to_str().ok()?)
+}
+
+/// Parse a single forwarded-for token, tolerating an optional `:port`
+/// suffix (`1.2.3.4:55`, `[::1]:55`) that some proxies append.
+fn parse_forwarded_ip(s: &str) -> Option<IpAddr> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    if let Ok(sa) = s.parse::<SocketAddr>() {
+        return Some(sa.ip());
+    }
+    // Bare IPv4 with a port that didn't parse as SocketAddr: strip it.
+    if let Some((host, _port)) = s.rsplit_once(':') {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
 pub fn client_key(
     identity: Option<&AuthenticatedIdentity>,
     headers: &HeaderMap,
     peer: Option<SocketAddr>,
+    trusted: &TrustedProxies,
 ) -> String {
     if let Some(id) = identity {
         match id {
@@ -125,21 +279,27 @@ pub fn client_key(
             }
         }
     }
-    if let Some(addr) = peer {
-        return addr.ip().to_string();
+    if let Some(ip) = resolve_client_ip(trusted, headers, peer) {
+        return ip.to_string();
     }
     "anonymous".to_string()
 }
 
-/// Bucket key for unauthenticated routes (SIWE auth, ops). Keys strictly
-/// by peer IP — never the `x-api-key` header, which is attacker-controlled
-/// on routes with no auth layer and would otherwise let a caller mint
-/// unlimited buckets by rotating the header value. Falls back to a single
-/// shared `"anonymous"` bucket only when the peer address is unavailable
-/// (e.g. unit tests using `oneshot` without `ConnectInfo`).
-pub fn ip_client_key(peer: Option<SocketAddr>) -> String {
-    match peer {
-        Some(addr) => addr.ip().to_string(),
+/// Bucket key for unauthenticated routes (SIWE auth, ops). Keys by client
+/// IP — never the `x-api-key` header, which is attacker-controlled on
+/// routes with no auth layer and would otherwise let a caller mint
+/// unlimited buckets by rotating the header value. The client IP is the
+/// TCP peer unless that peer is a trusted proxy, in which case it is
+/// resolved from the forwarding headers (see [`resolve_client_ip`]). Falls
+/// back to a single shared `"anonymous"` bucket only when the peer address
+/// is unavailable (e.g. unit tests using `oneshot` without `ConnectInfo`).
+pub fn ip_client_key(
+    trusted: &TrustedProxies,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> String {
+    match resolve_client_ip(trusted, headers, peer) {
+        Some(ip) => ip.to_string(),
         None => "anonymous".to_string(),
     }
 }
@@ -218,7 +378,12 @@ where
                         .get::<ConnectInfo<SocketAddr>>()
                         .map(|ci| ci.0)
                 });
-            let key = client_key(identity.as_ref(), req.headers(), peer);
+            let key = client_key(
+                identity.as_ref(),
+                req.headers(),
+                peer,
+                core.trusted_proxies(),
+            );
             if let Err(status) = core.allow(&key) {
                 return Ok(status.into_http());
             }
@@ -238,7 +403,12 @@ pub async fn ratelimit_axum_mw(
             .get::<ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0)
     });
-    let key = client_key(identity.as_ref(), req.headers(), peer);
+    let key = client_key(
+        identity.as_ref(),
+        req.headers(),
+        peer,
+        core.trusted_proxies(),
+    );
     if let Err(status) = core.allow(&key) {
         return crate::rest::status_to_response(status);
     }
@@ -261,7 +431,7 @@ pub async fn ratelimit_ip_axum_mw(
             .get::<ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0)
     });
-    let key = ip_client_key(peer);
+    let key = ip_client_key(core.trusted_proxies(), req.headers(), peer);
     if let Err(status) = core.allow(&key) {
         return crate::rest::status_to_response(status);
     }
