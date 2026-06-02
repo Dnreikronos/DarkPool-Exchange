@@ -139,3 +139,36 @@ async fn nonce_store_cap_returns_429() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn nonce_rate_limited_per_ip_end_to_end() {
+    use axum::extract::ConnectInfo;
+    use axum::middleware::from_fn_with_state;
+    use dp_api::ratelimit::{ratelimit_ip_axum_mw, RateLimitCore};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    let (router, _state) = siwe_app();
+    // rate ~0, burst 1 → one nonce per IP, then throttled.
+    let core = RateLimitCore::new(0.0001, 1.0, Duration::from_secs(60));
+    let app = router.layer(from_fn_with_state(core, ratelimit_ip_axum_mw));
+
+    let nonce_req = |ip: [u8; 4]| {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri("/v1/auth/nonce")
+            .body(Body::empty())
+            .unwrap();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])), 1234);
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    };
+
+    // IP-A: first succeeds, second is throttled before touching the store.
+    let resp = app.clone().oneshot(nonce_req([1, 1, 1, 1])).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = app.clone().oneshot(nonce_req([1, 1, 1, 1])).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    // A different IP is unaffected — no global login DoS.
+    let resp = app.clone().oneshot(nonce_req([2, 2, 2, 2])).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
