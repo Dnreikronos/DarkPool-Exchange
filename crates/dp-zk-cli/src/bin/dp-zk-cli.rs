@@ -3,6 +3,7 @@
 //! Subcommands:
 //! - `commit`: compute Poseidon commitment for a single order.
 //! - `prove-single-order`: Groth16 proof of commitment preimage.
+//! - `setup-commitment-circuit`: one-time canonical key generation (#158).
 //! - `prove-batch`: legacy stdin→stdout batch prover (same as dp-aggregator).
 
 use std::process::ExitCode;
@@ -10,6 +11,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use dp_zk_cli::commit::{run_commit, CommitArgs};
 use dp_zk_cli::prove_single::{run_prove_single, ProveSingleArgs};
+use dp_zk_cli::setup_commitment::{run_setup_commitment, SetupCommitmentArgs};
 use dp_zk_cli::ProverArgs;
 
 #[derive(Parser)]
@@ -25,6 +27,9 @@ enum Commands {
     Commit(CommitArgs),
     /// Generate Groth16 proof of commitment preimage knowledge.
     ProveSingleOrder(ProveSingleArgs),
+    /// One-time canonical key generation for the commitment circuit (#158).
+    /// Writes commitment_pk.bin + commitment_vk.bin to --out.
+    SetupCommitmentCircuit(SetupCommitmentArgs),
     /// Legacy batch prover (stdin JSON → stdout proof bytes).
     ProveBatch(ProverArgs),
 }
@@ -34,6 +39,7 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::Commit(args) => run_commit(args),
         Commands::ProveSingleOrder(args) => run_prove_single(args),
+        Commands::SetupCommitmentCircuit(args) => run_setup_commitment(args),
         Commands::ProveBatch(args) => dp_zk_cli::run_prover(args.batch_size, args.proving_key),
     }
 }
