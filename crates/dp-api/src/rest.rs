@@ -316,12 +316,24 @@ async fn rest_auth_nonce(
     State(state): State<SiweState>,
     client: Option<Extension<ClientKey>>,
 ) -> Result<Json<NonceResponse>, ApiError> {
-    // `ratelimit_ip_axum_mw` records the caller's IP key; fall back to the
-    // shared anonymous budget when that middleware isn't in the stack
-    // (e.g. unit tests hitting `auth_router` directly).
-    let key = client
-        .map(|Extension(c)| c.0)
-        .unwrap_or_else(|| "anonymous".to_string());
+    // `ratelimit_ip_axum_mw` records the caller's IP key. In production
+    // that middleware always sits in front of this route (see
+    // `router_with_ops`), so a missing extension means a misconfigured
+    // stack, not a normal request — fall back to the shared `"anonymous"`
+    // budget (which serializes every caller through one 128-nonce cap) but
+    // warn loudly so the misconfiguration surfaces instead of silently
+    // collapsing every peer onto one budget.
+    let key = match client {
+        Some(Extension(c)) => c.0,
+        None => {
+            tracing::warn!(
+                "nonce request without ClientKey extension; \
+                 ratelimit_ip_axum_mw is not in the stack — \
+                 falling back to the shared anonymous nonce budget"
+            );
+            "anonymous".to_string()
+        }
+    };
     let nonce = state
         .nonce_store
         .generate_for(&key)
