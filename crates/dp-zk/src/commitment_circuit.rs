@@ -116,35 +116,96 @@ pub fn prove_with_key<R: RngCore + CryptoRng>(
     Ok((commitment, proof_bytes))
 }
 
-/// Serialize a verifying key to compressed bytes (for embedding/distribution).
+/// On-disk version tag for serialized [`CommitmentPreimageCircuit`] key
+/// material. This is **independent** of [`crate::CIRCUIT_VERSION`] (which
+/// tracks the HyperNova IVC circuit, not this Groth16 commitment circuit).
+/// Bump it whenever the circuit constraints — and therefore the key material —
+/// change, so a node can never silently load keys minted for an incompatible
+/// circuit and discover the mismatch only when proofs start failing.
+pub const COMMITMENT_CIRCUIT_VERSION: &str = "v1-poseidon-commitment";
+
+/// Magic prefix identifying a versioned commitment-key envelope.
+const KEY_ENVELOPE_MAGIC: &[u8; 8] = b"DPCMTKEY";
+
+/// Wrap raw arkworks key bytes in `[magic | u32 ver_len | ver | body]`.
+fn wrap_key_envelope(body: &[u8]) -> Vec<u8> {
+    let ver = COMMITMENT_CIRCUIT_VERSION.as_bytes();
+    let mut out = Vec::with_capacity(KEY_ENVELOPE_MAGIC.len() + 4 + ver.len() + body.len());
+    out.extend_from_slice(KEY_ENVELOPE_MAGIC);
+    out.extend_from_slice(&(ver.len() as u32).to_le_bytes());
+    out.extend_from_slice(ver);
+    out.extend_from_slice(body);
+    out
+}
+
+/// Validate the envelope header and return the inner arkworks bytes. Rejects a
+/// missing/garbled magic and any `COMMITMENT_CIRCUIT_VERSION` mismatch.
+fn unwrap_key_envelope(bytes: &[u8]) -> Result<&[u8], crate::ZkError> {
+    let header = KEY_ENVELOPE_MAGIC.len() + 4;
+    if bytes.len() < header || &bytes[..KEY_ENVELOPE_MAGIC.len()] != KEY_ENVELOPE_MAGIC {
+        return Err(crate::ZkError::Serialize(
+            "commitment key blob: missing or invalid envelope magic (regenerate via \
+             `dp-zk-cli setup-commitment-circuit`)"
+                .to_string(),
+        ));
+    }
+    let ver_len = u32::from_le_bytes(
+        bytes[KEY_ENVELOPE_MAGIC.len()..header]
+            .try_into()
+            .expect("4-byte slice"),
+    ) as usize;
+    let ver_end = header + ver_len;
+    if bytes.len() < ver_end {
+        return Err(crate::ZkError::Serialize(
+            "commitment key blob: truncated version field".to_string(),
+        ));
+    }
+    let ver = std::str::from_utf8(&bytes[header..ver_end])
+        .map_err(|_| crate::ZkError::Serialize("commitment key blob: non-utf8 version".to_string()))?;
+    if ver != COMMITMENT_CIRCUIT_VERSION {
+        return Err(crate::ZkError::Setup(format!(
+            "commitment key version mismatch: expected {COMMITMENT_CIRCUIT_VERSION}, found {ver} \
+             (regenerate keys via `dp-zk-cli setup-commitment-circuit`)"
+        )));
+    }
+    Ok(&bytes[ver_end..])
+}
+
+/// Serialize a verifying key to a versioned, compressed blob (for
+/// embedding/distribution). See [`COMMITMENT_CIRCUIT_VERSION`].
 pub fn serialize_vk(vk: &ark_groth16::VerifyingKey<Bn254>) -> Result<Vec<u8>, crate::ZkError> {
     let mut bytes = Vec::new();
     vk.serialize_with_mode(&mut bytes, Compress::Yes)
         .map_err(|e| crate::ZkError::Serialize(e.to_string()))?;
-    Ok(bytes)
+    Ok(wrap_key_envelope(&bytes))
 }
 
-/// Serialize a proving key to compressed bytes (for distribution to provers).
+/// Serialize a proving key to a versioned, compressed blob (for distribution
+/// to provers). See [`COMMITMENT_CIRCUIT_VERSION`].
 pub fn serialize_pk(pk: &ark_groth16::ProvingKey<Bn254>) -> Result<Vec<u8>, crate::ZkError> {
     let mut bytes = Vec::new();
     pk.serialize_with_mode(&mut bytes, Compress::Yes)
         .map_err(|e| crate::ZkError::Serialize(e.to_string()))?;
-    Ok(bytes)
+    Ok(wrap_key_envelope(&bytes))
 }
 
-/// Deserialize a verifying key from compressed bytes.
+/// Deserialize a verifying key from a versioned blob, rejecting any
+/// `COMMITMENT_CIRCUIT_VERSION` mismatch before touching the bytes.
 pub fn deserialize_vk(
     vk_bytes: &[u8],
 ) -> Result<ark_groth16::VerifyingKey<Bn254>, crate::ZkError> {
-    ark_groth16::VerifyingKey::<Bn254>::deserialize_with_mode(vk_bytes, Compress::Yes, Validate::Yes)
+    let body = unwrap_key_envelope(vk_bytes)?;
+    ark_groth16::VerifyingKey::<Bn254>::deserialize_with_mode(body, Compress::Yes, Validate::Yes)
         .map_err(|e| crate::ZkError::Serialize(format!("deserialize vk: {e}")))
 }
 
-/// Deserialize a proving key from compressed bytes.
+/// Deserialize a proving key from a versioned blob, rejecting any
+/// `COMMITMENT_CIRCUIT_VERSION` mismatch before touching the bytes.
 pub fn deserialize_pk(
     pk_bytes: &[u8],
 ) -> Result<ark_groth16::ProvingKey<Bn254>, crate::ZkError> {
-    ark_groth16::ProvingKey::<Bn254>::deserialize_with_mode(pk_bytes, Compress::Yes, Validate::Yes)
+    let body = unwrap_key_envelope(pk_bytes)?;
+    ark_groth16::ProvingKey::<Bn254>::deserialize_with_mode(body, Compress::Yes, Validate::Yes)
         .map_err(|e| crate::ZkError::Serialize(format!("deserialize pk: {e}")))
 }
 
@@ -340,5 +401,41 @@ mod tests {
         let circuit = sample_circuit();
         let (commitment, proof_bytes) = prove_with_key(&pk2, &circuit, &mut rng).unwrap();
         assert!(verify_proof_with_vk(&vk2, &proof_bytes, commitment).unwrap());
+    }
+
+    #[test]
+    fn serialized_keys_carry_version_envelope() {
+        let mut rng = fixed_rng();
+        let (pk, vk) = generate_keys(&mut rng).unwrap();
+        for blob in [serialize_vk(&vk).unwrap(), serialize_pk(&pk).unwrap()] {
+            assert_eq!(&blob[..KEY_ENVELOPE_MAGIC.len()], KEY_ENVELOPE_MAGIC);
+            assert!(unwrap_key_envelope(&blob).is_ok());
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_unversioned_blob() {
+        let mut rng = fixed_rng();
+        let (_, vk) = generate_keys(&mut rng).unwrap();
+        // Raw arkworks bytes with no envelope must be rejected.
+        let mut raw = Vec::new();
+        vk.serialize_with_mode(&mut raw, Compress::Yes).unwrap();
+        assert!(deserialize_vk(&raw).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_version_mismatch() {
+        let mut rng = fixed_rng();
+        let (_, vk) = generate_keys(&mut rng).unwrap();
+        let mut body = Vec::new();
+        vk.serialize_with_mode(&mut body, Compress::Yes).unwrap();
+        // Hand-build an envelope with a bogus version tag.
+        let ver = b"v0-bogus";
+        let mut blob = Vec::new();
+        blob.extend_from_slice(KEY_ENVELOPE_MAGIC);
+        blob.extend_from_slice(&(ver.len() as u32).to_le_bytes());
+        blob.extend_from_slice(ver);
+        blob.extend_from_slice(&body);
+        assert!(deserialize_vk(&blob).is_err());
     }
 }
