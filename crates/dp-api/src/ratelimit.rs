@@ -131,6 +131,26 @@ pub fn client_key(
     "anonymous".to_string()
 }
 
+/// Bucket key for unauthenticated routes (SIWE auth, ops). Keys strictly
+/// by peer IP — never the `x-api-key` header, which is attacker-controlled
+/// on routes with no auth layer and would otherwise let a caller mint
+/// unlimited buckets by rotating the header value. Falls back to a single
+/// shared `"anonymous"` bucket only when the peer address is unavailable
+/// (e.g. unit tests using `oneshot` without `ConnectInfo`).
+pub fn ip_client_key(peer: Option<SocketAddr>) -> String {
+    match peer {
+        Some(addr) => addr.ip().to_string(),
+        None => "anonymous".to_string(),
+    }
+}
+
+/// The resolved IP rate-limit key, recorded in request extensions by
+/// [`ratelimit_ip_axum_mw`] so downstream handlers (the SIWE nonce
+/// endpoint) can reuse the same key for their own per-IP accounting
+/// without re-deriving it.
+#[derive(Clone, Debug)]
+pub struct ClientKey(pub String);
+
 #[derive(Clone, Debug)]
 pub struct RateLimitLayer {
     core: RateLimitCore,
@@ -222,5 +242,29 @@ pub async fn ratelimit_axum_mw(
     if let Err(status) = core.allow(&key) {
         return crate::rest::status_to_response(status);
     }
+    next.run(req).await
+}
+
+/// Rate-limit middleware for unauthenticated routes (SIWE auth, ops),
+/// keyed strictly by peer IP via [`ip_client_key`]. Unlike
+/// [`ratelimit_axum_mw`] it ignores both the authenticated identity
+/// (there is none on these routes) and the `x-api-key` header (untrusted
+/// here). On success it records the resolved key as a [`ClientKey`]
+/// request extension for downstream per-IP accounting.
+pub async fn ratelimit_ip_axum_mw(
+    AxumState(core): AxumState<RateLimitCore>,
+    mut req: AxumRequest,
+    next: Next,
+) -> AxumResponse {
+    let peer = req.extensions().get::<SocketAddr>().copied().or_else(|| {
+        req.extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0)
+    });
+    let key = ip_client_key(peer);
+    if let Err(status) = core.allow(&key) {
+        return crate::rest::status_to_response(status);
+    }
+    req.extensions_mut().insert(ClientKey(key));
     next.run(req).await
 }
