@@ -126,14 +126,14 @@ fn make_rng(seed: Option<u64>) -> ark_std::rand::rngs::StdRng {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_bn254::Fr;
+    use ark_ff::Zero;
     use dp_zk::commitment_circuit::{
         deserialize_pk, deserialize_vk, prove_with_key, verify_proof_with_vk,
         CommitmentPreimageCircuit,
     };
     use dp_zk::encoding::decimal_to_scalar;
     use dp_zk::pedersen::bytes_to_scalar;
-    use ark_bn254::Fr;
-    use ark_ff::Zero;
     use rust_decimal::Decimal;
 
     fn sample_circuit() -> CommitmentPreimageCircuit {

@@ -160,8 +160,9 @@ fn unwrap_key_envelope(bytes: &[u8]) -> Result<&[u8], crate::ZkError> {
             "commitment key blob: truncated version field".to_string(),
         ));
     }
-    let ver = std::str::from_utf8(&bytes[header..ver_end])
-        .map_err(|_| crate::ZkError::Serialize("commitment key blob: non-utf8 version".to_string()))?;
+    let ver = std::str::from_utf8(&bytes[header..ver_end]).map_err(|_| {
+        crate::ZkError::Serialize("commitment key blob: non-utf8 version".to_string())
+    })?;
     if ver != COMMITMENT_CIRCUIT_VERSION {
         return Err(crate::ZkError::Setup(format!(
             "commitment key version mismatch: expected {COMMITMENT_CIRCUIT_VERSION}, found {ver} \
@@ -191,9 +192,7 @@ pub fn serialize_pk(pk: &ark_groth16::ProvingKey<Bn254>) -> Result<Vec<u8>, crat
 
 /// Deserialize a verifying key from a versioned blob, rejecting any
 /// `COMMITMENT_CIRCUIT_VERSION` mismatch before touching the bytes.
-pub fn deserialize_vk(
-    vk_bytes: &[u8],
-) -> Result<ark_groth16::VerifyingKey<Bn254>, crate::ZkError> {
+pub fn deserialize_vk(vk_bytes: &[u8]) -> Result<ark_groth16::VerifyingKey<Bn254>, crate::ZkError> {
     let body = unwrap_key_envelope(vk_bytes)?;
     ark_groth16::VerifyingKey::<Bn254>::deserialize_with_mode(body, Compress::Yes, Validate::Yes)
         .map_err(|e| crate::ZkError::Serialize(format!("deserialize vk: {e}")))
@@ -201,9 +200,7 @@ pub fn deserialize_vk(
 
 /// Deserialize a proving key from a versioned blob, rejecting any
 /// `COMMITMENT_CIRCUIT_VERSION` mismatch before touching the bytes.
-pub fn deserialize_pk(
-    pk_bytes: &[u8],
-) -> Result<ark_groth16::ProvingKey<Bn254>, crate::ZkError> {
+pub fn deserialize_pk(pk_bytes: &[u8]) -> Result<ark_groth16::ProvingKey<Bn254>, crate::ZkError> {
     let body = unwrap_key_envelope(pk_bytes)?;
     ark_groth16::ProvingKey::<Bn254>::deserialize_with_mode(body, Compress::Yes, Validate::Yes)
         .map_err(|e| crate::ZkError::Serialize(format!("deserialize pk: {e}")))
@@ -379,12 +376,10 @@ mod tests {
         )
         .unwrap());
         // ...but is rejected by the pinned canonical VK.
-        assert!(!verify_proof_with_vk(
-            &canonical_vk,
-            &attacker.proof_bytes,
-            attacker.commitment
-        )
-        .unwrap());
+        assert!(
+            !verify_proof_with_vk(&canonical_vk, &attacker.proof_bytes, attacker.commitment)
+                .unwrap()
+        );
     }
 
     #[test]
