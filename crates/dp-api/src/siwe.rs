@@ -51,7 +51,7 @@ impl NonceStore {
 
     /// Issue a nonce attributed to `client_key` (the caller's IP). Returns
     /// `None` if the global store is full or this key already holds
-    /// [`MAX_NONCES_PER_IP`] outstanding nonces.
+    /// `MAX_NONCES_PER_IP` outstanding nonces.
     pub fn generate_for(&self, client_key: &str) -> Option<String> {
         let mut inner = self.inner.lock();
         if inner.nonces.len() >= MAX_NONCES {
