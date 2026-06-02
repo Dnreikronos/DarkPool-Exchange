@@ -24,13 +24,29 @@ pub struct SetupCommitmentArgs {
     /// Output directory for the key pair. Created if it does not exist.
     #[arg(long)]
     pub out: PathBuf,
-    /// RNG seed for deterministic key generation (reproducible fixtures /
-    /// CI). Omit for a fresh OS-RNG ceremony.
+    /// RNG seed for deterministic key generation. INSECURE: a known seed lets
+    /// anyone recreate the Groth16 trusted-setup trapdoor ("toxic waste") and
+    /// forge proofs under the resulting verifying key. For reproducible
+    /// fixtures / CI ONLY, and only together with
+    /// `--allow-insecure-seed-for-fixtures`. Omit for a fresh OS-RNG ceremony.
     #[arg(long)]
     pub seed: Option<u64>,
+    /// Acknowledge that `--seed` produces INSECURE, forgeable key material.
+    /// Required whenever `--seed` is set; never pass it for a real ceremony.
+    #[arg(long)]
+    pub allow_insecure_seed_for_fixtures: bool,
 }
 
 pub fn run_setup_commitment(args: SetupCommitmentArgs) -> ExitCode {
+    if args.seed.is_some() && !args.allow_insecure_seed_for_fixtures {
+        eprintln!(
+            "setup-commitment-circuit: --seed produces insecure, forgeable key \
+             material (a known seed recreates the Groth16 trusted-setup trapdoor). \
+             Pass --allow-insecure-seed-for-fixtures to use it for fixtures/CI, or \
+             omit --seed for a real OS-RNG ceremony."
+        );
+        return ExitCode::from(2);
+    }
     match generate_and_write(&args.out, args.seed) {
         Ok((pk_path, vk_path)) => {
             eprintln!("wrote proving key:   {}", pk_path.display());
