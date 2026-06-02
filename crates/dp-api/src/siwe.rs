@@ -154,6 +154,8 @@ pub enum SiweError {
     Expired,
     #[error("SIWE message not yet valid")]
     NotYetValid,
+    #[error("SIWE message issued_at is in the future")]
+    IssuedInFuture,
     #[error("domain mismatch: expected {expected}, got {got}")]
     DomainMismatch { expected: String, got: String },
     #[error("chain ID mismatch: expected {expected}, got {got}")]
@@ -161,6 +163,14 @@ pub enum SiweError {
     #[error("signature verification failed: {0}")]
     Verification(String),
 }
+
+/// Clock-skew tolerance when validating the client-supplied `Issued At`.
+/// The authoritative freshness bound is the server nonce TTL (see
+/// [`NonceStore`]); this check only rejects a grossly future `issued_at`,
+/// so generous leeway avoids false rejections from honest client clock
+/// drift (issue #160). Staleness is already covered by the nonce TTL, so
+/// there is deliberately no lower bound here.
+const ISSUED_AT_LEEWAY: time::Duration = time::Duration::seconds(120);
 
 pub fn verify_siwe_message(
     message_str: &str,
@@ -193,6 +203,10 @@ pub fn verify_siwe_message(
     }
 
     let now = time::OffsetDateTime::now_utc();
+
+    if message.issued_at > now + ISSUED_AT_LEEWAY {
+        return Err(SiweError::IssuedInFuture);
+    }
 
     if let Some(ref exp) = message.expiration_time {
         if exp < &now {
@@ -492,6 +506,18 @@ mod tests {
     }
 
     fn make_siwe_message(address: &str, nonce: &str, chain_id: u64) -> String {
+        // A past `Issued At` is fine: freshness is bound by the server
+        // nonce TTL, not this field. A *future* one is rejected — see
+        // `verify_siwe_future_issued_at_rejected`.
+        make_siwe_message_at(address, nonce, chain_id, "2024-01-01T00:00:00Z")
+    }
+
+    fn make_siwe_message_at(
+        address: &str,
+        nonce: &str,
+        chain_id: u64,
+        issued_at: &str,
+    ) -> String {
         format!(
             "localhost wants you to sign in with your Ethereum account:\n\
              {address}\n\
@@ -502,7 +528,7 @@ mod tests {
              Version: 1\n\
              Chain ID: {chain_id}\n\
              Nonce: {nonce}\n\
-             Issued At: 2099-01-01T00:00:00Z"
+             Issued At: {issued_at}"
         )
     }
 
@@ -516,6 +542,20 @@ mod tests {
         let sig = sign_eip191(&msg, &sk);
         let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
         assert!(result.is_ok(), "verify failed: {result:?}");
+    }
+
+    #[test]
+    fn verify_siwe_future_issued_at_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message_at(&addr_str, &nonce, 1, "2099-01-01T00:00:00Z");
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        // The nonce must survive a rejected message so an honest retry works.
+        assert!(store.consume(&nonce));
     }
 
     #[test]
