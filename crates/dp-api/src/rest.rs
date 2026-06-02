@@ -32,7 +32,7 @@ use crate::pb::{
     ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
-use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
+use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
 use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
@@ -186,11 +186,17 @@ pub fn router_with_ops(
         key_admin_handler,
         auth,
         admin_auth,
-        ratelimit,
+        ratelimit.clone(),
     )
-    .merge(ops_router(ops));
+    // The auth (SIWE) and ops sub-routers sit outside the auth layer, so
+    // they get their own IP-keyed rate limiter — without it they would be
+    // an unthrottled login-DoS surface (issue #159). Keying is by peer IP
+    // only; the `x-api-key` header is untrusted on these routes.
+    .merge(ops_router(ops).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)));
     if let Some(siwe) = siwe_state {
-        base = base.merge(auth_router(siwe));
+        base = base.merge(
+            auth_router(siwe).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+        );
     }
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
@@ -284,10 +290,19 @@ struct VerifyResponse {
     address: String,
 }
 
-async fn rest_auth_nonce(State(state): State<SiweState>) -> Result<Json<NonceResponse>, ApiError> {
+async fn rest_auth_nonce(
+    State(state): State<SiweState>,
+    client: Option<Extension<ClientKey>>,
+) -> Result<Json<NonceResponse>, ApiError> {
+    // `ratelimit_ip_axum_mw` records the caller's IP key; fall back to the
+    // shared anonymous budget when that middleware isn't in the stack
+    // (e.g. unit tests hitting `auth_router` directly).
+    let key = client
+        .map(|Extension(c)| c.0)
+        .unwrap_or_else(|| "anonymous".to_string());
     let nonce = state
         .nonce_store
-        .generate()
+        .generate_for(&key)
         .ok_or_else(|| ApiError(tonic::Status::resource_exhausted("nonce store full")))?;
     Ok(Json(NonceResponse { nonce }))
 }
