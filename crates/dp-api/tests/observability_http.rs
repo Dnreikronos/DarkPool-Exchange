@@ -36,13 +36,19 @@ fn fresh_engine() -> Engine {
 }
 
 fn make_router(probes: ReadinessProbes) -> axum::Router {
+    make_router_with_rl(
+        probes,
+        RateLimitCore::new(1000.0, 1000.0, std::time::Duration::from_secs(60)),
+    )
+}
+
+fn make_router_with_rl(probes: ReadinessProbes, rl: RateLimitCore) -> axum::Router {
     let engine = fresh_engine();
     let api = ApiHandler::new(engine.clone());
     let admin = AdminApiHandler::new(engine);
     let key_admin = KeyAdminHandler::new(MultiKeyDecrypter::new());
     let auth = AuthCore::new(vec!["trader-key".into()]);
     let admin_auth = AuthCore::new(vec!["admin-key".into()]);
-    let rl = RateLimitCore::new(1000.0, 1000.0, std::time::Duration::from_secs(60));
     router_with_ops(
         Arc::new(api),
         Arc::new(admin),
@@ -207,6 +213,52 @@ async fn request_id_generated_is_valid_ulid() {
         .to_str()
         .unwrap();
     ulid::Ulid::from_string(id).expect("generated request id should be a valid ULID");
+}
+
+#[tokio::test]
+async fn liveness_probes_are_exempt_from_the_ip_rate_limiter() {
+    // Burst of 1 with effectively no refill: the IP limiter (keyed by peer,
+    // which is "anonymous" here since `oneshot` carries no ConnectInfo) holds
+    // a single token shared across all throttled routes.
+    let rl = RateLimitCore::new(0.0001, 1.0, Duration::from_secs(60));
+    let router = make_router_with_rl(ReadinessProbes::new(), rl);
+
+    // Burn the single token on a throttled ops route, then confirm it is
+    // exhausted — the next throttled request must 429.
+    let resp = router
+        .clone()
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = router
+        .clone()
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "limiter should be exhausted after the burst"
+    );
+
+    // With the limiter exhausted, liveness/readiness probes must still pass:
+    // they are mounted ahead of the limiter so a throttled probe source can
+    // never report the instance as unhealthy.
+    for _ in 0..5 {
+        let resp = router
+            .clone()
+            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/healthz must never 429");
+        let resp = router
+            .clone()
+            .oneshot(Request::get("/readyz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/readyz must never 429");
+    }
 }
 
 #[tokio::test]

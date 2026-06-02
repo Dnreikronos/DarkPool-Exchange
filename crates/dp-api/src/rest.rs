@@ -149,13 +149,29 @@ pub struct OpsState {
 /// the auth-gated public + admin routers; load-balancer probes and the
 /// Prometheus scrape do not present API keys, so these paths must sit
 /// outside the auth layer.
-pub fn ops_router(state: OpsState) -> Router {
+/// Liveness/readiness probes. Deliberately **not** rate-limited: a 429
+/// from `/healthz` or `/readyz` reads as a failed probe, so throttling
+/// them lets aggressive orchestrator polling or a shared-NAT egress IP
+/// flip a healthy instance to false-unhealthy (pod restarts, LB pull).
+pub fn ops_probe_router(state: OpsState) -> Router {
     Router::new()
         .route("/healthz", get(rest_healthz))
         .route("/readyz", get(rest_readyz))
+        .with_state(state)
+}
+
+/// Ops endpoints that *are* rate-limited: the Prometheus scrape and the
+/// operator pubkey lookup. Both are unauthenticated, so they share the
+/// IP-keyed limiter with the SIWE routes (issue #159).
+pub fn ops_throttled_router(state: OpsState) -> Router {
+    Router::new()
         .route("/metrics", get(rest_metrics))
         .route("/v1/operator/pubkey", get(rest_operator_pubkey))
         .with_state(state)
+}
+
+pub fn ops_router(state: OpsState) -> Router {
+    ops_probe_router(state.clone()).merge(ops_throttled_router(state))
 }
 
 pub fn auth_router(state: SiweState) -> Router {
@@ -191,8 +207,14 @@ pub fn router_with_ops(
     // The auth (SIWE) and ops sub-routers sit outside the auth layer, so
     // they get their own IP-keyed rate limiter — without it they would be
     // an unthrottled login-DoS surface (issue #159). Keying is by peer IP
-    // only; the `x-api-key` header is untrusted on these routes.
-    .merge(ops_router(ops).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)));
+    // only; the `x-api-key` header is untrusted on these routes. Liveness
+    // and readiness probes are mounted *before* the limiter so a throttled
+    // probe IP can never report the instance as unhealthy.
+    .merge(ops_probe_router(ops.clone()))
+    .merge(
+        ops_throttled_router(ops)
+            .layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+    );
     if let Some(siwe) = siwe_state {
         base = base.merge(
             auth_router(siwe).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
