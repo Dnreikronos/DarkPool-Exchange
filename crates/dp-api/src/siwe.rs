@@ -556,6 +556,42 @@ mod tests {
         assert!(store.consume(&nonce));
     }
 
+    /// Pin the boundary of `ISSUED_AT_LEEWAY` (120 s): an `issued_at`
+    /// just inside the window is accepted, one well past it is rejected.
+    /// This locks the specific tolerance rather than only proving that a
+    /// year-2099 timestamp is bad.
+    #[test]
+    fn verify_siwe_issued_at_leeway_boundary() {
+        use time::format_description::well_known::Rfc3339;
+
+        let now = time::OffsetDateTime::now_utc();
+        let at = |offset: time::Duration| (now + offset).format(&Rfc3339).unwrap();
+
+        // 60 s into the future is within the 120 s leeway → accepted.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(60)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(result.is_ok(), "within-leeway message rejected: {result:?}");
+        }
+
+        // 200 s into the future is beyond the leeway → rejected.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(200)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        }
+    }
+
     #[test]
     fn verify_siwe_wrong_chain_rejected() {
         let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
