@@ -54,6 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tls_mode = cfg
         .tls_mode()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    // Fail closed before binding: plaintext on a non-loopback interface
+    // leaks credentials and order metadata on the wire. Loopback-only
+    // plaintext (local dev) and an explicit --insecure override are the
+    // only ways past this check.
+    cfg.validate_plaintext_bind(&tls_mode)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     if matches!(tls_mode, TlsMode::Plaintext) {
         warn!(
             grpc = %cfg.grpc_addr,
