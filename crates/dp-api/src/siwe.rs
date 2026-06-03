@@ -515,12 +515,7 @@ mod tests {
         make_siwe_message_at(address, nonce, chain_id, "2024-01-01T00:00:00Z")
     }
 
-    fn make_siwe_message_at(
-        address: &str,
-        nonce: &str,
-        chain_id: u64,
-        issued_at: &str,
-    ) -> String {
+    fn make_siwe_message_at(address: &str, nonce: &str, chain_id: u64, issued_at: &str) -> String {
         format!(
             "localhost wants you to sign in with your Ethereum account:\n\
              {address}\n\
