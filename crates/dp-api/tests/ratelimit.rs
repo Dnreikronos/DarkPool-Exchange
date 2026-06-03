@@ -223,6 +223,22 @@ fn xff_spoof_does_not_extend_the_chain() {
 }
 
 #[test]
+fn xff_proxy_appended_client_defeats_spoof() {
+    // The invariant operators actually rely on: a correctly configured proxy
+    // appends the real peer as the rightmost hop, so any client-supplied
+    // forged prefix is ignored. Two different spoofed prefixes carrying the
+    // same appended client must collapse onto the same bucket — the caller
+    // cannot escape their real-IP budget by rotating the forged prefix.
+    let trusted = TrustedProxies::parse("10.0.0.0/8").unwrap();
+    let appended = "203.0.113.7"; // the hop our trusted proxy adds
+
+    let a = xff(&format!("9.9.9.9, {appended}"));
+    let b = xff(&format!("8.8.8.8, 7.7.7.7, {appended}"));
+    assert_eq!(ip_client_key(&trusted, &a, peer([10, 0, 0, 1])), appended);
+    assert_eq!(ip_client_key(&trusted, &b, peer([10, 0, 0, 1])), appended);
+}
+
+#[test]
 fn x_real_ip_fallback_when_no_xff() {
     let trusted = TrustedProxies::parse("10.0.0.0/8").unwrap();
     let mut h = HeaderMap::new();
