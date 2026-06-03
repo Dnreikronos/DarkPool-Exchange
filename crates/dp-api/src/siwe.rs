@@ -152,6 +152,10 @@ pub enum SiweError {
     NonceInvalid,
     #[error("SIWE message expired")]
     Expired,
+    #[error("SIWE message must set an expiration time")]
+    ExpirationRequired,
+    #[error("SIWE message expiration is too far in the future")]
+    ExpiryTooFar,
     #[error("SIWE message not yet valid")]
     NotYetValid,
     #[error("SIWE message issued_at is in the future")]
@@ -171,6 +175,15 @@ pub enum SiweError {
 /// drift (issue #160). Staleness is already covered by the nonce TTL, so
 /// there is deliberately no lower bound here.
 const ISSUED_AT_LEEWAY: time::Duration = time::Duration::seconds(120);
+
+/// Upper bound on how far a SIWE message's `Expiration Time` may sit past
+/// server time. SIWE makes expiry optional; issue #160 requires it and
+/// bounds it so a captured message cannot stay valid indefinitely —
+/// defense-in-depth around the single-use nonce. Sized at ~2x the nonce
+/// TTL (300 s) to absorb honest client clock skew and the client's own
+/// expiry slack without false-rejecting real logins; the nonce remains
+/// the authoritative single-use freshness bound.
+const MAX_EXPIRY_WINDOW: time::Duration = time::Duration::seconds(600);
 
 pub fn verify_siwe_message(
     message_str: &str,
@@ -208,9 +221,17 @@ pub fn verify_siwe_message(
         return Err(SiweError::IssuedInFuture);
     }
 
-    if let Some(ref exp) = message.expiration_time {
-        if exp < &now {
-            return Err(SiweError::Expired);
+    // SIWE makes `Expiration Time` optional; issue #160 requires it and
+    // bounds it so a captured message cannot stay valid indefinitely.
+    match message.expiration_time {
+        None => return Err(SiweError::ExpirationRequired),
+        Some(ref exp) => {
+            if exp < &now {
+                return Err(SiweError::Expired);
+            }
+            if exp > &(now + MAX_EXPIRY_WINDOW) {
+                return Err(SiweError::ExpiryTooFar);
+            }
         }
     }
 
@@ -516,7 +537,20 @@ mod tests {
     }
 
     fn make_siwe_message_at(address: &str, nonce: &str, chain_id: u64, issued_at: &str) -> String {
-        format!(
+        // Expiry is mandatory (issue #160); default to 5 min out, well
+        // inside `MAX_EXPIRY_WINDOW`, so the happy-path builders verify.
+        let exp = rfc3339_from_now(time::Duration::seconds(300));
+        make_siwe_message_full(address, nonce, chain_id, issued_at, Some(&exp))
+    }
+
+    fn make_siwe_message_full(
+        address: &str,
+        nonce: &str,
+        chain_id: u64,
+        issued_at: &str,
+        expiration_time: Option<&str>,
+    ) -> String {
+        let mut msg = format!(
             "localhost wants you to sign in with your Ethereum account:\n\
              {address}\n\
              \n\
@@ -527,7 +561,18 @@ mod tests {
              Chain ID: {chain_id}\n\
              Nonce: {nonce}\n\
              Issued At: {issued_at}"
-        )
+        );
+        if let Some(exp) = expiration_time {
+            msg.push_str(&format!("\nExpiration Time: {exp}"));
+        }
+        msg
+    }
+
+    fn rfc3339_from_now(offset: time::Duration) -> String {
+        use time::format_description::well_known::Rfc3339;
+        (time::OffsetDateTime::now_utc() + offset)
+            .format(&Rfc3339)
+            .unwrap()
     }
 
     #[test]
@@ -590,6 +635,49 @@ mod tests {
             let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
             assert!(matches!(result, Err(SiweError::IssuedInFuture)));
         }
+    }
+
+    #[test]
+    fn verify_siwe_missing_expiry_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", None);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::ExpirationRequired)));
+        // A rejected message must not burn the nonce — an honest retry works.
+        assert!(store.consume(&nonce));
+    }
+
+    #[test]
+    fn verify_siwe_expiry_too_far_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        // Well past the cap so this stays beyond it even with clock skew.
+        let exp = rfc3339_from_now(MAX_EXPIRY_WINDOW + time::Duration::seconds(600));
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", Some(&exp));
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::ExpiryTooFar)));
+        assert!(store.consume(&nonce));
+    }
+
+    #[test]
+    fn verify_siwe_expired_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let exp = rfc3339_from_now(time::Duration::seconds(-60));
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", Some(&exp));
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::Expired)));
+        assert!(store.consume(&nonce));
     }
 
     #[test]
