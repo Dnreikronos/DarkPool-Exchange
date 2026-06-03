@@ -189,10 +189,14 @@ impl TrustedProxies {
 /// a trusted proxy, walk its `X-Forwarded-For` chain right-to-left and
 /// return the rightmost address that is **not** itself a trusted hop —
 /// that is the real client as seen by the outermost proxy we trust, and
-/// the only entry an attacker upstream of our proxies cannot forge. Falls
-/// back to `X-Real-IP`, then the peer IP, when no usable forwarding header
-/// is present. Returns `None` only when there is no peer at all (e.g. unit
-/// tests using `oneshot` without `ConnectInfo`).
+/// the only entry an attacker upstream of our proxies cannot forge. This
+/// last guarantee holds only when each trusted proxy *appends* the real
+/// peer to the chain rather than forwarding a client-supplied
+/// `X-Forwarded-For` verbatim; see the `trusted_proxies` config doc for
+/// the operator requirement. Falls back to `X-Real-IP`, then the peer IP,
+/// when no usable forwarding header is present. Returns `None` only when
+/// there is no peer at all (e.g. unit tests using `oneshot` without
+/// `ConnectInfo`).
 pub fn resolve_client_ip(
     trusted: &TrustedProxies,
     headers: &HeaderMap,

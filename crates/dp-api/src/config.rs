@@ -102,6 +102,15 @@ pub struct Config {
     /// proxies / load balancers. When the TCP peer matches one of these,
     /// rate limiting and the SIWE nonce cap key on the client IP from
     /// `X-Forwarded-For` / `X-Real-IP` instead of the proxy's address.
+    ///
+    /// Operator requirement: every proxy listed here MUST *append* the real
+    /// peer to `X-Forwarded-For` (e.g. nginx `$proxy_add_x_forwarded_for`)
+    /// and MUST NOT forward a client-supplied `X-Forwarded-For` verbatim.
+    /// The rightmost-untrusted client lookup is spoof-resistant only because
+    /// the hop the trusted proxy appends is the one entry the caller cannot
+    /// control; a pass-through proxy lets the caller forge their own
+    /// rate-limit / nonce key and evade or misattribute the per-IP budget.
+    ///
     /// Empty (the default) means the listener is directly exposed and
     /// forwarding headers are ignored — set this whenever a TLS-terminating
     /// proxy or LB sits in front, or per-IP limits collapse onto the proxy
