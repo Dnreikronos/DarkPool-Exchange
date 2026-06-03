@@ -211,10 +211,12 @@ fn xff_uses_rightmost_untrusted_hop() {
 
 #[test]
 fn xff_spoof_does_not_extend_the_chain() {
-    // Attacker sends "1.1.1.1, 2.2.2.2" hoping to be keyed as 1.1.1.1.
-    // Neither forged hop is trusted, so the rightmost untrusted entry
-    // (2.2.2.2, what our proxy actually saw as the client) is used — the
-    // attacker cannot pick which bucket they land in beyond their own hop.
+    // Attacker prepends a forged hop ("1.1.1.1, 2.2.2.2") hoping to be keyed
+    // as 1.1.1.1. The rightmost *untrusted* entry (2.2.2.2) wins, so padding
+    // the chain with forged hops on the left cannot move the caller into a
+    // different bucket. (Whether 2.2.2.2 itself is forgeable depends on the
+    // proxy appending the real peer rather than passing this header through
+    // — that invariant is locked by `xff_proxy_appended_client_defeats_spoof`.)
     let trusted = TrustedProxies::parse("10.0.0.0/8").unwrap();
     let h = xff("1.1.1.1, 2.2.2.2");
     assert_eq!(ip_client_key(&trusted, &h, peer([10, 0, 0, 1])), "2.2.2.2");
