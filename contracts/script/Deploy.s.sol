@@ -46,6 +46,20 @@ contract DeployScript is Script {
         );
         address governor = vm.envOr("VERIFIER_GOVERNOR", deployer);
 
+        // DARKPOOL_OWNER: address that controls operator management,
+        // policy, fee recipient, operator-pubkey rotation, the IVC
+        // verifier pointer, and pause on the contract that escrows every
+        // trader's funds. In production this must be a TimelockController
+        // (or a multisig fronting one); the default falls back to the
+        // deployer for local and CI deploys. On mainnet we refuse the
+        // silent fallback — leaving full protocol control on a single
+        // deploying EOA is the centralisation risk flagged in #166.
+        require(
+            block.chainid != 1 || vm.envExists("DARKPOOL_OWNER"),
+            "DARKPOOL_OWNER must be set on mainnet"
+        );
+        address darkPoolOwner = vm.envOr("DARKPOOL_OWNER", deployer);
+
         (
             uint256[2] memory alpha1,
             uint256[2][2] memory beta2,
@@ -98,6 +112,17 @@ contract DeployScript is Script {
         if (governor != deployer) {
             proxy.transferOwnership(governor);
             console.log("VerifierProxy ownership transferred to governor:", governor);
+        }
+
+        // Hand the pool to its production owner last, after every
+        // deployer-as-owner setup call above (setTokenAllowed,
+        // setIvcVerifier). DarkPool is Ownable2Step, so this only queues
+        // the transfer — darkPoolOwner must call acceptOwnership() to take
+        // control, which keeps a fat-fingered address from bricking
+        // governance.
+        if (darkPoolOwner != deployer) {
+            pool.transferOwnership(darkPoolOwner);
+            console.log("DarkPool ownership transfer initiated (awaiting acceptOwnership):", darkPoolOwner);
         }
 
         _writeDeployment(
