@@ -23,6 +23,14 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     mapping(bytes32 => bool) public settled;
     mapping(address => mapping(address => uint256)) public balances;
 
+    /// @notice Tokens approved for deposit. Only vetted, standard ERC20s
+    ///         (no fee-on-transfer, no rebasing) should ever be allowlisted.
+    ///         `deposit` rejects any token not present here, and even for
+    ///         allowlisted tokens it credits the measured balance delta —
+    ///         not the requested `amount` — so a token that transfers less
+    ///         than requested can never overstate internal `balances`.
+    mapping(address => bool) public allowedTokens;
+
     IDeciderVerifier public ivcVerifier;
     mapping(bytes32 => bool) public sessionSubmitted;
     mapping(bytes32 => bytes32) public auctionToSession;
@@ -81,11 +89,37 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         emit OperatorPubkeyUpdated(bytes(""), operatorPubkey_, uint64(block.timestamp));
     }
 
-    function deposit(address token, uint256 amount) external whenNotPaused {
+    /// @notice Deposit `amount` of an allowlisted ERC20 into escrow.
+    /// @dev Credits the *measured* balance delta rather than the requested
+    ///      `amount`. For a fee-on-transfer or rebasing token the contract
+    ///      would receive less than `amount`; crediting the request would
+    ///      overstate `balances` and let later withdrawals/settlements drain
+    ///      other users' funds (insolvency). Measuring the delta around the
+    ///      transfer makes internal accounting track real holdings exactly.
+    ///      The allowlist is the primary defense (only vetted standard ERC20s
+    ///      are accepted); the delta check is defense-in-depth. `nonReentrant`
+    ///      guards the pre/post balanceOf reads against a malicious token that
+    ///      re-enters mid-transfer.
+    function deposit(address token, uint256 amount) external nonReentrant whenNotPaused {
         require(amount > 0, "zero amount");
+        require(allowedTokens[token], "token not allowed");
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        balances[msg.sender][token] += amount;
-        emit Deposit(msg.sender, token, amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        require(received > 0, "no tokens received");
+        balances[msg.sender][token] += received;
+        emit Deposit(msg.sender, token, received);
+    }
+
+    /// @notice Add or remove a token from the deposit allowlist.
+    /// @dev Owner-only. Allowlist only tokens that have been vetted as
+    ///      standard, non-fee-on-transfer, non-rebasing ERC20s. Removing a
+    ///      token blocks new deposits but does not touch existing balances —
+    ///      traders can still withdraw what they already hold.
+    function setTokenAllowed(address token, bool allowed) external onlyOwner {
+        require(token != address(0), "zero token");
+        allowedTokens[token] = allowed;
+        emit TokenAllowed(token, allowed);
     }
 
     function withdraw(address token, uint256 amount) external nonReentrant whenNotPaused {

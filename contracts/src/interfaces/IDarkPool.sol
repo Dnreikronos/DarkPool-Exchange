@@ -24,7 +24,11 @@ interface IDarkPool {
     ///         accepted by the off-chain decrypter until in-flight
     ///         orders drain.
     event OperatorPubkeyUpdated(bytes oldPubkey, bytes newPubkey, uint64 effectiveAt);
+    /// @notice Emitted when the owner adds or removes a token from the
+    ///         deposit allowlist. `allowed` is the new state.
+    event TokenAllowed(address indexed token, bool allowed);
     function deposit(address token, uint256 amount) external;
+    function setTokenAllowed(address token, bool allowed) external;
     function withdraw(address token, uint256 amount) external;
     function submitBatch(
         bytes32 batchId,

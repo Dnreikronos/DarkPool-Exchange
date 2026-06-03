@@ -67,6 +67,22 @@ contract DeployScript is Script {
         console.log("DarkPool:", address(pool));
         console.log("OperatorPubkey bytes:", operatorPubkey.length);
 
+        // Allowlist the tradeable tokens so the pool accepts deposits out of
+        // the box. deposit() rejects any token not on the allowlist, so a
+        // pool deployed without this can never take a deposit. Pass a
+        // comma-free single address per env var; both are optional so local
+        // smoke deploys can skip them and allowlist later via setTokenAllowed.
+        if (vm.envExists("BASE_TOKEN")) {
+            address baseToken = vm.envAddress("BASE_TOKEN");
+            pool.setTokenAllowed(baseToken, true);
+            console.log("Allowlisted base token:", baseToken);
+        }
+        if (vm.envExists("QUOTE_TOKEN")) {
+            address quoteToken = vm.envAddress("QUOTE_TOKEN");
+            pool.setTokenAllowed(quoteToken, true);
+            console.log("Allowlisted quote token:", quoteToken);
+        }
+
         require(
             block.chainid != 1,
             "stub IVC verifier cannot be deployed on mainnet; use a real Decider verifier"
