@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy_primitives::Address;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -154,6 +154,8 @@ pub enum SiweError {
     Expired,
     #[error("SIWE message not yet valid")]
     NotYetValid,
+    #[error("SIWE message issued_at is in the future")]
+    IssuedInFuture,
     #[error("domain mismatch: expected {expected}, got {got}")]
     DomainMismatch { expected: String, got: String },
     #[error("chain ID mismatch: expected {expected}, got {got}")]
@@ -161,6 +163,14 @@ pub enum SiweError {
     #[error("signature verification failed: {0}")]
     Verification(String),
 }
+
+/// Clock-skew tolerance when validating the client-supplied `Issued At`.
+/// The authoritative freshness bound is the server nonce TTL (see
+/// [`NonceStore`]); this check only rejects a grossly future `issued_at`,
+/// so generous leeway avoids false rejections from honest client clock
+/// drift (issue #160). Staleness is already covered by the nonce TTL, so
+/// there is deliberately no lower bound here.
+const ISSUED_AT_LEEWAY: time::Duration = time::Duration::seconds(120);
 
 pub fn verify_siwe_message(
     message_str: &str,
@@ -193,6 +203,10 @@ pub fn verify_siwe_message(
     }
 
     let now = time::OffsetDateTime::now_utc();
+
+    if message.issued_at > now + ISSUED_AT_LEEWAY {
+        return Err(SiweError::IssuedInFuture);
+    }
 
     if let Some(ref exp) = message.expiration_time {
         if exp < &now {
@@ -250,7 +264,10 @@ impl std::fmt::Debug for JwtManager {
 
 impl JwtManager {
     pub fn new(secret: &str, ttl: Duration) -> Self {
-        let mut validation = Validation::default();
+        // Pin the algorithm explicitly so a token cannot dictate it
+        // (defends against alg-confusion / `alg: none`). This matches the
+        // jsonwebtoken default but is stated for clarity (issue #160).
+        let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[JWT_ISSUER]);
         validation.set_audience(&[JWT_ISSUER]);
         Self {
@@ -492,6 +509,13 @@ mod tests {
     }
 
     fn make_siwe_message(address: &str, nonce: &str, chain_id: u64) -> String {
+        // A past `Issued At` is fine: freshness is bound by the server
+        // nonce TTL, not this field. A *future* one is rejected — see
+        // `verify_siwe_future_issued_at_rejected`.
+        make_siwe_message_at(address, nonce, chain_id, "2024-01-01T00:00:00Z")
+    }
+
+    fn make_siwe_message_at(address: &str, nonce: &str, chain_id: u64, issued_at: &str) -> String {
         format!(
             "localhost wants you to sign in with your Ethereum account:\n\
              {address}\n\
@@ -502,7 +526,7 @@ mod tests {
              Version: 1\n\
              Chain ID: {chain_id}\n\
              Nonce: {nonce}\n\
-             Issued At: 2099-01-01T00:00:00Z"
+             Issued At: {issued_at}"
         )
     }
 
@@ -516,6 +540,56 @@ mod tests {
         let sig = sign_eip191(&msg, &sk);
         let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
         assert!(result.is_ok(), "verify failed: {result:?}");
+    }
+
+    #[test]
+    fn verify_siwe_future_issued_at_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message_at(&addr_str, &nonce, 1, "2099-01-01T00:00:00Z");
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        // The nonce must survive a rejected message so an honest retry works.
+        assert!(store.consume(&nonce));
+    }
+
+    /// Pin the boundary of `ISSUED_AT_LEEWAY` (120 s): an `issued_at`
+    /// just inside the window is accepted, one well past it is rejected.
+    /// This locks the specific tolerance rather than only proving that a
+    /// year-2099 timestamp is bad.
+    #[test]
+    fn verify_siwe_issued_at_leeway_boundary() {
+        use time::format_description::well_known::Rfc3339;
+
+        let now = time::OffsetDateTime::now_utc();
+        let at = |offset: time::Duration| (now + offset).format(&Rfc3339).unwrap();
+
+        // 60 s into the future is within the 120 s leeway → accepted.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(60)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(result.is_ok(), "within-leeway message rejected: {result:?}");
+        }
+
+        // 200 s into the future is beyond the leeway → rejected.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(200)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        }
     }
 
     #[test]
