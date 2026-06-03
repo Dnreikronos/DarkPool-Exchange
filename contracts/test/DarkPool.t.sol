@@ -340,8 +340,8 @@ contract DarkPoolTest is Test {
         uint256 notional = price * size / 1e18;
         uint256 fee = notional * 5 / 10_000;
 
-        _deposit(trader1, address(quoteToken), notional);
-        _deposit(trader2, address(baseToken), size);
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
 
         uint256[6] memory inputs;
         inputs[0] = 1;
@@ -390,8 +390,8 @@ contract DarkPoolTest is Test {
         uint256 notional = price * size / 1e18;
         uint256 expectedFee = notional * 5 / 10_000;
 
-        _deposit(trader1, address(quoteToken), notional);
-        _deposit(trader2, address(baseToken), size);
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
 
         uint256[6] memory inputs;
         inputs[0] = 1;
@@ -748,12 +748,12 @@ contract DarkPoolTest is Test {
         uint64 nSteps = 60;
         bytes32 policyHash = bytes32(uint256(123));
 
-        // Fund traders so _settleMatch doesn't underflow
+        // Fund + reserve traders so _settleMatch debits locked escrow
         uint256 price = 100e8;
         uint256 size = 10e8;
         uint256 notional = price * size / 1e18;
-        _deposit(trader1, address(quoteToken), notional);
-        _deposit(trader2, address(baseToken), size);
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
 
         // Build matches + the operator's pre-commitment hash
         bytes32 auctionId = bytes32(uint256(2));
@@ -822,6 +822,247 @@ contract DarkPoolTest is Test {
         pool.settleAuction(sessionId, auctionId, substituted);
     }
 
+    // --- Escrow reserve / unbonding (#165) ---
+
+    function test_reserve_movesFreeToReserved() public {
+        _deposit(trader1, address(quoteToken), 100e18);
+
+        vm.prank(trader1);
+        pool.reserve(address(quoteToken), 40e18);
+
+        assertEq(pool.balances(trader1, address(quoteToken)), 60e18);
+        assertEq(pool.reserved(trader1, address(quoteToken)), 40e18);
+    }
+
+    function test_reserve_emitsEvent() public {
+        uint256 amount = 100e18;
+        _deposit(trader1, address(quoteToken), amount);
+
+        vm.prank(trader1);
+        vm.expectEmit(true, true, false, true);
+        emit IDarkPool.Reserved(trader1, address(quoteToken), amount);
+        pool.reserve(address(quoteToken), amount);
+    }
+
+    function test_reserve_insufficientFree_reverts() public {
+        _deposit(trader1, address(quoteToken), 10e18);
+
+        vm.prank(trader1);
+        vm.expectRevert("insufficient balance");
+        pool.reserve(address(quoteToken), 11e18);
+    }
+
+    function test_reserve_zero_reverts() public {
+        vm.prank(trader1);
+        vm.expectRevert("zero amount");
+        pool.reserve(address(quoteToken), 0);
+    }
+
+    function test_reserve_whenPaused_reverts() public {
+        pool.pause();
+        vm.prank(trader1);
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        pool.reserve(address(quoteToken), 1);
+    }
+
+    function test_withdraw_cannotTouchReservedFunds() public {
+        uint256 amount = 100e18;
+        _deposit(trader1, address(quoteToken), amount);
+        _reserve(trader1, address(quoteToken), amount); // all reserved, free == 0
+
+        vm.prank(trader1);
+        vm.expectRevert("insufficient balance");
+        pool.withdraw(address(quoteToken), 1);
+    }
+
+    function test_requestUnreserve_exceedingReserved_reverts() public {
+        _deposit(trader1, address(quoteToken), 100e18);
+        _reserve(trader1, address(quoteToken), 40e18);
+
+        vm.prank(trader1);
+        vm.expectRevert("exceeds reserved");
+        pool.requestUnreserve(address(quoteToken), 41e18);
+    }
+
+    function test_releaseUnreserve_nothingPending_reverts() public {
+        vm.prank(trader1);
+        vm.expectRevert("nothing pending");
+        pool.releaseUnreserve(address(quoteToken));
+    }
+
+    function test_releaseUnreserve_beforeDelay_reverts() public {
+        _deposit(trader1, address(quoteToken), 100e18);
+        _reserve(trader1, address(quoteToken), 100e18);
+
+        vm.startPrank(trader1);
+        pool.requestUnreserve(address(quoteToken), 100e18);
+        vm.expectRevert("unreserve not ready");
+        pool.releaseUnreserve(address(quoteToken));
+        vm.stopPrank();
+    }
+
+    function test_requestThenReleaseUnreserve_afterDelay_returnsToFree() public {
+        _deposit(trader1, address(quoteToken), 100e18);
+        _reserve(trader1, address(quoteToken), 100e18);
+
+        vm.prank(trader1);
+        pool.requestUnreserve(address(quoteToken), 100e18);
+
+        vm.warp(block.timestamp + pool.UNRESERVE_DELAY());
+
+        vm.prank(trader1);
+        pool.releaseUnreserve(address(quoteToken));
+
+        assertEq(pool.reserved(trader1, address(quoteToken)), 0);
+        assertEq(pool.balances(trader1, address(quoteToken)), 100e18);
+        assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
+
+        // Released funds are withdrawable again.
+        vm.prank(trader1);
+        pool.withdraw(address(quoteToken), 100e18);
+        assertEq(quoteToken.balanceOf(trader1), 100e18);
+    }
+
+    /// The core #165 regression: a matched trader who tries to pull committed
+    /// funds out before settlement is blocked by the cooldown — the funds stay
+    /// in `reserved` and settlement still succeeds. One trader can no longer
+    /// revert the whole batch by front-running settlement with a withdrawal.
+    function test_matchedFundsRemainClaimableDuringUnbond() public {
+        bytes32 batchId = bytes32(uint256(7));
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        uint256 fee = notional * 5 / 10_000;
+
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        // Both traders immediately try to unbond their committed funds.
+        vm.prank(trader1);
+        pool.requestUnreserve(address(quoteToken), notional);
+        vm.prank(trader2);
+        pool.requestUnreserve(address(baseToken), size);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+
+        // Settlement succeeds despite the pending unbonds.
+        vm.prank(operator);
+        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+
+        assertTrue(pool.settled(batchId));
+        assertEq(pool.reserved(trader1, address(quoteToken)), 0);
+        assertEq(pool.balances(trader1, address(baseToken)), size);
+        assertEq(pool.reserved(trader2, address(baseToken)), 0);
+        assertEq(pool.balances(trader2, address(quoteToken)), notional - fee);
+
+        // After the delay the unbond releases only what's left (nothing): the
+        // trade legitimately consumed the reserved funds, no underflow.
+        vm.warp(block.timestamp + pool.UNRESERVE_DELAY());
+        vm.prank(trader1);
+        pool.releaseUnreserve(address(quoteToken));
+        assertEq(pool.reserved(trader1, address(quoteToken)), 0);
+        assertEq(pool.balances(trader1, address(quoteToken)), 0);
+        assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
+    }
+
+    function test_submitBatch_revertsWhenFundsNotReserved() public {
+        // Funds sit in free balance but were never reserved → settlement
+        // debits the empty reserved escrow and reverts. Locking is enforced:
+        // free balance alone cannot settle.
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+
+        _deposit(trader1, address(quoteToken), notional); // NOT reserved
+        _deposit(trader2, address(baseToken), size); // NOT reserved
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+
+        vm.prank(operator);
+        vm.expectRevert(); // arithmetic underflow on reserved escrow
+        pool.submitBatch(bytes32(uint256(8)), bytes32(0), new bytes(256), inputs, matches);
+    }
+
+    /// The issue's exact scenario: one underfunded trader in a multi-match
+    /// batch. The whole batch reverts atomically; the valid first match must
+    /// NOT be partially settled (we reject the "skip the bad match" fix).
+    function test_submitBatch_oneUnderfundedRevertsEntireBatch() public {
+        address trader3 = address(0x30);
+        address trader4 = address(0x40);
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+
+        // Match 0: both sides fully reserved (would settle on its own).
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+        // Match 1: ask side reserved, bid side (trader3) never reserved quote.
+        _depositAndReserve(trader4, address(baseToken), size);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](2);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+        matches[1] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(3)),
+            askOrderId: bytes32(uint256(4)),
+            bidTrader: trader3, // underfunded: never reserved quote
+            askTrader: trader4,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+
+        uint256[6] memory inputs;
+        inputs[0] = 2;
+
+        bytes32 batchId = bytes32(uint256(9));
+        vm.prank(operator);
+        vm.expectRevert();
+        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+
+        // Atomicity: the valid first match did NOT partially settle.
+        assertFalse(pool.settled(batchId));
+        assertEq(pool.reserved(trader1, address(quoteToken)), notional);
+        assertEq(pool.balances(trader1, address(baseToken)), 0);
+        assertEq(pool.reserved(trader2, address(baseToken)), size);
+    }
+
     // --- Helpers ---
 
     function _deposit(address trader, address token, uint256 amount) internal {
@@ -830,6 +1071,18 @@ contract DarkPoolTest is Test {
         MockERC20(token).approve(address(pool), amount);
         pool.deposit(token, amount);
         vm.stopPrank();
+    }
+
+    function _reserve(address trader, address token, uint256 amount) internal {
+        vm.prank(trader);
+        pool.reserve(token, amount);
+    }
+
+    /// Settlement debits the locked `reserved` escrow, so any trader appearing
+    /// in a settled match must have reserved the funds they owe first.
+    function _depositAndReserve(address trader, address token, uint256 amount) internal {
+        _deposit(trader, token, amount);
+        _reserve(trader, token, amount);
     }
 
     function _zeroInputs() internal pure returns (uint256[6] memory inputs) {
@@ -868,8 +1121,8 @@ contract DarkPoolTest is Test {
 
     function _setupBatchBalances() internal {
         uint256 notional = 100e18 * 10e18 / 1e18;
-        _deposit(trader1, address(quoteToken), notional);
-        _deposit(trader2, address(baseToken), 10e18);
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), 10e18);
     }
 
     function _fundAndSubmitBatch(bytes32 batchId) internal {
