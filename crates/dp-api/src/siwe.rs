@@ -168,22 +168,30 @@ pub enum SiweError {
     Verification(String),
 }
 
+/// Server-side single-use nonce lifetime — the authoritative freshness
+/// bound for a SIWE login. The leeway and expiry-window bounds below are
+/// sized relative to this, so it is the single knob to turn; the binary
+/// builds its [`NonceStore`] from this exact value (no separate literal).
+pub const NONCE_TTL: Duration = Duration::from_secs(NONCE_TTL_SECS);
+const NONCE_TTL_SECS: u64 = 300;
+
 /// Clock-skew tolerance when validating the client-supplied `Issued At`.
-/// The authoritative freshness bound is the server nonce TTL (see
-/// [`NonceStore`]); this check only rejects a grossly future `issued_at`,
-/// so generous leeway avoids false rejections from honest client clock
-/// drift (issue #160). Staleness is already covered by the nonce TTL, so
-/// there is deliberately no lower bound here.
+/// The authoritative freshness bound is the server nonce TTL ([`NONCE_TTL`]);
+/// this check only rejects a grossly future `issued_at`, so generous leeway
+/// avoids false rejections from honest client clock drift (issue #160).
+/// Staleness is already covered by the nonce TTL, so there is deliberately
+/// no lower bound here.
 const ISSUED_AT_LEEWAY: time::Duration = time::Duration::seconds(120);
 
 /// Upper bound on how far a SIWE message's `Expiration Time` may sit past
 /// server time. SIWE makes expiry optional; issue #160 requires it and
 /// bounds it so a captured message cannot stay valid indefinitely —
-/// defense-in-depth around the single-use nonce. Sized at ~2x the nonce
-/// TTL (300 s) to absorb honest client clock skew and the client's own
-/// expiry slack without false-rejecting real logins; the nonce remains
-/// the authoritative single-use freshness bound.
-const MAX_EXPIRY_WINDOW: time::Duration = time::Duration::seconds(600);
+/// defense-in-depth around the single-use nonce. Derived as 2x [`NONCE_TTL`]
+/// to absorb honest client clock skew and the client's own expiry slack
+/// without false-rejecting real logins; deriving it (rather than restating
+/// 600 s) keeps it from silently drifting if the nonce TTL changes. The
+/// nonce remains the authoritative single-use freshness bound.
+const MAX_EXPIRY_WINDOW: time::Duration = time::Duration::seconds(2 * NONCE_TTL_SECS as i64);
 
 pub fn verify_siwe_message(
     message_str: &str,
