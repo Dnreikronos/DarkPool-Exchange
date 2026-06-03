@@ -695,7 +695,9 @@ mod tests {
         // 0.0.0.0 (the default) is unspecified, not loopback — externally
         // reachable, so plaintext there must be refused at boot.
         let cfg = cfg_with_bind("0.0.0.0:9090", "0.0.0.0:8080", false);
-        let err = cfg.validate_plaintext_bind(&TlsMode::Plaintext).unwrap_err();
+        let err = cfg
+            .validate_plaintext_bind(&TlsMode::Plaintext)
+            .unwrap_err();
         assert!(err.contains("0.0.0.0:9090"), "msg: {err}");
         assert!(err.contains("0.0.0.0:8080"), "msg: {err}");
         assert!(err.contains("--insecure"), "msg: {err}");
@@ -712,9 +714,14 @@ mod tests {
     fn plaintext_bind_flags_only_the_exposed_listener() {
         // gRPC on loopback, REST on every interface → only REST is flagged.
         let cfg = cfg_with_bind("127.0.0.1:9090", "0.0.0.0:8080", false);
-        let err = cfg.validate_plaintext_bind(&TlsMode::Plaintext).unwrap_err();
+        let err = cfg
+            .validate_plaintext_bind(&TlsMode::Plaintext)
+            .unwrap_err();
         assert!(err.contains("0.0.0.0:8080"), "msg: {err}");
-        assert!(!err.contains("9090"), "loopback listener must not be flagged: {err}");
+        assert!(
+            !err.contains("9090"),
+            "loopback listener must not be flagged: {err}"
+        );
     }
 
     #[test]
