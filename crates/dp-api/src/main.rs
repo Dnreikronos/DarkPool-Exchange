@@ -303,7 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let siwe_state = if cfg.siwe_enabled {
         let secret = cfg.session_secret().unwrap();
         let jwt_manager = Arc::new(dp_api::siwe::JwtManager::new(secret, cfg.session_ttl));
-        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(Duration::from_secs(300)));
+        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(dp_api::siwe::NONCE_TTL));
         nonce_store.start_cleanup(cancel.clone(), Duration::from_secs(60));
         let chain_id = if cfg.chain_id > 0 {
             Some(cfg.chain_id)
