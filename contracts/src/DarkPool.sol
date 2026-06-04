@@ -277,13 +277,43 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint256 fee = notional * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         uint256 askReceives = notional - fee;
 
-        reserved[m.bidTrader][m.quoteToken] -= notional;
+        _consumeReserved(m.bidTrader, m.quoteToken, notional);
         balances[m.bidTrader][m.baseToken] += m.size;
 
-        reserved[m.askTrader][m.baseToken] -= m.size;
+        _consumeReserved(m.askTrader, m.baseToken, m.size);
         balances[m.askTrader][m.quoteToken] += askReceives;
 
         balances[feeRecipient][m.quoteToken] += fee;
+    }
+
+    /// @dev Spend `amount` of a trader's reserved collateral at settlement.
+    ///      A matched trade takes priority over a pending unbond, so
+    ///      free-reserved funds are consumed first and `pendingUnreserve` only
+    ///      shrinks when the match must reach into funds the trader had asked to
+    ///      unlock. Retiring the pending request (and clearing
+    ///      `unreserveReadyAt` once it hits zero) is what stops a stale unbond
+    ///      timer from later releasing freshly reserved collateral with no
+    ///      cooldown: otherwise settlement would zero `reserved` while leaving a
+    ///      matured timer, and the trader's next `reserve` would be instantly
+    ///      releasable — reopening the #165 withdraw-before-settlement vector.
+    ///      The `reserved -= amount` keeps its checked-math underflow, which is
+    ///      the intended fail-safe that reverts the whole batch when a trader
+    ///      lacks sufficient reserved funds.
+    function _consumeReserved(address trader, address token, uint256 amount) internal {
+        uint256 r = reserved[trader][token];
+        reserved[trader][token] = r - amount;
+
+        uint256 p = pendingUnreserve[trader][token];
+        if (p != 0) {
+            uint256 freeReserved = r > p ? r - p : 0;
+            if (amount > freeReserved) {
+                uint256 newPending = p - (amount - freeReserved);
+                pendingUnreserve[trader][token] = newPending;
+                if (newPending == 0) {
+                    unreserveReadyAt[trader][token] = 0;
+                }
+            }
+        }
     }
 
     function addOperator(address op) external onlyOwner {

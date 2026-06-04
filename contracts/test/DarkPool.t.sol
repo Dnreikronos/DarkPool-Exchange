@@ -968,14 +968,17 @@ contract DarkPoolTest is Test {
         assertEq(pool.reserved(trader2, address(baseToken)), 0);
         assertEq(pool.balances(trader2, address(quoteToken)), notional - fee);
 
-        // After the delay the unbond releases only what's left (nothing): the
-        // trade legitimately consumed the reserved funds, no underflow.
+        // Settlement consumed the reserved funds and retired the pending
+        // request with them: nothing is left to release, and no stale timer
+        // lingers to unlock future reserves early.
+        assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
+        assertEq(pool.unreserveReadyAt(trader1, address(quoteToken)), 0);
         vm.warp(block.timestamp + pool.UNRESERVE_DELAY());
         vm.prank(trader1);
+        vm.expectRevert("nothing pending");
         pool.releaseUnreserve(address(quoteToken));
         assertEq(pool.reserved(trader1, address(quoteToken)), 0);
         assertEq(pool.balances(trader1, address(quoteToken)), 0);
-        assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
     }
 
     function test_submitBatch_revertsWhenFundsNotReserved() public {
@@ -1061,6 +1064,57 @@ contract DarkPoolTest is Test {
         assertEq(pool.reserved(trader1, address(quoteToken)), notional);
         assertEq(pool.balances(trader1, address(baseToken)), 0);
         assertEq(pool.reserved(trader2, address(baseToken)), size);
+    }
+
+    /// #165 stale-unbond regression: settlement that consumes reserved funds
+    /// must also retire the matching pendingUnreserve and its maturity timer.
+    /// Otherwise a trader could arm an unbond, let a match consume it, reserve
+    /// fresh funds, and yank them out the instant the stale timer matures —
+    /// front-running the next settlement with no fresh cooldown.
+    function test_settlementRetiresPendingUnreserve_freshReserveStaysLocked() public {
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        // trader1 arms an unbond on the exact funds about to be matched.
+        vm.prank(trader1);
+        pool.requestUnreserve(address(quoteToken), notional);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+
+        // Settlement consumes trader1's reserved quote; the pending request and
+        // its timer must be cleared, not left dangling.
+        vm.prank(operator);
+        pool.submitBatch(bytes32(uint256(11)), bytes32(0), new bytes(256), inputs, matches);
+        assertEq(pool.reserved(trader1, address(quoteToken)), 0);
+        assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
+        assertEq(pool.unreserveReadyAt(trader1, address(quoteToken)), 0);
+
+        // trader1 reserves fresh quote to trade again.
+        _depositAndReserve(trader1, address(quoteToken), notional);
+
+        // Past the ORIGINAL deadline the fresh reserve must NOT be releasable:
+        // settlement retired the stale request, so nothing is pending.
+        vm.warp(block.timestamp + pool.UNRESERVE_DELAY());
+        vm.prank(trader1);
+        vm.expectRevert("nothing pending");
+        pool.releaseUnreserve(address(quoteToken));
+        assertEq(pool.reserved(trader1, address(quoteToken)), notional);
     }
 
     // --- Helpers ---
