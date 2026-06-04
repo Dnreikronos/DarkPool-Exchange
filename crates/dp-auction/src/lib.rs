@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// carrying more precision than this, so a clearing price beyond it could
 /// never settle on-chain. Quantising here keeps the auction from emitting a
 /// price the encoder will later reject after the matches were already
-/// recorded (issue #167). Kept as a local literal rather than depending on
+/// recorded. Kept as a local literal rather than depending on
 /// `dp-zk` (which pulls in arkworks) for one constant; the two are pinned
 /// together by a guard test in `dp-engine` (the only crate depending on
 /// both), so drift in either becomes a test failure instead of a silent
@@ -123,7 +123,7 @@ fn compute_clearing_price(bids: &[Order], asks: &[Order]) -> Decimal {
     // Halving the midpoint of two prices can introduce one extra decimal
     // place (e.g. 0.00000001 and 0.00000002 → 0.000000015). The ZK encoder
     // rejects anything beyond `CLEARING_PRICE_DP` dp, which previously let the
-    // engine record matches it could never settle (issue #167). Round the
+    // engine record matches it could never settle. Round the
     // midpoint to `CLEARING_PRICE_DP` dp so the clearing price is always
     // encodable; the rounded value stays within `[lo, hi]`, both of which are
     // volume-maximising clearing prices, so the matched set is unchanged.
@@ -250,7 +250,7 @@ mod tests {
         Uuid::nil()
     }
 
-    /// Issue #167: when the midpoint of two tied clearing prices would carry
+    /// When the midpoint of two tied clearing prices would carry
     /// more than 8 dp (odd last digit halved), it must be quantised down to a
     /// price the ZK encoder accepts — and stay within `[lo, hi]`, both of
     /// which are valid volume-maximising clearing prices.

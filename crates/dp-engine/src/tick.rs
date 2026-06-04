@@ -46,7 +46,7 @@ pub(crate) struct PendingAggregation {
 /// scalar. The downstream witness build / IVC fold encodes the clearing price
 /// via `dp_zk::decimal_to_scalar`; if that fails *after* the round's
 /// `AuctionExecuted`/`OrderMatched` events are persisted and applied, the
-/// engine has recorded matches that can never settle on-chain (#167). Order
+/// engine has recorded matches that can never settle on-chain. Order
 /// legs are already encode-checked when their commitment is built at
 /// submission, so the clearing price is the one value this gate must guard.
 fn clearing_price_encodable(
@@ -326,7 +326,7 @@ impl Engine {
             };
             let auction_elapsed = auction_start.elapsed();
 
-            // #167: never record a match the engine cannot settle. The
+            // Never record a match the engine cannot settle. The
             // clearing price is the only auction output not already
             // encode-validated upstream — order prices and sizes are checked
             // when their Poseidon commitment is built at submission, but the
@@ -530,7 +530,7 @@ mod tests {
         }
     }
 
-    /// #167: the gate must reject a clearing price the ZK encoder cannot
+    /// The gate must reject a clearing price the ZK encoder cannot
     /// represent (here, 9 dp) and accept an 8-dp one — so event persistence is
     /// blocked for exactly the unsettleable case.
     #[test]
@@ -548,7 +548,7 @@ mod tests {
         );
     }
 
-    /// Drift guard (#167): `dp_auction` quantises the clearing price to
+    /// `dp_auction` quantises the clearing price to
     /// `CLEARING_PRICE_DP` dp, and the gate above accepts up to
     /// `dp_zk::encoding::DECIMAL_SCALE` dp. The coupling is otherwise only a
     /// doc-comment. If the two diverge — e.g. the encoder scale drops to 6
@@ -829,7 +829,7 @@ mod ivc_tests {
         assert_eq!(agg.finalize_calls(), 0);
     }
 
-    /// Issue #167 regression: a cross whose midpoint clearing price would carry
+    /// A cross whose midpoint clearing price would carry
     /// 9 dp (best bid 0.00000002, best ask 0.00000001 → midpoint 0.000000015)
     /// must record the match *and* fold it. Before the fix the 9-dp price
     /// failed `decimal_to_scalar`, so the fold was skipped *after* the
