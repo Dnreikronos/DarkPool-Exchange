@@ -1124,6 +1124,26 @@ mod tests {
         );
     }
 
+    /// Boundary of the ask-side check: a seller holding *exactly* the filled
+    /// base size (`ask_balance == m_size`) is fully collateralized and must be
+    /// accepted. The diff `ask_balance - m_size` is zero, still in range. This
+    /// pins the constraint to `>=` rather than `>` — a seller delivering its
+    /// entire base balance still settles (#170).
+    #[test]
+    fn step_accepts_seller_holding_exactly_base_size() {
+        let (mut w, prices, sizes) = sample_witness();
+        // m_size = 10; seller holds exactly 10 base → diff is 0, still solvent.
+        w.matches[0].ask.balance = Decimal::from(10);
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "seller holding exactly the filled base size must satisfy solvency (>=, not >)"
+        );
+    }
+
     #[test]
     fn step_rejects_forged_trader_id() {
         let (mut w, prices, sizes) = sample_witness();
