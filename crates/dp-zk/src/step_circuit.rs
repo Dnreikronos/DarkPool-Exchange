@@ -694,11 +694,25 @@ impl FCircuit<Fr> for AuctionStepCircuit {
             let notional = &m_price * &m_size;
 
             // ── Family 7: solvency ────────────────────────────────────────────
+            // The two legs settle different assets, so each leg's balance is
+            // denominated in the asset that leg spends and the checks differ in
+            // both asset and scale (#170). This mirrors the on-chain
+            // `_settleMatch`, which debits the bid `notional` of `quoteToken`
+            // and the ask `m.size` of `baseToken`:
+            //   • bid_balance is the buyer's quote holdings. `notional` carries
+            //     a 1e16 scale (price·size, each pre-scaled by 1e8), so lift the
+            //     1e8-scaled balance by `scale_factor` before comparing —
+            //     `bid_balance >= notional` ⇔ buyer holds the quote it pays.
+            //   • ask_balance is the seller's base holdings, already at the same
+            //     1e8 scale as `m_size`, so compare directly —
+            //     `ask_balance >= m_size` ⇔ seller holds the base it delivers.
+            // Checking the ask against `notional` (quote units) constrained the
+            // wrong asset and rejected sellers who held enough base.
             enforce_range_60(&bid_balance)?;
             enforce_range_60(&ask_balance)?;
             let bid_solvency_diff = (&bid_balance * &scale_factor - &notional) * &is_active;
             enforce_range_n(&bid_solvency_diff, SOLVENCY_DIFF_BITS)?;
-            let ask_solvency_diff = (&ask_balance * &scale_factor - &notional) * &is_active;
+            let ask_solvency_diff = (&ask_balance - &m_size) * &is_active;
             enforce_range_n(&ask_solvency_diff, SOLVENCY_DIFF_BITS)?;
 
             // ── Family 8: position limit (two-sided) ──────────────────────────
@@ -1058,7 +1072,8 @@ mod tests {
     #[test]
     fn step_rejects_insufficient_balance() {
         let (mut w, prices, sizes) = sample_witness();
-        // notional = 100 * 10 = 1000; balance 500 < 1000 → solvency fails
+        // notional = 100 * 10 = 1000; bid balance 500 < 1000 → solvency fails.
+        // The bid (buyer) pays `notional` in the quote asset.
         w.matches[0].bid.balance = Decimal::from(500);
         let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let z_0 = initial_z(&ext);
@@ -1067,6 +1082,45 @@ mod tests {
         assert!(
             !satisfied,
             "expected constraint system to be unsatisfied (insufficient balance)"
+        );
+    }
+
+    /// A seller's collateral is the BASE asset it delivers (`size`), not the
+    /// quote `notional` the buyer pays. The on-chain `_settleMatch` debits
+    /// `m.size` base from the ask, so the circuit must check
+    /// `ask_balance(base) >= m_size`, not `>= notional`. Here the seller holds
+    /// 50 base — far below `notional` (1000) but well above the filled size
+    /// (10). A correct ask-side check accepts this; the old notional-based
+    /// check wrongly rejected a fully collateralized seller (#170).
+    #[test]
+    fn step_accepts_seller_collateralized_in_base() {
+        let (mut w, prices, sizes) = sample_witness();
+        w.matches[0].ask.balance = Decimal::from(50);
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "seller holding >= the filled base size must satisfy solvency"
+        );
+    }
+
+    /// The dual of the above: a seller that does not hold even the base it is
+    /// selling (`ask_balance < m_size`) must still be rejected — #170
+    /// re-denominates the ask check, it does not remove it.
+    #[test]
+    fn step_rejects_seller_short_of_base_size() {
+        let (mut w, prices, sizes) = sample_witness();
+        // m_size = 10; seller holds only 5 base → cannot deliver the fill.
+        w.matches[0].ask.balance = Decimal::from(5);
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            !satisfied,
+            "seller short of the base it sells must fail solvency"
         );
     }
 
