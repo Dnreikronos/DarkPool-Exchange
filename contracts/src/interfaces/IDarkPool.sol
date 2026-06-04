@@ -27,9 +27,20 @@ interface IDarkPool {
     /// @notice Emitted when the owner adds or removes a token from the
     ///         deposit allowlist. `allowed` is the new state.
     event TokenAllowed(address indexed token, bool allowed);
+    /// @notice Free balance locked into the settlement escrow (`reserved`).
+    event Reserved(address indexed trader, address indexed token, uint256 amount);
+    /// @notice An unlock of reserved funds was requested. `readyAt` is the
+    ///         timestamp after which `releaseUnreserve` will succeed; until
+    ///         then the funds stay in escrow and remain claimable by settlement.
+    event UnreserveRequested(address indexed trader, address indexed token, uint256 amount, uint256 readyAt);
+    /// @notice Matured reserved funds were moved back to free balance.
+    event Unreserved(address indexed trader, address indexed token, uint256 amount);
     function deposit(address token, uint256 amount) external;
     function setTokenAllowed(address token, bool allowed) external;
     function withdraw(address token, uint256 amount) external;
+    function reserve(address token, uint256 amount) external;
+    function requestUnreserve(address token, uint256 amount) external;
+    function releaseUnreserve(address token) external;
     function submitBatch(
         bytes32 batchId,
         bytes32 auctionId,

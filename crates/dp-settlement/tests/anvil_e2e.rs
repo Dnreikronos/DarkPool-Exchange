@@ -225,6 +225,12 @@ async fn settles_batch_end_to_end() {
     await_tx!(pool.setTokenAllowed(quote_addr, true));
     await_tx!(pool.deposit(base_addr, size));
     await_tx!(pool.deposit(quote_addr, notional));
+    // Settlement debits the locked `reserved` escrow (#165), so matched funds
+    // must be reserved out of free balance before the batch can settle.
+    // signer_addr is both bid and ask here: reserve quote for the bid leg and
+    // base for the ask leg.
+    await_tx!(pool.reserve(quote_addr, notional));
+    await_tx!(pool.reserve(base_addr, size));
     await_tx!(pool.addOperator(signer_addr));
 
     // Spawn watcher and await its subscribe_logs handshake before submitting.
