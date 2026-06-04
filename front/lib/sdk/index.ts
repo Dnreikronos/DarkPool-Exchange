@@ -39,17 +39,6 @@ export {
   type GetOrderResponseJson,
   GetOrderResponseSchema,
 
-  // Order book
-  type GetOrderBookRequest,
-  type GetOrderBookRequestJson,
-  GetOrderBookRequestSchema,
-  type GetOrderBookResponse,
-  type GetOrderBookResponseJson,
-  GetOrderBookResponseSchema,
-  type PriceLevel,
-  type PriceLevelJson,
-  PriceLevelSchema,
-
   // Auctions
   type GetAuctionHistoryRequest,
   type GetAuctionHistoryRequestJson,
@@ -79,9 +68,9 @@ export {
   DarkPoolService,
 } from './proto/darkpool/v1/darkpool_pb.js'
 
-// Friendly alias: the proto names the orderbook payload
-// `GetOrderBookResponse`, but consumers think of it as the order book itself.
-export type { GetOrderBookResponse as OrderBook } from './proto/darkpool/v1/darkpool_pb.js'
+// Order book — mock-only since #178 removed it from the wire. These are
+// hand-written domain types, not generated from the proto. See ./orderbook.
+export type { OrderBook, OrderBookRequest, PriceLevel } from './orderbook.js'
 
 // ─── F1.2 mocks (#69) ────────────────────────────────────────────────────
 //

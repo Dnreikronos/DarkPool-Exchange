@@ -1,12 +1,11 @@
-import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 
-import { PriceLevelSchema } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import type { PriceLevel } from '@/lib/sdk/orderbook'
 
 import { computeDepthRows, formatDelta } from './depth'
 
-function level(price: string, totalSize: string, orderCount = 1) {
-  return create(PriceLevelSchema, { price, totalSize, orderCount })
+function level(price: string, totalSize: string, orderCount = 1): PriceLevel {
+  return { price, totalSize, orderCount }
 }
 
 describe('computeDepthRows', () => {

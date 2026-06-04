@@ -1,8 +1,5 @@
-import type {
-  AuctionSummary,
-  GetOrderBookResponse,
-  PriceLevel,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { AuctionSummary } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { OrderBook, PriceLevel } from '@/lib/sdk/orderbook'
 import { Decimal } from '@/lib/units'
 
 export interface DepthPoint {
@@ -43,7 +40,7 @@ function cumulate(levels: readonly PriceLevel[]): DepthPoint[] {
   return out
 }
 
-export function buildDepthSeries(book: GetOrderBookResponse): DepthSeries {
+export function buildDepthSeries(book: OrderBook): DepthSeries {
   const bids = cumulate(book.bids)
   const asks = cumulate(book.asks)
 

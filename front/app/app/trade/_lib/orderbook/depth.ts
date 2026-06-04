@@ -1,6 +1,6 @@
 import { Decimal } from '@/lib/units'
 
-import type { PriceLevel } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import type { PriceLevel } from '@/lib/sdk/orderbook'
 
 export interface DepthRow {
   level: PriceLevel

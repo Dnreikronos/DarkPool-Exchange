@@ -1,25 +1,18 @@
 import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 
-import {
-  GetOrderBookResponseSchema,
-  PriceLevelSchema,
-  AuctionSummarySchema,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
-import type {
-  AuctionSummary,
-  GetOrderBookResponse,
-  PriceLevel,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import { AuctionSummarySchema } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { AuctionSummary } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { OrderBook, PriceLevel } from '@/lib/sdk/orderbook'
 
 import { TIMEFRAME_MS, buildDepthSeries, selectAuctionsInWindow } from './selectors'
 
 function level(price: string, totalSize: string, orderCount = 1): PriceLevel {
-  return create(PriceLevelSchema, { price, totalSize, orderCount })
+  return { price, totalSize, orderCount }
 }
 
-function book(bids: PriceLevel[], asks: PriceLevel[]): GetOrderBookResponse {
-  return create(GetOrderBookResponseSchema, { pair: 'ETH/USDC', bids, asks })
+function book(bids: PriceLevel[], asks: PriceLevel[]): OrderBook {
+  return { pair: 'ETH/USDC', bids, asks }
 }
 
 function auction(timestampUnix: number, clearingPrice: string): AuctionSummary {

@@ -18,7 +18,6 @@ import type { DescMessage, MessageShape } from '@bufbuild/protobuf'
 import {
   CancelOrderResponseSchema,
   GetAuctionHistoryResponseSchema,
-  GetOrderBookResponseSchema,
   GetOrderResponseSchema,
   OrderInfoSchema,
   PlaceOrderRequestSchema,
@@ -31,14 +30,15 @@ import type {
   CancelOrderResponse,
   GetAuctionHistoryRequest,
   GetAuctionHistoryResponse,
-  GetOrderBookRequest,
-  GetOrderBookResponse,
   GetOrderRequest,
   GetOrderResponse,
   PlaceOrderRequest,
   PlaceOrderResponse,
   StreamAuctionsRequest,
 } from './proto/darkpool/v1/darkpool_pb.js'
+// The order book is mock-only since #178 removed it from the wire — see
+// ./orderbook for the rationale. These types are hand-written, not generated.
+import type { OrderBook, OrderBookRequest } from './orderbook.js'
 
 // ─── Error model ──────────────────────────────────────────────────────────
 //
@@ -154,7 +154,7 @@ export interface DarkPoolClient {
   placeOrder(req: PlaceOrderRequest): Promise<PlaceOrderResponse>
   cancelOrder(req: CancelOrderRequest): Promise<CancelOrderResponse>
   getOrder(req: GetOrderRequest): Promise<GetOrderResponse>
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse>
+  getOrderBook(req: OrderBookRequest): Promise<OrderBook>
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse>
   streamAuctions(req: StreamAuctionsRequest, opts?: StreamOptions): AsyncIterable<AuctionEvent>
 }
@@ -217,11 +217,19 @@ export class RestClient implements DarkPoolClient {
     )
   }
 
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
-    const search = new URLSearchParams()
-    if (req.pair) search.set('pair', req.pair)
-    const qs = search.toString()
-    return this.requestJson('GET', `/v1/orderbook${qs ? `?${qs}` : ''}`, GetOrderBookResponseSchema)
+  async getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
+    void req
+    // #178 removed the public pre-settlement order book from the backend
+    // (no GET /v1/orderbook). A dark pool deliberately hides cross-trader
+    // depth, so there is no real endpoint to call — the panel runs on the
+    // mock store. Keep this method on the interface (the UI calls it) but
+    // make the REST path an explicit, actionable failure.
+    throw new DarkPoolError(
+      DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+      'The public order book was removed in #178 — a dark pool does not expose ' +
+        'pre-settlement depth. Set NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=true to run the ' +
+        'panel on the mock store.'
+    )
   }
 
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {
@@ -354,12 +362,8 @@ export class MockClient implements DarkPoolClient {
     return create(GetOrderResponseSchema, { order })
   }
 
-  async getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
-    return create(GetOrderBookResponseSchema, {
-      pair: req.pair || this.pair,
-      bids: [],
-      asks: [],
-    })
+  async getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
+    return { pair: req.pair || this.pair, bids: [], asks: [] }
   }
 
   async getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {
@@ -456,7 +460,7 @@ class RoutingClient implements DarkPoolClient {
   getOrder(req: GetOrderRequest): Promise<GetOrderResponse> {
     return this.pick('getOrder').getOrder(req)
   }
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
+  getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
     return this.pick('getOrderBook').getOrderBook(req)
   }
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {

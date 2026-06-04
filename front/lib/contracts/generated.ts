@@ -42,6 +42,13 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
+    inputs: [{ name: '', internalType: 'address', type: 'address' }],
+    name: 'allowedTokens',
+    outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
     name: 'auctionToSession',
     outputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
@@ -211,6 +218,16 @@ export const darkPoolAbi = [
       { name: 'positionLimit_', internalType: 'uint256', type: 'uint256' },
     ],
     name: 'setPolicy',
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    inputs: [
+      { name: 'token', internalType: 'address', type: 'address' },
+      { name: 'allowed', internalType: 'bool', type: 'bool' },
+    ],
+    name: 'setTokenAllowed',
     outputs: [],
     stateMutability: 'nonpayable',
   },
@@ -508,6 +525,20 @@ export const darkPoolAbi = [
       },
     ],
     name: 'SessionSubmitted',
+  },
+  {
+    type: 'event',
+    anonymous: false,
+    inputs: [
+      {
+        name: 'token',
+        internalType: 'address',
+        type: 'address',
+        indexed: true,
+      },
+      { name: 'allowed', internalType: 'bool', type: 'bool', indexed: false },
+    ],
+    name: 'TokenAllowed',
   },
   {
     type: 'event',
