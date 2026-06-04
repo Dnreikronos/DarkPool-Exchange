@@ -42,6 +42,19 @@ pub(crate) struct PendingAggregation {
     pub auction_at: chrono::DateTime<Utc>,
 }
 
+/// Returns `Err` if the auction's clearing price cannot be encoded as a BN254
+/// scalar. The downstream witness build / IVC fold encodes the clearing price
+/// via `dp_zk::decimal_to_scalar`; if that fails *after* the round's
+/// `AuctionExecuted`/`OrderMatched` events are persisted and applied, the
+/// engine has recorded matches that can never settle on-chain (#167). Order
+/// legs are already encode-checked when their commitment is built at
+/// submission, so the clearing price is the one value this gate must guard.
+fn clearing_price_encodable(
+    result: &dp_auction::AuctionResult,
+) -> Result<(), dp_zk::EncodingError> {
+    dp_zk::decimal_to_scalar(result.clearing_price).map(|_| ())
+}
+
 impl Engine {
     #[tracing::instrument(name = "dp_engine.auction_tick", skip(self))]
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
@@ -313,6 +326,26 @@ impl Engine {
             };
             let auction_elapsed = auction_start.elapsed();
 
+            // #167: never record a match the engine cannot settle. The
+            // clearing price is the only auction output not already
+            // encode-validated upstream — order prices and sizes are checked
+            // when their Poseidon commitment is built at submission, but the
+            // midpoint is derived here and can carry sub-tick precision.
+            // `dp_auction` quantises it to 8 dp; this gate is the invariant
+            // that guarantees no unsettleable `AuctionExecuted`/`OrderMatched`
+            // event is ever persisted, even if that quantisation regresses.
+            // On failure, skip the round without persisting or applying any
+            // events — the orders stay live and are retried next tick.
+            if let Err(e) = clearing_price_encodable(&result) {
+                tracing::error!(
+                    auction_id = %result.auction_id,
+                    pair = %pair,
+                    clearing_price = %result.clearing_price,
+                    "clearing price not ZK-encodable; skipping round without recording matches: {e}"
+                );
+                continue;
+            }
+
             let mut events: Vec<Event> = Vec::with_capacity(1 + result.matches.len());
             events.push(Event {
                 seq: 0,
@@ -485,6 +518,34 @@ mod tests {
     fn fresh_engine() -> Engine {
         let store = Arc::new(MemStore::new());
         Engine::new(store, Duration::from_millis(50))
+    }
+
+    fn auction_result_with_price(clearing_price: Decimal) -> dp_auction::AuctionResult {
+        dp_auction::AuctionResult {
+            auction_id: Uuid::new_v4(),
+            pair: "ETH/USDC".into(),
+            clearing_price,
+            matched_volume: Decimal::ONE,
+            matches: Vec::new(),
+        }
+    }
+
+    /// #167: the gate must reject a clearing price the ZK encoder cannot
+    /// represent (here, 9 dp) and accept an 8-dp one — so event persistence is
+    /// blocked for exactly the unsettleable case.
+    #[test]
+    fn clearing_price_gate_rejects_excess_precision() {
+        let bad = auction_result_with_price(Decimal::new(15, 9)); // 0.000000015
+        assert!(
+            clearing_price_encodable(&bad).is_err(),
+            "9 dp clearing price must be rejected"
+        );
+
+        let good = auction_result_with_price(Decimal::new(2, 8)); // 0.00000002
+        assert!(
+            clearing_price_encodable(&good).is_ok(),
+            "8 dp clearing price must be accepted"
+        );
     }
 
     #[test]
@@ -748,5 +809,72 @@ mod ivc_tests {
         // Just verify construction + setter do not panic.
         assert_eq!(agg.fold_calls(), 0);
         assert_eq!(agg.finalize_calls(), 0);
+    }
+
+    /// Issue #167 regression: a cross whose midpoint clearing price would carry
+    /// 9 dp (best bid 0.00000002, best ask 0.00000001 → midpoint 0.000000015)
+    /// must record the match *and* fold it. Before the fix the 9-dp price
+    /// failed `decimal_to_scalar`, so the fold was skipped *after* the
+    /// `OrderMatched` events were already persisted — a recorded fill that
+    /// never settled. The clearing price is now quantised to 8 dp, so the fold
+    /// runs.
+    #[tokio::test]
+    async fn fractional_midpoint_match_is_recorded_and_folds() {
+        use dp_event::Store;
+        use dp_types::EventType;
+
+        let (engine, store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        // Stay well below the finalize/submit boundary for this test.
+        engine.set_finalize_every(1000);
+
+        let ttl = Duration::from_secs(60);
+        place_plaintext_order(
+            &engine,
+            "ETH/USDC",
+            Side::Buy,
+            Decimal::new(2, 8), // 0.00000002
+            Decimal::ONE,
+            "key_bid",
+            ttl,
+        )
+        .await
+        .unwrap();
+        place_plaintext_order(
+            &engine,
+            "ETH/USDC",
+            Side::Sell,
+            Decimal::new(1, 8), // 0.00000001
+            Decimal::ONE,
+            "key_ask",
+            ttl,
+        )
+        .await
+        .unwrap();
+
+        engine.run_auction_tick().await;
+
+        let events = store.read_from(0, 10_000).unwrap();
+        let executed = events
+            .iter()
+            .filter(|e| e.event_type == EventType::AuctionExecuted)
+            .count();
+        let matched = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrderMatched)
+            .count();
+
+        assert_eq!(executed, 1, "auction must be recorded");
+        assert_eq!(matched, 1, "the fill must be recorded");
+        // The fold ran — i.e. the (quantised) clearing price encoded. Pre-fix
+        // this stayed 0 because `from_witness_with_admitted` rejected the
+        // 9-dp price after the matches had already been persisted.
+        assert_eq!(agg.fold_calls(), 1, "encodable clearing price must fold");
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "both orders fully filled and removed from the book"
+        );
     }
 }
