@@ -34,6 +34,11 @@ pub(crate) struct PendingAggregation {
     /// for a fully-consumed order it disappears from the book, so we
     /// cannot rely on `book.find_order` later when building the witness.
     pub orders: HashMap<Uuid, Order>,
+    /// Ids of every order live in the book when this auction ran — the round's
+    /// admitted set (#157). Captured under the state lock; the async proof path
+    /// resolves these to commitment leaves (via the secrets lock) to build the
+    /// admitted-set Merkle root that membership is proven against.
+    pub admitted_order_ids: Vec<Uuid>,
     pub auction_at: chrono::DateTime<Utc>,
 }
 
@@ -41,6 +46,16 @@ impl Engine {
     #[tracing::instrument(name = "dp_engine.auction_tick", skip(self))]
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
         let (notifications, pending, aggregator) = self.tick_under_lock();
+
+        // Broadcast the auction summaries before the ZK fold/finalize loop and
+        // on-chain submission below. Matching and the clearing price are fully
+        // settled once `tick_under_lock` returns; proving and settlement are
+        // downstream concerns a subscriber must not wait on. Folding a batch
+        // can take tens of seconds, so sending here keeps `StreamAuctions`
+        // latency bounded by the matching step rather than the proof pipeline.
+        for n in &notifications {
+            let _ = self.inner.subscribers.send(n.clone());
+        }
 
         let mut batches_to_submit = Vec::with_capacity(pending.len());
 
@@ -60,11 +75,16 @@ impl Engine {
 
             let match_prices: Vec<_> = p.matches.iter().map(|m| m.price).collect();
             let match_sizes: Vec<_> = p.matches.iter().map(|m| m.size).collect();
-            let ext = match dp_zk::step_circuit::AuctionExternalInputs::from_witness(
+            // Resolve the round's admitted set (#157) to commitment leaves off
+            // the state lock, then bind every settled leg's membership against
+            // the resulting root.
+            let admitted = self.admitted_commitments(&p.admitted_order_ids);
+            let ext = match dp_zk::step_circuit::AuctionExternalInputs::from_witness_with_admitted(
                 &witness,
                 &match_prices,
                 &match_sizes,
                 self.inner.batch_size,
+                &admitted,
             ) {
                 Ok(e) => e,
                 Err(e) => {
@@ -75,6 +95,9 @@ impl Engine {
                     continue;
                 }
             };
+            // Capture the admitted-set root before `ext` is moved into the
+            // fold; published in BatchFolded so a watcher can recompute it.
+            let input_root = dp_zk::fr_to_bytes32(ext.admitted_root).to_vec();
 
             if let Err(e) = aggregator.fold_step(p.pair.clone(), ext).await {
                 tracing::warn!(
@@ -101,6 +124,7 @@ impl Engine {
                     batch_id: p.batch_id,
                     round_index,
                     pair: p.pair.clone(),
+                    input_root: input_root.clone(),
                 },
             }]) {
                 tracing::warn!(
@@ -184,10 +208,6 @@ impl Engine {
 
                 batches_to_submit.push(p.batch_id);
             }
-        }
-
-        for n in &notifications {
-            let _ = self.inner.subscribers.send(n.clone());
         }
 
         let mut submit_set: HashSet<Uuid> = HashSet::with_capacity(batches_to_submit.len());
@@ -278,6 +298,13 @@ impl Engine {
             let bids: Vec<_> = state.book.bids(&pair);
             let asks: Vec<_> = state.book.asks(&pair);
 
+            // The admitted set for this round (#157): every order live in the
+            // book right now, before this tick's fills are applied. Snapshot
+            // the ids here under the state lock; commitments are resolved later
+            // off the lock (secrets→state ordering, see prune_dead_secrets).
+            let admitted_order_ids: Vec<Uuid> =
+                bids.iter().chain(asks.iter()).map(|o| o.id).collect();
+
             let auction_id = Uuid::new_v4();
             let auction_start = Instant::now();
             let result = match dp_auction::run(auction_id, &pair, &bids, &asks) {
@@ -367,6 +394,7 @@ impl Engine {
                     .map(|m| order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size))
                     .collect(),
                 orders: order_snapshot,
+                admitted_order_ids,
                 auction_at: now,
             });
         }
@@ -423,6 +451,7 @@ mod tests {
             encrypted_payload: Vec::new(),
             submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::seconds(60),
+            seq: 0,
         }
     }
 
@@ -447,6 +476,7 @@ mod tests {
                 price: Decimal::ONE,
                 size: Decimal::ONE,
             }],
+            admitted_order_ids: orders.keys().copied().collect(),
             orders,
             auction_at: Utc::now(),
         }
@@ -615,8 +645,8 @@ mod ivc_tests {
                 use ark_ff::Zero;
                 Ok(dp_zk::folding::FinalProof {
                     proof_bytes: vec![0u8; 32],
-                    z_0: [Fr::zero(); 4],
-                    z_n: [Fr::zero(); 4],
+                    z_0: [Fr::zero(); 5],
+                    z_n: [Fr::zero(); 5],
                     n_steps: 1,
                     policy_hash: Fr::zero(),
                 })

@@ -32,7 +32,7 @@ use crate::pb::{
     ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
-use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
+use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
 use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
@@ -149,13 +149,29 @@ pub struct OpsState {
 /// the auth-gated public + admin routers; load-balancer probes and the
 /// Prometheus scrape do not present API keys, so these paths must sit
 /// outside the auth layer.
-pub fn ops_router(state: OpsState) -> Router {
+/// Liveness/readiness probes. Deliberately **not** rate-limited: a 429
+/// from `/healthz` or `/readyz` reads as a failed probe, so throttling
+/// them lets aggressive orchestrator polling or a shared-NAT egress IP
+/// flip a healthy instance to false-unhealthy (pod restarts, LB pull).
+pub fn ops_probe_router(state: OpsState) -> Router {
     Router::new()
         .route("/healthz", get(rest_healthz))
         .route("/readyz", get(rest_readyz))
+        .with_state(state)
+}
+
+/// Ops endpoints that *are* rate-limited: the Prometheus scrape and the
+/// operator pubkey lookup. Both are unauthenticated, so they share the
+/// IP-keyed limiter with the SIWE routes (issue #159).
+pub fn ops_throttled_router(state: OpsState) -> Router {
+    Router::new()
         .route("/metrics", get(rest_metrics))
         .route("/v1/operator/pubkey", get(rest_operator_pubkey))
         .with_state(state)
+}
+
+pub fn ops_router(state: OpsState) -> Router {
+    ops_probe_router(state.clone()).merge(ops_throttled_router(state))
 }
 
 pub fn auth_router(state: SiweState) -> Router {
@@ -186,11 +202,23 @@ pub fn router_with_ops(
         key_admin_handler,
         auth,
         admin_auth,
-        ratelimit,
+        ratelimit.clone(),
     )
-    .merge(ops_router(ops));
+    // The auth (SIWE) and ops sub-routers sit outside the auth layer, so
+    // they get their own IP-keyed rate limiter — without it they would be
+    // an unthrottled login-DoS surface (issue #159). Keying is by peer IP
+    // only; the `x-api-key` header is untrusted on these routes. Liveness
+    // and readiness probes are mounted *before* the limiter so a throttled
+    // probe IP can never report the instance as unhealthy.
+    .merge(ops_probe_router(ops.clone()))
+    .merge(
+        ops_throttled_router(ops)
+            .layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+    );
     if let Some(siwe) = siwe_state {
-        base = base.merge(auth_router(siwe));
+        base = base.merge(
+            auth_router(siwe).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+        );
     }
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
@@ -284,10 +312,31 @@ struct VerifyResponse {
     address: String,
 }
 
-async fn rest_auth_nonce(State(state): State<SiweState>) -> Result<Json<NonceResponse>, ApiError> {
+async fn rest_auth_nonce(
+    State(state): State<SiweState>,
+    client: Option<Extension<ClientKey>>,
+) -> Result<Json<NonceResponse>, ApiError> {
+    // `ratelimit_ip_axum_mw` records the caller's IP key. In production
+    // that middleware always sits in front of this route (see
+    // `router_with_ops`), so a missing extension means a misconfigured
+    // stack, not a normal request — fall back to the shared `"anonymous"`
+    // budget (which serializes every caller through one 128-nonce cap) but
+    // warn loudly so the misconfiguration surfaces instead of silently
+    // collapsing every peer onto one budget.
+    let key = match client {
+        Some(Extension(c)) => c.0,
+        None => {
+            tracing::warn!(
+                "nonce request without ClientKey extension; \
+                 ratelimit_ip_axum_mw is not in the stack — \
+                 falling back to the shared anonymous nonce budget"
+            );
+            "anonymous".to_string()
+        }
+    };
     let nonce = state
         .nonce_store
-        .generate()
+        .generate_for(&key)
         .ok_or_else(|| ApiError(tonic::Status::resource_exhausted("nonce store full")))?;
     Ok(Json(NonceResponse { nonce }))
 }

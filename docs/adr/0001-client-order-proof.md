@@ -1,9 +1,62 @@
 # ADR 0001 — Client-side order proof circuit
 
-- **Status:** Accepted
+- **Status:** Accepted (design) — **NOT IMPLEMENTED**; verification deferred
 - **Date:** 2026-05-24
 - **Tag:** C5
 - **Issue:** [#85](https://github.com/Dnreikronos/DarkPool-Exchange/issues/85)
+- **Amended:** 2026-06-01 — see "Implementation status" below ([#158](https://github.com/Dnreikronos/DarkPool-Exchange/issues/158))
+
+## Implementation status (issue #158)
+
+> **What is cryptographically enforced today: the per-order proof is NOT.**
+> The live ingestion path (`Engine::place_encrypted_order`) accepts the
+> `proof` and `commitment` fields **unverified**. Order validity is
+> **operator-enforced**: the operator decrypts the ciphertext and re-derives
+> the canonical Poseidon commitment over the decrypted fields
+> (`derive_order_secrets`); that re-derived value — never the client's — is
+> persisted and carried into the settlement-grade batch IVC proof, which *is*
+> verified on-chain. The advertised per-order "proof of validity" is, for now,
+> operator-enforced redundancy, not a cryptographic guarantee at ingestion.
+
+This ADR's design (verify a per-order Groth16 at ingestion against a pinned
+canonical VK) is still the target, but it was **not** implementable as a
+single fix for #158, for two reasons:
+
+1. **Soundness of the original demo circuit.** The first cut ran
+   `Groth16::circuit_specific_setup` *per proof* with the prover's own RNG, so
+   the prover generated its own verifying key — a malicious prover could prove
+   an arbitrary commitment against a VK it chose. Issue #158 fixed this in
+   `dp-zk`: setup is now split from proving
+   (`generate_keys` → `prove_with_key` → `verify_proof_with_vk`), the per-proof
+   `setup_and_prove` is documented as **demo/fixture-only, unsound for
+   verification**, and `dp-zk-cli setup-commitment-circuit` generates the
+   canonical key pair **once**. A soundness regression test asserts a proof
+   minted under a foreign VK is rejected by the canonical VK.
+
+2. **Post-#153 commitment is not client-reproducible.** Since
+   [#153](https://github.com/Dnreikronos/DarkPool-Exchange/issues/153) the
+   engine binds `trader_id` to the verified on-chain address and derives the
+   `salt` **server-side**
+   (`SHA256("salt" ‖ server_nonce ‖ commitment_key ‖ order_id)`). The client
+   has neither the server nonce nor the server-assigned `order_id` at proving
+   time, so it cannot compute the commitment the engine derives. Because the
+   circuit's **only** public input is that commitment, "verify the proof
+   against the engine-derived commitment" can never pass as specified here.
+
+**To actually enforce a per-order proof (deferred to #97/#98)** one of these
+must change first:
+
+- **Richer public inputs:** expose `trader_id`, `side`, `limit_price`,
+  `order_size` as public inputs so the engine can bind the proof to the
+  decrypted fields without needing a client-reproducible commitment; OR
+- **Client-reproducible commitment:** let the client choose the salt and
+  compute the commitment (partially reverting #153's salt-at-rest), so the
+  engine-derived commitment equals the proof's public input.
+
+Either path also requires the one-time trusted-setup ceremony described in
+§6. Until then the engine path is honest about being operator-enforced; the
+sound keygen/verify primitives and the canonical-VK CLI are in place as the
+groundwork.
 
 ## Context
 

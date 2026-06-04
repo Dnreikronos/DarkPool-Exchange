@@ -8,6 +8,8 @@ import {IVerifier} from "../src/interfaces/IVerifier.sol";
 import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
+import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
+import {NoopTransferERC20} from "./mocks/NoopTransferERC20.sol";
 
 contract MockVerifier is IVerifier {
     bool public shouldReturn;
@@ -58,6 +60,11 @@ contract DarkPoolTest is Test {
 
         baseToken = new MockERC20("Base", "BASE", 18);
         quoteToken = new MockERC20("Quote", "QUOTE", 18);
+
+        // Allowlist the single MVP pair so deposits are accepted. Tokens
+        // not on the allowlist are rejected by deposit().
+        pool.setTokenAllowed(address(baseToken), true);
+        pool.setTokenAllowed(address(quoteToken), true);
     }
 
     // --- Deposit ---
@@ -93,7 +100,135 @@ contract DarkPoolTest is Test {
         vm.stopPrank();
     }
 
-    // --- Withdraw ---
+    // --- Deposit allowlist (#164) ---
+
+    function test_deposit_notAllowedToken_reverts() public {
+        MockERC20 rogue = new MockERC20("Rogue", "RGE", 18);
+        uint256 amount = 100e18;
+        rogue.mint(trader1, amount);
+
+        vm.startPrank(trader1);
+        rogue.approve(address(pool), amount);
+        vm.expectRevert("token not allowed");
+        pool.deposit(address(rogue), amount);
+        vm.stopPrank();
+    }
+
+    function test_setTokenAllowed_addsAndEmits() public {
+        MockERC20 token = new MockERC20("New", "NEW", 18);
+        assertFalse(pool.allowedTokens(address(token)));
+
+        vm.expectEmit(true, false, false, true);
+        emit IDarkPool.TokenAllowed(address(token), true);
+        pool.setTokenAllowed(address(token), true);
+
+        assertTrue(pool.allowedTokens(address(token)));
+    }
+
+    function test_setTokenAllowed_removesAndEmits() public {
+        assertTrue(pool.allowedTokens(address(quoteToken)));
+
+        vm.expectEmit(true, false, false, true);
+        emit IDarkPool.TokenAllowed(address(quoteToken), false);
+        pool.setTokenAllowed(address(quoteToken), false);
+
+        assertFalse(pool.allowedTokens(address(quoteToken)));
+    }
+
+    function test_setTokenAllowed_notOwner_reverts() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        pool.setTokenAllowed(address(quoteToken), false);
+    }
+
+    function test_setTokenAllowed_zeroToken_reverts() public {
+        vm.expectRevert("zero token");
+        pool.setTokenAllowed(address(0), true);
+    }
+
+    function test_deposit_afterDelisting_reverts() public {
+        pool.setTokenAllowed(address(quoteToken), false);
+
+        uint256 amount = 100e18;
+        quoteToken.mint(trader1, amount);
+        vm.startPrank(trader1);
+        quoteToken.approve(address(pool), amount);
+        vm.expectRevert("token not allowed");
+        pool.deposit(address(quoteToken), amount);
+        vm.stopPrank();
+    }
+
+    function test_withdraw_afterDelisting_succeeds() public {
+        // Delisting a token must not strand funds already deposited.
+        uint256 amount = 100e18;
+        _deposit(trader1, address(quoteToken), amount);
+
+        pool.setTokenAllowed(address(quoteToken), false);
+
+        vm.prank(trader1);
+        pool.withdraw(address(quoteToken), amount);
+
+        assertEq(pool.balances(trader1, address(quoteToken)), 0);
+        assertEq(quoteToken.balanceOf(trader1), amount);
+    }
+
+    // --- Deposit balance-delta accounting (fee-on-transfer) (#164) ---
+
+    function test_deposit_feeOnTransfer_creditsActualReceived() public {
+        // 100 bps (1%) fee-on-transfer token. A deposit of 100e18 transfers
+        // only 99e18 to the pool; balances must reflect the received 99e18,
+        // not the requested 100e18, or internal accounting goes insolvent.
+        FeeOnTransferERC20 fee = new FeeOnTransferERC20("Fee", "FEE", 100);
+        pool.setTokenAllowed(address(fee), true);
+
+        uint256 amount = 100e18;
+        uint256 expectedReceived = amount - (amount * 100 / 10_000); // 99e18
+        fee.mint(trader1, amount);
+
+        vm.startPrank(trader1);
+        fee.approve(address(pool), amount);
+        pool.deposit(address(fee), amount);
+        vm.stopPrank();
+
+        assertEq(pool.balances(trader1, address(fee)), expectedReceived);
+        assertEq(fee.balanceOf(address(pool)), expectedReceived);
+        // Internal accounting never exceeds real holdings.
+        assertEq(pool.balances(trader1, address(fee)), fee.balanceOf(address(pool)));
+    }
+
+    function test_deposit_feeOnTransfer_emitsReceivedAmount() public {
+        FeeOnTransferERC20 fee = new FeeOnTransferERC20("Fee", "FEE", 100);
+        pool.setTokenAllowed(address(fee), true);
+
+        uint256 amount = 100e18;
+        uint256 expectedReceived = 99e18;
+        fee.mint(trader1, amount);
+
+        vm.startPrank(trader1);
+        fee.approve(address(pool), amount);
+        vm.expectEmit(true, true, false, true);
+        emit IDarkPool.Deposit(trader1, address(fee), expectedReceived);
+        pool.deposit(address(fee), amount);
+        vm.stopPrank();
+    }
+
+    function test_deposit_noTokensReceived_reverts() public {
+        // A token whose transferFrom reports success but moves nothing yields
+        // a zero balance delta. deposit() must revert rather than credit a
+        // phantom balance.
+        NoopTransferERC20 noop = new NoopTransferERC20();
+        pool.setTokenAllowed(address(noop), true);
+
+        uint256 amount = 100e18;
+        noop.mint(trader1, amount);
+        vm.startPrank(trader1);
+        noop.approve(address(pool), amount);
+        vm.expectRevert("no tokens received");
+        pool.deposit(address(noop), amount);
+        vm.stopPrank();
+
+        assertEq(pool.balances(trader1, address(noop)), 0);
+    }
 
     function test_withdraw() public {
         uint256 amount = 100e18;

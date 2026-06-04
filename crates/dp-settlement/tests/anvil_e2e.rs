@@ -220,6 +220,9 @@ async fn settles_batch_end_to_end() {
     await_tx!(quote.approve(pool_addr, notional));
 
     let pool = DarkPool::new(pool_addr, &http_provider);
+    // deposit() rejects tokens not on the allowlist; allowlist the pair first.
+    await_tx!(pool.setTokenAllowed(base_addr, true));
+    await_tx!(pool.setTokenAllowed(quote_addr, true));
     await_tx!(pool.deposit(base_addr, size));
     await_tx!(pool.deposit(quote_addr, notional));
     await_tx!(pool.addOperator(signer_addr));

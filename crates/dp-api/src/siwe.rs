@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy_primitives::Address;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,42 +15,92 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_NONCES: usize = 10_000;
 
+/// Per-source-IP ceiling on outstanding nonces. Bounds a single IP's
+/// share of the global [`MAX_NONCES`] pool so one peer cannot fill the
+/// store and 429 every other user (issue #159). A real login consumes a
+/// handful of nonces, so 128 is generous headroom.
+const MAX_NONCES_PER_IP: usize = 128;
+
+#[derive(Debug)]
+struct NonceEntry {
+    created: Instant,
+    /// IP key (see [`crate::ratelimit::ip_client_key`]) that issued this
+    /// nonce, so `consume`/`evict_stale` can credit the slot back.
+    owner: String,
+}
+
+#[derive(Debug, Default)]
+struct NonceInner {
+    nonces: HashMap<String, NonceEntry>,
+    per_ip: HashMap<String, usize>,
+}
+
 #[derive(Debug)]
 pub struct NonceStore {
-    inner: Arc<Mutex<HashMap<String, Instant>>>,
+    inner: Arc<Mutex<NonceInner>>,
     ttl: Duration,
 }
 
 impl NonceStore {
     pub fn new(ttl: Duration) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(NonceInner::default())),
             ttl,
         }
     }
 
-    pub fn generate(&self) -> Option<String> {
-        let mut map = self.inner.lock();
-        if map.len() >= MAX_NONCES {
+    /// Issue a nonce attributed to `client_key` (the caller's IP). Returns
+    /// `None` if the global store is full or this key already holds
+    /// `MAX_NONCES_PER_IP` outstanding nonces.
+    pub fn generate_for(&self, client_key: &str) -> Option<String> {
+        let mut inner = self.inner.lock();
+        if inner.nonces.len() >= MAX_NONCES {
+            return None;
+        }
+        if inner.per_ip.get(client_key).copied().unwrap_or(0) >= MAX_NONCES_PER_IP {
             return None;
         }
         let nonce = siwe::generate_nonce();
-        map.insert(nonce.clone(), Instant::now());
+        inner.nonces.insert(
+            nonce.clone(),
+            NonceEntry {
+                created: Instant::now(),
+                owner: client_key.to_string(),
+            },
+        );
+        *inner.per_ip.entry(client_key.to_string()).or_insert(0) += 1;
         Some(nonce)
     }
 
+    /// Issue a nonce not attributed to any IP. Convenience for callers
+    /// without a resolved peer (tests); shares one `"anonymous"` per-IP
+    /// budget.
+    pub fn generate(&self) -> Option<String> {
+        self.generate_for("anonymous")
+    }
+
     pub fn consume(&self, nonce: &str) -> bool {
-        let mut map = self.inner.lock();
-        match map.remove(nonce) {
-            Some(created) => created.elapsed() <= self.ttl,
+        let mut inner = self.inner.lock();
+        match inner.nonces.remove(nonce) {
+            Some(entry) => {
+                decrement_owner(&mut inner.per_ip, &entry.owner);
+                entry.created.elapsed() <= self.ttl
+            }
             None => false,
         }
     }
 
     pub fn evict_stale(&self) {
-        let mut map = self.inner.lock();
         let ttl = self.ttl;
-        map.retain(|_, created| created.elapsed() <= ttl);
+        let mut inner = self.inner.lock();
+        let NonceInner { nonces, per_ip } = &mut *inner;
+        nonces.retain(|_, entry| {
+            let keep = entry.created.elapsed() <= ttl;
+            if !keep {
+                decrement_owner(per_ip, &entry.owner);
+            }
+            keep
+        });
     }
 
     pub fn start_cleanup(&self, cancel: CancellationToken, interval: Duration) {
@@ -71,11 +121,22 @@ impl NonceStore {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.lock().nonces.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner.lock().nonces.is_empty()
+    }
+}
+
+/// Decrement an owner's outstanding-nonce count, dropping the entry at
+/// zero so the per-IP map cannot grow unbounded across distinct peers.
+fn decrement_owner(per_ip: &mut HashMap<String, usize>, owner: &str) {
+    if let Some(count) = per_ip.get_mut(owner) {
+        *count -= 1;
+        if *count == 0 {
+            per_ip.remove(owner);
+        }
     }
 }
 
@@ -91,8 +152,14 @@ pub enum SiweError {
     NonceInvalid,
     #[error("SIWE message expired")]
     Expired,
+    #[error("SIWE message must set an expiration time")]
+    ExpirationRequired,
+    #[error("SIWE message expiration is too far in the future")]
+    ExpiryTooFar,
     #[error("SIWE message not yet valid")]
     NotYetValid,
+    #[error("SIWE message issued_at is in the future")]
+    IssuedInFuture,
     #[error("domain mismatch: expected {expected}, got {got}")]
     DomainMismatch { expected: String, got: String },
     #[error("chain ID mismatch: expected {expected}, got {got}")]
@@ -100,6 +167,31 @@ pub enum SiweError {
     #[error("signature verification failed: {0}")]
     Verification(String),
 }
+
+/// Server-side single-use nonce lifetime — the authoritative freshness
+/// bound for a SIWE login. The leeway and expiry-window bounds below are
+/// sized relative to this, so it is the single knob to turn; the binary
+/// builds its [`NonceStore`] from this exact value (no separate literal).
+pub const NONCE_TTL: Duration = Duration::from_secs(NONCE_TTL_SECS);
+const NONCE_TTL_SECS: u64 = 300;
+
+/// Clock-skew tolerance when validating the client-supplied `Issued At`.
+/// The authoritative freshness bound is the server nonce TTL ([`NONCE_TTL`]);
+/// this check only rejects a grossly future `issued_at`, so generous leeway
+/// avoids false rejections from honest client clock drift (issue #160).
+/// Staleness is already covered by the nonce TTL, so there is deliberately
+/// no lower bound here.
+const ISSUED_AT_LEEWAY: time::Duration = time::Duration::seconds(120);
+
+/// Upper bound on how far a SIWE message's `Expiration Time` may sit past
+/// server time. SIWE makes expiry optional; issue #160 requires it and
+/// bounds it so a captured message cannot stay valid indefinitely —
+/// defense-in-depth around the single-use nonce. Derived as 2x [`NONCE_TTL`]
+/// to absorb honest client clock skew and the client's own expiry slack
+/// without false-rejecting real logins; deriving it (rather than restating
+/// 600 s) keeps it from silently drifting if the nonce TTL changes. The
+/// nonce remains the authoritative single-use freshness bound.
+const MAX_EXPIRY_WINDOW: time::Duration = time::Duration::seconds(2 * NONCE_TTL_SECS as i64);
 
 pub fn verify_siwe_message(
     message_str: &str,
@@ -133,9 +225,21 @@ pub fn verify_siwe_message(
 
     let now = time::OffsetDateTime::now_utc();
 
-    if let Some(ref exp) = message.expiration_time {
-        if exp < &now {
-            return Err(SiweError::Expired);
+    if message.issued_at > now + ISSUED_AT_LEEWAY {
+        return Err(SiweError::IssuedInFuture);
+    }
+
+    // SIWE makes `Expiration Time` optional; issue #160 requires it and
+    // bounds it so a captured message cannot stay valid indefinitely.
+    match message.expiration_time {
+        None => return Err(SiweError::ExpirationRequired),
+        Some(ref exp) => {
+            if exp < &now {
+                return Err(SiweError::Expired);
+            }
+            if exp > &(now + MAX_EXPIRY_WINDOW) {
+                return Err(SiweError::ExpiryTooFar);
+            }
         }
     }
 
@@ -189,7 +293,10 @@ impl std::fmt::Debug for JwtManager {
 
 impl JwtManager {
     pub fn new(secret: &str, ttl: Duration) -> Self {
-        let mut validation = Validation::default();
+        // Pin the algorithm explicitly so a token cannot dictate it
+        // (defends against alg-confusion / `alg: none`). This matches the
+        // jsonwebtoken default but is stated for clarity (issue #160).
+        let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[JWT_ISSUER]);
         validation.set_audience(&[JWT_ISSUER]);
         Self {
@@ -283,12 +390,60 @@ mod tests {
     }
 
     #[test]
-    fn nonce_rejects_when_full() {
+    fn nonce_rejects_when_ip_cap_reached() {
         let store = NonceStore::new(Duration::from_secs(300));
-        for _ in 0..MAX_NONCES {
-            assert!(store.generate().is_some());
+        for _ in 0..MAX_NONCES_PER_IP {
+            assert!(store.generate_for("1.2.3.4").is_some());
         }
-        assert!(store.generate().is_none());
+        // The capped IP is shut out...
+        assert!(store.generate_for("1.2.3.4").is_none());
+        // ...but a different IP still gets served.
+        assert!(store.generate_for("5.6.7.8").is_some());
+    }
+
+    #[test]
+    fn nonce_rejects_when_global_cap_reached() {
+        let store = NonceStore::new(Duration::from_secs(300));
+        // Spread issuance across distinct keys so the per-IP cap never
+        // trips before the global one.
+        let mut issued = 0usize;
+        'fill: for ip in 0..1024u32 {
+            let key = format!("10.0.{}.{}", ip / 256, ip % 256);
+            for _ in 0..MAX_NONCES_PER_IP {
+                if store.generate_for(&key).is_none() {
+                    break 'fill;
+                }
+                issued += 1;
+            }
+        }
+        assert_eq!(issued, MAX_NONCES);
+        assert!(store.generate_for("fresh-ip").is_none());
+    }
+
+    #[test]
+    fn nonce_consume_frees_ip_budget() {
+        let store = NonceStore::new(Duration::from_secs(300));
+        let mut nonces = Vec::new();
+        for _ in 0..MAX_NONCES_PER_IP {
+            nonces.push(store.generate_for("1.2.3.4").unwrap());
+        }
+        assert!(store.generate_for("1.2.3.4").is_none());
+        // Consuming one returns a slot to that IP's budget.
+        assert!(store.consume(&nonces[0]));
+        assert!(store.generate_for("1.2.3.4").is_some());
+    }
+
+    #[test]
+    fn nonce_evict_frees_ip_budget() {
+        let store = NonceStore::new(Duration::from_secs(0));
+        for _ in 0..MAX_NONCES_PER_IP {
+            assert!(store.generate_for("1.2.3.4").is_some());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        store.evict_stale();
+        assert_eq!(store.len(), 0);
+        // Eviction credited the slots back, so the IP can issue again.
+        assert!(store.generate_for("1.2.3.4").is_some());
     }
 
     #[test]
@@ -383,7 +538,27 @@ mod tests {
     }
 
     fn make_siwe_message(address: &str, nonce: &str, chain_id: u64) -> String {
-        format!(
+        // A past `Issued At` is fine: freshness is bound by the server
+        // nonce TTL, not this field. A *future* one is rejected — see
+        // `verify_siwe_future_issued_at_rejected`.
+        make_siwe_message_at(address, nonce, chain_id, "2024-01-01T00:00:00Z")
+    }
+
+    fn make_siwe_message_at(address: &str, nonce: &str, chain_id: u64, issued_at: &str) -> String {
+        // Expiry is mandatory (issue #160); default to 5 min out, well
+        // inside `MAX_EXPIRY_WINDOW`, so the happy-path builders verify.
+        let exp = rfc3339_from_now(time::Duration::seconds(300));
+        make_siwe_message_full(address, nonce, chain_id, issued_at, Some(&exp))
+    }
+
+    fn make_siwe_message_full(
+        address: &str,
+        nonce: &str,
+        chain_id: u64,
+        issued_at: &str,
+        expiration_time: Option<&str>,
+    ) -> String {
+        let mut msg = format!(
             "localhost wants you to sign in with your Ethereum account:\n\
              {address}\n\
              \n\
@@ -393,8 +568,19 @@ mod tests {
              Version: 1\n\
              Chain ID: {chain_id}\n\
              Nonce: {nonce}\n\
-             Issued At: 2099-01-01T00:00:00Z"
-        )
+             Issued At: {issued_at}"
+        );
+        if let Some(exp) = expiration_time {
+            msg.push_str(&format!("\nExpiration Time: {exp}"));
+        }
+        msg
+    }
+
+    fn rfc3339_from_now(offset: time::Duration) -> String {
+        use time::format_description::well_known::Rfc3339;
+        (time::OffsetDateTime::now_utc() + offset)
+            .format(&Rfc3339)
+            .unwrap()
     }
 
     #[test]
@@ -407,6 +593,99 @@ mod tests {
         let sig = sign_eip191(&msg, &sk);
         let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
         assert!(result.is_ok(), "verify failed: {result:?}");
+    }
+
+    #[test]
+    fn verify_siwe_future_issued_at_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message_at(&addr_str, &nonce, 1, "2099-01-01T00:00:00Z");
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        // The nonce must survive a rejected message so an honest retry works.
+        assert!(store.consume(&nonce));
+    }
+
+    /// Pin the boundary of `ISSUED_AT_LEEWAY` (120 s): an `issued_at`
+    /// just inside the window is accepted, one well past it is rejected.
+    /// This locks the specific tolerance rather than only proving that a
+    /// year-2099 timestamp is bad.
+    #[test]
+    fn verify_siwe_issued_at_leeway_boundary() {
+        use time::format_description::well_known::Rfc3339;
+
+        let now = time::OffsetDateTime::now_utc();
+        let at = |offset: time::Duration| (now + offset).format(&Rfc3339).unwrap();
+
+        // 60 s into the future is within the 120 s leeway → accepted.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(60)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(result.is_ok(), "within-leeway message rejected: {result:?}");
+        }
+
+        // 200 s into the future is beyond the leeway → rejected.
+        {
+            let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+            let addr_str = eth_address(&sk);
+            let store = NonceStore::new(Duration::from_secs(300));
+            let nonce = store.generate().unwrap();
+            let msg = make_siwe_message_at(&addr_str, &nonce, 1, &at(time::Duration::seconds(200)));
+            let sig = sign_eip191(&msg, &sk);
+            let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+            assert!(matches!(result, Err(SiweError::IssuedInFuture)));
+        }
+    }
+
+    #[test]
+    fn verify_siwe_missing_expiry_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", None);
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::ExpirationRequired)));
+        // A rejected message must not burn the nonce — an honest retry works.
+        assert!(store.consume(&nonce));
+    }
+
+    #[test]
+    fn verify_siwe_expiry_too_far_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        // Well past the cap so this stays beyond it even with clock skew.
+        let exp = rfc3339_from_now(MAX_EXPIRY_WINDOW + time::Duration::seconds(600));
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", Some(&exp));
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::ExpiryTooFar)));
+        assert!(store.consume(&nonce));
+    }
+
+    #[test]
+    fn verify_siwe_expired_rejected() {
+        let sk = k256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let addr_str = eth_address(&sk);
+        let store = NonceStore::new(Duration::from_secs(300));
+        let nonce = store.generate().unwrap();
+        let exp = rfc3339_from_now(time::Duration::seconds(-60));
+        let msg = make_siwe_message_full(&addr_str, &nonce, 1, "2024-01-01T00:00:00Z", Some(&exp));
+        let sig = sign_eip191(&msg, &sk);
+        let result = verify_siwe_message(&msg, &sig, &store, Some(1), None);
+        assert!(matches!(result, Err(SiweError::Expired)));
+        assert!(store.consume(&nonce));
     }
 
     #[test]
