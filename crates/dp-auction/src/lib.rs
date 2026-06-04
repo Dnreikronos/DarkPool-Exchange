@@ -5,6 +5,15 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Decimal places the clearing price is quantised to. Must match
+/// `dp_zk::encoding::DECIMAL_SCALE`: the ZK scalar encoder rejects any value
+/// carrying more precision than this, so a clearing price beyond it could
+/// never settle on-chain. Quantising here keeps the auction from emitting a
+/// price the encoder will later reject after the matches were already
+/// recorded (issue #167). Kept as a local literal rather than depending on
+/// `dp-zk` (which pulls in arkworks) for one constant.
+const CLEARING_PRICE_DP: u32 = 8;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuctionResult {
     pub auction_id: Uuid,
@@ -108,7 +117,16 @@ fn compute_clearing_price(bids: &[Order], asks: &[Order]) -> Decimal {
 
     let lo = tied_prices[0];
     let hi = tied_prices[tied_prices.len() - 1];
-    ((lo + hi) / Decimal::from(2)).normalize()
+    // Halving the midpoint of two prices can introduce one extra decimal
+    // place (e.g. 0.00000001 and 0.00000002 → 0.000000015). The ZK encoder
+    // rejects anything beyond `CLEARING_PRICE_DP` dp, which previously let the
+    // engine record matches it could never settle (issue #167). Round the
+    // midpoint to `CLEARING_PRICE_DP` dp so the clearing price is always
+    // encodable; the rounded value stays within `[lo, hi]`, both of which are
+    // volume-maximising clearing prices, so the matched set is unchanged.
+    ((lo + hi) / Decimal::from(2))
+        .round_dp(CLEARING_PRICE_DP)
+        .normalize()
 }
 
 fn cumulative_volume(orders: &[Order], pred: impl Fn(&Order) -> bool) -> Decimal {
@@ -216,8 +234,52 @@ mod tests {
         }
     }
 
+    /// Like [`new_order`] but takes a `Decimal` price so tests can exercise
+    /// sub-integer (and sub-tick) prices.
+    fn new_order_px(side: Side, price: Decimal, size: i64) -> Order {
+        Order {
+            price,
+            ..new_order(side, 0, size)
+        }
+    }
+
     fn test_auction_id() -> Uuid {
         Uuid::nil()
+    }
+
+    /// Issue #167: when the midpoint of two tied clearing prices would carry
+    /// more than 8 dp (odd last digit halved), it must be quantised down to a
+    /// price the ZK encoder accepts — and stay within `[lo, hi]`, both of
+    /// which are valid volume-maximising clearing prices.
+    #[test]
+    fn clearing_price_quantized_to_encodable_precision() {
+        // Naive midpoint of these is 0.000000015 (9 dp), which
+        // `decimal_to_scalar` rejects — silently dropping a batch whose
+        // matches were already recorded.
+        let lo = Decimal::new(1, 8); // 0.00000001
+        let hi = Decimal::new(2, 8); // 0.00000002
+        let bids = vec![new_order_px(Side::Buy, hi, 10)];
+        let asks = vec![new_order_px(Side::Sell, lo, 10)];
+
+        let result = run(test_auction_id(), "TEST/USD", &bids, &asks).expect("expected result");
+
+        assert!(
+            result.clearing_price.scale() <= 8,
+            "clearing price {} must encode within 8 dp",
+            result.clearing_price
+        );
+        assert!(
+            result.clearing_price >= lo && result.clearing_price <= hi,
+            "quantised clearing price {} must stay within [{lo}, {hi}]",
+            result.clearing_price
+        );
+        assert!(
+            result
+                .matches
+                .iter()
+                .all(|m| m.price == result.clearing_price),
+            "every fill must price at the quantised clearing price"
+        );
     }
 
     #[test]
