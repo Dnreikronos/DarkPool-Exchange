@@ -548,6 +548,24 @@ mod tests {
         );
     }
 
+    /// Drift guard (#167): `dp_auction` quantises the clearing price to
+    /// `CLEARING_PRICE_DP` dp, and the gate above accepts up to
+    /// `dp_zk::encoding::DECIMAL_SCALE` dp. The coupling is otherwise only a
+    /// doc-comment. If the two diverge — e.g. the encoder scale drops to 6
+    /// while quantisation stays at 8 — every cross at the extra precision is
+    /// quantised to a price the gate then rejects, silently halting trading
+    /// for those prices. This crate is the only one depending on both, so the
+    /// equality is asserted here.
+    #[test]
+    fn quantize_precision_matches_zk_encoder_scale() {
+        assert_eq!(
+            dp_auction::CLEARING_PRICE_DP,
+            dp_zk::encoding::DECIMAL_SCALE,
+            "auction quantisation precision must match the ZK encoder scale; \
+             drift halts settlement for prices between the two"
+        );
+    }
+
     #[test]
     fn build_settlement_matches_returns_witness_missing_for_missing_bid() {
         let engine = fresh_engine();

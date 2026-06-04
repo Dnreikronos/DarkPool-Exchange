@@ -11,8 +11,11 @@ use uuid::Uuid;
 /// never settle on-chain. Quantising here keeps the auction from emitting a
 /// price the encoder will later reject after the matches were already
 /// recorded (issue #167). Kept as a local literal rather than depending on
-/// `dp-zk` (which pulls in arkworks) for one constant.
-const CLEARING_PRICE_DP: u32 = 8;
+/// `dp-zk` (which pulls in arkworks) for one constant; the two are pinned
+/// together by a guard test in `dp-engine` (the only crate depending on
+/// both), so drift in either becomes a test failure instead of a silent
+/// trading halt. Public solely so that guard can compare against it.
+pub const CLEARING_PRICE_DP: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuctionResult {
