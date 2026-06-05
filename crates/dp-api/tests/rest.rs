@@ -410,12 +410,14 @@ async fn sse_stream_no_pair_filter_returns_200() {
 async fn sse_stream_receives_auction_events() {
     let (app, engine) = registered_app();
 
-    // Place crossing orders so the auction tick produces a match.
-    let make_body = |side: dp_types::Side, price: &str| {
+    // Place crossing orders so the auction tick produces a match. Distinct
+    // traders per leg: self-trade prevention keys on `trader` (#168), so a
+    // shared address would make the bid/ask self-cross and emit no auction.
+    let make_body = |trader: alloy_primitives::Address, side: dp_types::Side, price: &str| {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
         let d = dp_crypto::DecryptedOrder {
-            trader: alloy_primitives::Address::ZERO,
+            trader,
             pair: "ETH/USDC".into(),
             side,
             price: price.parse().unwrap(),
@@ -431,9 +433,9 @@ async fn sse_stream_receives_auction_events() {
         .to_string()
     };
 
-    for (side, price) in [
-        (dp_types::Side::Buy, "1800"),
-        (dp_types::Side::Sell, "1800"),
+    for (trader, side, price) in [
+        (alloy_primitives::Address::repeat_byte(1), dp_types::Side::Buy, "1800"),
+        (alloy_primitives::Address::repeat_byte(2), dp_types::Side::Sell, "1800"),
     ] {
         let resp = app
             .clone()
@@ -442,7 +444,7 @@ async fn sse_stream_receives_auction_events() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
-                    .body(Body::from(make_body(side, price)))
+                    .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )
             .await

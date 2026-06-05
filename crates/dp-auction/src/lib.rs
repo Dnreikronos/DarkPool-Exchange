@@ -143,8 +143,8 @@ fn cumulative_volume(orders: &[Order], pred: impl Fn(&Order) -> bool) -> Decimal
 /// Greedy fill under strict price-time priority. `bids`/`asks` arrive already
 /// in `(price, seq)` order (established in [`run`]); each order is matched in
 /// that order against the opposing side, highest priority first, until its
-/// remaining size is exhausted. Self-trades (orders sharing a
-/// `commitment_key`) are skipped.
+/// remaining size is exhausted. Self-trades (orders from the same verified
+/// `trader` address) are skipped.
 fn match_orders(bids: &[Order], asks: &[Order], price: Decimal) -> Vec<Match> {
     let mut eligible_bids: Vec<Order> = bids
         .iter()
@@ -170,7 +170,15 @@ fn match_orders(bids: &[Order], asks: &[Order], price: Decimal) -> Vec<Match> {
                 continue;
             }
 
-            if bid.commitment_key == ask.commitment_key {
+            // Self-trade prevention keys on the verified on-chain `trader`
+            // address, not the client-chosen per-order `commitment_key`
+            // (#168). The commitment_key is trader-supplied, so keying on it
+            // let one trader wash-trade across two keys and wrongly blocked
+            // two distinct traders who happened to reuse a key. `trader` is
+            // the address the engine verified against the submitting caller
+            // (see `dp-engine` `place_order`), so it cannot be spoofed to
+            // dodge — or forge — a self-cross.
+            if bid.trader == ask.trader {
                 continue;
             }
 
@@ -219,11 +227,25 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use dp_types::Side;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Each freshly built order gets a distinct `trader` address. Self-trade
+    /// prevention keys on `trader` (#168), so leaving every order at
+    /// `Address::ZERO` would make every two-sided test look like a self-cross
+    /// and match nothing. Tests that *want* a self-trade copy one order's
+    /// `trader` onto the other explicitly.
+    fn unique_trader() -> alloy_primitives::Address {
+        static SEQ: AtomicU64 = AtomicU64::new(1);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut bytes = [0u8; 20];
+        bytes[12..].copy_from_slice(&n.to_be_bytes());
+        alloy_primitives::Address::from(bytes)
+    }
 
     fn new_order(side: Side, price: i64, size: i64) -> Order {
         Order {
             id: Uuid::new_v4(),
-            trader: alloy_primitives::Address::ZERO,
+            trader: unique_trader(),
             pair: "TEST/USD".to_string(),
             side,
             price: Decimal::from(price),
@@ -331,13 +353,33 @@ mod tests {
         assert!(result.matched_volume > Decimal::ZERO);
     }
 
+    /// #168: a trader cannot cross their own bid and ask, even when the two
+    /// orders carry *different* `commitment_key`s — the wash-trade path the
+    /// old commitment_key-based check let through. Prevention keys on the
+    /// verified `trader` address instead.
     #[test]
     fn self_match_prevention() {
         let bid = new_order(Side::Buy, 1800, 10);
         let mut ask = new_order(Side::Sell, 1790, 10);
-        ask.commitment_key = bid.commitment_key.clone();
+        ask.trader = bid.trader;
+        // Distinct keys prove the block is driven by `trader`, not the key.
+        assert_ne!(bid.commitment_key, ask.commitment_key);
 
         assert!(run(test_auction_id(), "TEST/USD", &[bid], &[ask]).is_none());
+    }
+
+    /// #168: two *distinct* traders who happen to reuse the same
+    /// `commitment_key` must still match — the false-positive the old check
+    /// produced. Prevention no longer keys on the shared key.
+    #[test]
+    fn distinct_traders_sharing_commitment_key_still_match() {
+        let bid = new_order(Side::Buy, 1800, 10);
+        let mut ask = new_order(Side::Sell, 1790, 10);
+        ask.commitment_key = bid.commitment_key.clone();
+        assert_ne!(bid.trader, ask.trader);
+
+        let result = run(test_auction_id(), "TEST/USD", &[bid], &[ask]).expect("expected match");
+        assert_eq!(result.matched_volume, Decimal::from(10));
     }
 
     #[test]

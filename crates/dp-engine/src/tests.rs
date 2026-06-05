@@ -11,8 +11,8 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::test_helpers::{
-    count_events, last_proof_for_batch, place_plaintext_order, BlockingAggregator,
-    FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
+    count_events, last_proof_for_batch, place_plaintext_order, place_plaintext_order_as,
+    BlockingAggregator, FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
 };
 use crate::Engine;
 
@@ -167,6 +167,52 @@ async fn run_auction_tick_produces_notification() {
     assert_eq!(notifs[0].pair, "BTC-USD");
     assert_eq!(notifs[0].matched_volume, dec(5));
     assert_eq!(notifs[0].match_count, 1);
+}
+
+/// #168: a single trader cannot cross their own bid and ask, even when the
+/// two orders carry different `commitment_key`s. Exercises the full
+/// place → book → auction path, not just the auction unit, to prove the
+/// verified `trader` address is what reaches matching.
+#[tokio::test]
+async fn run_auction_tick_blocks_self_cross_by_trader() {
+    let (engine, store) = make_engine();
+    let trader = Address::repeat_byte(7);
+
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(100),
+        dec(5),
+        "buy-key",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Sell,
+        dec(100),
+        dec(5),
+        "sell-key",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    let notifs = engine.run_auction_tick().await;
+    assert!(
+        notifs.is_empty(),
+        "same-trader bid/ask must not self-cross, got {notifs:?}"
+    );
+    assert_eq!(
+        count_events(store.as_ref(), EventType::OrderMatched),
+        0,
+        "no match should be recorded for a self-cross"
+    );
 }
 
 #[tokio::test]
@@ -1070,9 +1116,12 @@ async fn full_pipeline_encrypted_order_to_settlement() {
     engine.set_aggregator(aggregator.clone());
     engine.set_submitter(submitter);
 
-    let encrypt_order = |side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
+    // Distinct traders per leg: self-trade prevention keys on `trader`
+    // (#168), so a shared address would make the bid/ask self-cross and the
+    // tick would produce no match.
+    let encrypt_order = |trader: Address, side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
         let order = DecryptedOrder {
-            trader: Address::ZERO,
+            trader,
             pair: "ETH-USD".into(),
             side,
             price,
@@ -1085,8 +1134,10 @@ async fn full_pipeline_encrypted_order_to_settlement() {
         (vec![0u8; 32], ciphertext)
     };
 
-    let (bid_commit, bid_ct) = encrypt_order(Side::Buy, dec(2000), "bid-key");
-    let (ask_commit, ask_ct) = encrypt_order(Side::Sell, dec(1900), "ask-key");
+    let (bid_commit, bid_ct) =
+        encrypt_order(Address::repeat_byte(1), Side::Buy, dec(2000), "bid-key");
+    let (ask_commit, ask_ct) =
+        encrypt_order(Address::repeat_byte(2), Side::Sell, dec(1900), "ask-key");
 
     let bid_order = engine
         .place_encrypted_order(bid_commit, vec![], bid_ct, None)
