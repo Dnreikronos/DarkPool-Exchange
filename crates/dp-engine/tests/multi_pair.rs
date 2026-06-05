@@ -33,8 +33,9 @@ fn new_engine() -> Engine {
 }
 
 /// Distinct trader per placed order. Self-trade prevention keys on the
-/// verified `trader` address (#168), so a crossing bid/ask sharing an
-/// address would be skipped as a self-cross and match nothing.
+/// `trader` address (#168), so a crossing bid/ask sharing an address would be
+/// skipped as a self-cross and match nothing. `0xEE` prefix scheme mirrors
+/// the `dp-auction` and `dp-api` test helpers.
 fn next_trader() -> Address {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(1);

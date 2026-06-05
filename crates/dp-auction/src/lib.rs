@@ -170,14 +170,23 @@ fn match_orders(bids: &[Order], asks: &[Order], price: Decimal) -> Vec<Match> {
                 continue;
             }
 
-            // Self-trade prevention keys on the verified on-chain `trader`
-            // address, not the client-chosen per-order `commitment_key`
-            // (#168). The commitment_key is trader-supplied, so keying on it
-            // let one trader wash-trade across two keys and wrongly blocked
-            // two distinct traders who happened to reuse a key. `trader` is
-            // the address the engine verified against the submitting caller
-            // (see `dp-engine` `place_order`), so it cannot be spoofed to
-            // dodge — or forge — a self-cross.
+            // Self-trade prevention keys on the `trader` address, not the
+            // client-chosen per-order `commitment_key` (#168). The
+            // commitment_key is trader-supplied, so keying on it wrongly
+            // blocked two distinct traders who happened to reuse a key (fixed
+            // here unconditionally) and let one trader wash-trade across two
+            // keys.
+            //
+            // `trader` is the *right* key, but note it is only spoof-proof
+            // when the engine bound it to the verified caller. That binding
+            // runs only for wallet-authenticated callers (`dp-engine`
+            // `place_order` checks `decrypted.trader == caller` only when a
+            // caller is present). Under the MVP's API-key auth the caller is
+            // `None`, so `trader` is still client-supplied: a wash trader can
+            // set two different addresses and evade this check exactly as they
+            // could with two keys. This closes the wash-trade vector only once
+            // wallet auth (SIWE) lands; until then it is the correct field to
+            // key on and the false-positive fix stands.
             if bid.trader == ask.trader {
                 continue;
             }
@@ -229,15 +238,17 @@ mod tests {
     use dp_types::Side;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// Each freshly built order gets a distinct `trader` address. Self-trade
-    /// prevention keys on `trader` (#168), so leaving every order at
-    /// `Address::ZERO` would make every two-sided test look like a self-cross
-    /// and match nothing. Tests that *want* a self-trade copy one order's
-    /// `trader` onto the other explicitly.
-    fn unique_trader() -> alloy_primitives::Address {
+    /// Distinct `trader` address per order. Self-trade prevention keys on
+    /// `trader` (#168), so reusing one address across both legs would read as
+    /// a self-cross and match nothing. The `0xEE` prefix keeps these clear of
+    /// `Address::ZERO` and the small hand-written addresses used elsewhere;
+    /// the same scheme is mirrored in `dp-engine` and `dp-api` test helpers.
+    /// Tests that *want* a self-trade copy one order's `trader` onto the other.
+    fn next_trader() -> alloy_primitives::Address {
         static SEQ: AtomicU64 = AtomicU64::new(1);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let mut bytes = [0u8; 20];
+        bytes[0] = 0xEE;
         bytes[12..].copy_from_slice(&n.to_be_bytes());
         alloy_primitives::Address::from(bytes)
     }
@@ -245,7 +256,7 @@ mod tests {
     fn new_order(side: Side, price: i64, size: i64) -> Order {
         Order {
             id: Uuid::new_v4(),
-            trader: unique_trader(),
+            trader: next_trader(),
             pair: "TEST/USD".to_string(),
             side,
             price: Decimal::from(price),

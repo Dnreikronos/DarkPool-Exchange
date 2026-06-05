@@ -25,6 +25,21 @@ use uuid::Uuid;
 
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Distinct `trader` address per call. Self-trade prevention keys on `trader`
+/// (#168), so a crossing bid/ask placed under one address would be skipped as
+/// a self-cross. The `0xEE` prefix keeps these clear of `Address::ZERO` and
+/// the small hand-written addresses used elsewhere; the same scheme is
+/// mirrored in the `dp-auction` and `dp-engine` test helpers. Tests wanting a
+/// shared owner use `place_test_order_as`.
+fn next_trader() -> Address {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xEE;
+    bytes[12..].copy_from_slice(&n.to_be_bytes());
+    Address::from(bytes)
+}
+
 fn new_handler() -> ApiHandler {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store, Duration::from_secs(1));
@@ -68,16 +83,9 @@ async fn place_test_order(
     price: &str,
     size: &str,
 ) -> String {
-    // Distinct trader per call. Self-trade prevention keys on `trader`
-    // (#168), so a crossing bid/ask placed under one address would be
-    // skipped as a self-cross. Tests wanting a shared owner use
-    // `place_test_order_as`.
     let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let mut tbytes = [0u8; 20];
-    tbytes[0] = 0xEE;
-    tbytes[12..].copy_from_slice(&n.to_be_bytes());
     let d = DecryptedOrder {
-        trader: Address::from(tbytes),
+        trader: next_trader(),
         pair: pair.to_string(),
         side,
         price: price.parse().unwrap(),

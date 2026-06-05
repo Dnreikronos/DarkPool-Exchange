@@ -311,17 +311,17 @@ pub fn last_proof_for_batch(store: &dyn Store, batch_id: Uuid) -> Option<Vec<u8>
     found
 }
 
-/// Allocate a distinct `trader` address per placed order. Self-trade
-/// prevention keys on `trader` (#168), so a crossing bid/ask that shared an
-/// address would be skipped as a self-cross and match nothing. Tests that
-/// *want* a self-trade place both legs under one address with
-/// [`place_plaintext_order_as`].
-fn next_test_trader() -> alloy_primitives::Address {
+/// Distinct `trader` address per placed order. Self-trade prevention keys on
+/// `trader` (#168), so a crossing bid/ask sharing an address would be skipped
+/// as a self-cross and match nothing. The `0xEE` prefix keeps these clear of
+/// `Address::ZERO` and the small hand-written addresses (`repeat_byte(1)`,
+/// `0x..01`) used elsewhere; the same scheme is mirrored in the `dp-auction`
+/// and `dp-api` test helpers. Tests that *want* a self-trade place both legs
+/// under one address with [`place_plaintext_order_as`].
+fn next_trader() -> alloy_primitives::Address {
     use std::sync::atomic::AtomicU64;
     static SEQ: AtomicU64 = AtomicU64::new(1);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    // 0xEE prefix keeps these clear of `Address::ZERO` and the small
-    // hand-written addresses (`repeat_byte(1)`, `0x..01`) used elsewhere.
     let mut bytes = [0u8; 20];
     bytes[0] = 0xEE;
     bytes[12..].copy_from_slice(&n.to_be_bytes());
@@ -339,7 +339,7 @@ pub async fn place_plaintext_order(
 ) -> Result<dp_types::Order, crate::EngineError> {
     place_plaintext_order_as(
         engine,
-        next_test_trader(),
+        next_trader(),
         pair,
         side,
         price,
