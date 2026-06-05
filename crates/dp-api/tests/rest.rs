@@ -434,8 +434,16 @@ async fn sse_stream_receives_auction_events() {
     };
 
     for (trader, side, price) in [
-        (alloy_primitives::Address::repeat_byte(1), dp_types::Side::Buy, "1800"),
-        (alloy_primitives::Address::repeat_byte(2), dp_types::Side::Sell, "1800"),
+        (
+            alloy_primitives::Address::repeat_byte(1),
+            dp_types::Side::Buy,
+            "1800",
+        ),
+        (
+            alloy_primitives::Address::repeat_byte(2),
+            dp_types::Side::Sell,
+            "1800",
+        ),
     ] {
         let resp = app
             .clone()

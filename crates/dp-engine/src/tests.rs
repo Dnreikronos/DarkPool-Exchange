@@ -1119,20 +1119,21 @@ async fn full_pipeline_encrypted_order_to_settlement() {
     // Distinct traders per leg: self-trade prevention keys on `trader`
     // (#168), so a shared address would make the bid/ask self-cross and the
     // tick would produce no match.
-    let encrypt_order = |trader: Address, side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
-        let order = DecryptedOrder {
-            trader,
-            pair: "ETH-USD".into(),
-            side,
-            price,
-            size: dec(1),
-            commitment_key: key.into(),
-            ttl: 60_000_000_000,
+    let encrypt_order =
+        |trader: Address, side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
+            let order = DecryptedOrder {
+                trader,
+                pair: "ETH-USD".into(),
+                side,
+                price,
+                size: dec(1),
+                commitment_key: key.into(),
+                ttl: 60_000_000_000,
+            };
+            let plaintext = serde_json::to_vec(&order).unwrap();
+            let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
+            (vec![0u8; 32], ciphertext)
         };
-        let plaintext = serde_json::to_vec(&order).unwrap();
-        let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
-        (vec![0u8; 32], ciphertext)
-    };
 
     let (bid_commit, bid_ct) =
         encrypt_order(Address::repeat_byte(1), Side::Buy, dec(2000), "bid-key");
