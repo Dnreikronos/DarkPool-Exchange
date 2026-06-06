@@ -325,6 +325,13 @@ impl Inner {
 /// duplicated event). Rather than subtract into a negative `remaining_size`
 /// and silently drop the order, leave it untouched and surface the
 /// inconsistency loudly. See issue #171.
+///
+/// Leaving the order intact means it still claims its full remaining size
+/// and can be re-matched next auction (phantom liquidity). That is a
+/// deliberate tradeoff: the alternative (dropping it) silently destroys
+/// liquidity, and neither is correct because the situation should not
+/// occur. We refuse to mutate state from an event we have flagged as
+/// corrupt and rely on the warn + counter to get an operator to look.
 fn warn_overfill(fill: &Fill, remaining: Decimal) {
     tracing::warn!(
         order_id = %fill.order_id,
@@ -332,6 +339,7 @@ fn warn_overfill(fill: &Fill, remaining: Decimal) {
         remaining = %remaining,
         "apply_fill: fill exceeds remaining size; skipping inconsistent fill"
     );
+    metrics::counter!(dp_types::metrics::M_BOOK_OVERFILL_REJECTED).increment(1);
 }
 
 #[cfg(test)]
