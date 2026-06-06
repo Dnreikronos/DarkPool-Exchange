@@ -233,6 +233,17 @@ impl Default for OrderBook {
 
 impl Inner {
     fn apply(&mut self, event: &Event) {
+        // Idempotency guard. Persisted events carry a strictly-monotonic
+        // `seq` (>= 1) assigned by the store, and the live path appends
+        // (assigning `seq`) before it applies — so a `seq` at or below the
+        // highest already applied means this event has been seen, and
+        // re-running it would double-subtract in `apply_fill`. Skip it.
+        // `seq == 0` marks an event that never went through the durable log
+        // (e.g. an unpersisted event in a unit test); it cannot be deduped,
+        // so it is always applied.
+        if event.seq != 0 && event.seq <= self.seq {
+            return;
+        }
         if event.seq > self.seq {
             self.seq = event.seq;
         }
@@ -477,6 +488,45 @@ mod tests {
 
         assert!(!book.has_order(bid_id));
         assert_eq!(book.active_order_count(), 0);
+    }
+
+    #[test]
+    fn duplicate_match_is_idempotent() {
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let ask = make_order(Side::Sell, 100, 4);
+        let bid_id = bid.id;
+        let ask_id = ask.id;
+        book.insert_order(bid);
+        book.insert_order(ask);
+
+        let matched = Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(4, 0),
+                },
+                ask: Fill {
+                    order_id: ask_id,
+                    size: Decimal::new(4, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(4, 0),
+            },
+        };
+
+        book.apply(&matched);
+        // Re-applying the same event (same seq) must be a no-op, not a
+        // second 4-unit subtraction that would leave the bid at 2.
+        book.apply(&matched);
+
+        let remaining = book.find_order(bid_id).unwrap();
+        assert_eq!(remaining.remaining_size, Decimal::new(6, 0));
+        assert!(!book.has_order(ask_id));
     }
 
     #[test]
