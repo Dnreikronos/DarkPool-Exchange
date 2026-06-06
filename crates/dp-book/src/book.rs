@@ -275,6 +275,10 @@ impl Inner {
         let mut emptied: Option<String> = None;
         for (pair, book) in self.books.iter_mut() {
             if let Some(order) = book.bids.get_mut(&fill.order_id) {
+                if fill.size > order.remaining_size {
+                    warn_overfill(fill, order.remaining_size);
+                    break;
+                }
                 order.remaining_size -= fill.size;
                 if order.remaining_size <= Decimal::ZERO {
                     book.bids.remove(&fill.order_id);
@@ -285,6 +289,10 @@ impl Inner {
                 break;
             }
             if let Some(order) = book.asks.get_mut(&fill.order_id) {
+                if fill.size > order.remaining_size {
+                    warn_overfill(fill, order.remaining_size);
+                    break;
+                }
                 order.remaining_size -= fill.size;
                 if order.remaining_size <= Decimal::ZERO {
                     book.asks.remove(&fill.order_id);
@@ -299,6 +307,20 @@ impl Inner {
             self.books.remove(&p);
         }
     }
+}
+
+/// A fill larger than the order's remaining size means the event log is
+/// inconsistent with the book (a matching-engine bug, a corrupted log, or a
+/// duplicated event). Rather than subtract into a negative `remaining_size`
+/// and silently drop the order, leave it untouched and surface the
+/// inconsistency loudly. See issue #171.
+fn warn_overfill(fill: &Fill, remaining: Decimal) {
+    tracing::warn!(
+        order_id = %fill.order_id,
+        fill_size = %fill.size,
+        remaining = %remaining,
+        "apply_fill: fill exceeds remaining size; skipping inconsistent fill"
+    );
 }
 
 #[cfg(test)]
@@ -388,6 +410,73 @@ mod tests {
         let remaining = book.find_order(bid_id).unwrap();
         assert_eq!(remaining.remaining_size, Decimal::new(6, 0));
         assert!(!book.has_order(ask_id));
+    }
+
+    #[test]
+    fn overfill_is_rejected_and_leaves_order_intact() {
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let bid_id = bid.id;
+        book.insert_order(bid);
+
+        // OrderMatched claiming a 15-unit fill against a 10-unit order.
+        // The ask leg targets a non-existent order, so it is a no-op.
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(15, 0),
+                },
+                ask: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(15, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(15, 0),
+            },
+        });
+
+        // The inconsistent fill is rejected, not absorbed: the order is
+        // left untouched rather than driven negative and removed.
+        assert_eq!(book.active_order_count(), 1);
+        let order = book.find_order(bid_id).unwrap();
+        assert_eq!(order.remaining_size, Decimal::new(10, 0));
+    }
+
+    #[test]
+    fn exact_fill_still_removes_order() {
+        // The guard rejects only fills strictly larger than remaining; an
+        // exact fill is a full fill and must still remove the order.
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let bid_id = bid.id;
+        book.insert_order(bid);
+
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(10, 0),
+                },
+                ask: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(10, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(10, 0),
+            },
+        });
+
+        assert!(!book.has_order(bid_id));
+        assert_eq!(book.active_order_count(), 0);
     }
 
     #[test]
