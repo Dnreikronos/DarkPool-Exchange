@@ -538,6 +538,43 @@ mod tests {
     }
 
     #[test]
+    fn zero_seq_event_applies_after_seq_advanced() {
+        // seq == 0 marks an event that never went through the durable log
+        // (e.g. an expiry event built in-memory before persistence). The
+        // idempotency guard must not skip it just because the book has
+        // already advanced past seq 0 — locks the `event.seq != 0` branch.
+        let book = OrderBook::new();
+        let a = make_order(Side::Buy, 100, 1);
+        let b = make_order(Side::Buy, 100, 1);
+        let a_id = a.id;
+        let b_id = b.id;
+        book.insert_order(a);
+        book.insert_order(b);
+
+        // Advance the book's high-water seq to 5 with a real cancel.
+        book.apply(&Event {
+            seq: 5,
+            event_type: EventType::OrderCancelled,
+            timestamp: Utc::now(),
+            data: EventData::OrderCancelled {
+                order_id: a_id,
+                reason: "user".into(),
+            },
+        });
+        assert!(!book.has_order(a_id));
+
+        // A seq == 0 event must still apply even though self.seq is now 5.
+        book.apply(&Event {
+            seq: 0,
+            event_type: EventType::OrderExpired,
+            timestamp: Utc::now(),
+            data: EventData::OrderExpired { order_id: b_id },
+        });
+        assert!(!book.has_order(b_id));
+        assert_eq!(book.active_order_count(), 0);
+    }
+
+    #[test]
     fn expiration_collection() {
         let book = OrderBook::new();
         let mut order = make_order(Side::Buy, 50, 1);
