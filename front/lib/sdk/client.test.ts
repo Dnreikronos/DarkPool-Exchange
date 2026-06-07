@@ -284,6 +284,19 @@ describe('RestClient.streamAuctions', () => {
     })
   })
 
+  it('maps a non-lag error frame to UNAVAILABLE, not DATA_LOSS', async () => {
+    // Only an explicit {"lagged":N} payload is broadcast lag; anything else
+    // (proxy error pages, malformed frames) is a broken stream, not data loss.
+    const { fetch } = captureFetch(sseResponse(['event: error\ndata: upstream exploded\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({
+      name: 'DarkPoolError',
+      code: DARK_POOL_ERROR_CODES.UNAVAILABLE,
+    })
+  })
+
   it('maps an HTTP error response to a DarkPoolError', async () => {
     const { fetch } = captureFetch(new Response('', { status: 401 }))
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })

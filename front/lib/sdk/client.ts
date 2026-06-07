@@ -311,9 +311,19 @@ export class RestClient implements DarkPoolClient {
           buffer = split.rest
           if (frame !== null) {
             if (frame.event === 'error') {
+              // Only an explicit {"lagged":N} payload is broadcast lag — the
+              // one error frame the server emits. Anything else (proxy error
+              // pages, malformed frames) is a broken stream, not data loss.
+              const lagged = readLagged(frame.data)
+              if (lagged !== null) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.DATA_LOSS,
+                  `Auction stream lagged: ${lagged} events dropped`
+                )
+              }
               throw new DarkPoolError(
-                DARK_POOL_ERROR_CODES.DATA_LOSS,
-                `Auction stream lagged: ${readLagged(frame.data) ?? 'unknown'} events dropped`
+                DARK_POOL_ERROR_CODES.UNAVAILABLE,
+                `Auction stream error frame: ${frame.data}`
               )
             }
             if ((frame.event === 'auction' || frame.event === '') && frame.data !== '') {
