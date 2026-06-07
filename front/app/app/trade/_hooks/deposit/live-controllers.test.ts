@@ -107,6 +107,29 @@ describe('useLiveDepositController', () => {
     await waitFor(() => expect(result.current.stage.kind).toBe('confirmed'))
   })
 
+  it('maps a mined-but-reverted deposit receipt to an error stage', async () => {
+    chainState.allowances = { weth: '0', usdc: '1000' }
+    waitForTransactionReceipt.mockResolvedValueOnce({ status: 'reverted' })
+    const { result } = renderHook(() => useLiveDepositController(true))
+    await act(async () => {
+      result.current.start({ token: 'USDC', amount: '100' })
+    })
+    await waitFor(() => expect(result.current.stage.kind).toBe('error'))
+    expect(result.current.stage.errorMessage).toMatch(/reverted/i)
+    expect(chainState.refetch).not.toHaveBeenCalled()
+  })
+
+  it('stops at an error stage when the approve receipt reverts, without depositing', async () => {
+    waitForTransactionReceipt.mockResolvedValueOnce({ status: 'reverted' })
+    const { result } = renderHook(() => useLiveDepositController(true))
+    await act(async () => {
+      result.current.start({ token: 'USDC', amount: '100' })
+    })
+    await waitFor(() => expect(result.current.stage.kind).toBe('error'))
+    expect(result.current.stage.errorMessage).toMatch(/reverted/i)
+    expect(writeContractAsync.mock.calls.some((c) => c[0].functionName === 'deposit')).toBe(false)
+  })
+
   it('maps a wallet rejection to an error stage', async () => {
     writeContractAsync.mockRejectedValueOnce({ cause: { name: 'UserRejectedRequestError' } })
     const { result } = renderHook(() => useLiveDepositController(true))
@@ -143,6 +166,17 @@ describe('useLiveWithdrawController', () => {
     const withdraw = writeContractAsync.mock.calls.find((c) => c[0].functionName === 'withdraw')
     expect(withdraw?.[0]).toMatchObject({ address: DARKPOOL, args: [WETH, 1_500000000000000000n] })
     expect(writeContractAsync.mock.calls.some((c) => c[0].functionName === 'approve')).toBe(false)
+  })
+
+  it('maps a mined-but-reverted withdraw receipt to an error stage', async () => {
+    waitForTransactionReceipt.mockResolvedValueOnce({ status: 'reverted' })
+    const { result } = renderHook(() => useLiveWithdrawController(true))
+    await act(async () => {
+      result.current.start({ token: 'WETH', amount: '1.5' })
+    })
+    await waitFor(() => expect(result.current.stage.kind).toBe('error'))
+    expect(result.current.stage.errorMessage).toMatch(/reverted/i)
+    expect(chainState.refetch).not.toHaveBeenCalled()
   })
 
   it('maps a revert to an error stage', async () => {

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { erc20Abi, parseUnits } from 'viem'
-import { useConfig, useWriteContract } from 'wagmi'
+import { useConfig, useWriteContract, type Config } from 'wagmi'
 import { waitForTransactionReceipt } from 'wagmi/actions'
 
 import { config } from '@/lib/config'
@@ -40,6 +40,22 @@ function parseAmountRaw(token: TokenSymbol, amount: string): bigint | null {
     return null
   }
   return raw > 0n ? raw : null
+}
+
+/**
+ * viem's `waitForTransactionReceipt` resolves even for a mined-but-reverted
+ * transaction — it reports the failure via `receipt.status`, it never throws.
+ * Funnel that into the error path so the stage machine can't read a reverted
+ * write as success.
+ */
+async function waitForSuccessfulReceipt(
+  wagmiConfig: Config,
+  hash: `0x${string}`
+): Promise<void> {
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash })
+  if (receipt.status === 'reverted') {
+    throw new Error('transaction reverted on-chain')
+  }
 }
 
 /**
@@ -99,7 +115,7 @@ export function useLiveDepositController(enabled: boolean): DepositController {
             })
             if (!alive()) return
             dispatch({ type: 'signed' })
-            await waitForTransactionReceipt(wagmiConfig, { hash })
+            await waitForSuccessfulReceipt(wagmiConfig, hash)
             if (!alive()) return
             dispatch({ type: 'approvalDone' })
           }
@@ -111,7 +127,7 @@ export function useLiveDepositController(enabled: boolean): DepositController {
           })
           if (!alive()) return
           dispatch({ type: 'signed' })
-          await waitForTransactionReceipt(wagmiConfig, { hash: depositHash })
+          await waitForSuccessfulReceipt(wagmiConfig, depositHash)
           if (!alive()) return
           dispatch({ type: 'submitted' })
           refetchRef.current()
@@ -173,7 +189,7 @@ export function useLiveWithdrawController(enabled: boolean): WithdrawController 
           })
           if (!alive()) return
           dispatch({ type: 'signed' })
-          await waitForTransactionReceipt(wagmiConfig, { hash })
+          await waitForSuccessfulReceipt(wagmiConfig, hash)
           if (!alive()) return
           dispatch({ type: 'submitted' })
           refetchRef.current()
