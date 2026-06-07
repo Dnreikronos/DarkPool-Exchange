@@ -626,3 +626,78 @@ describe('DarkPoolError', () => {
 beforeEach(() => {
   // No-op; vi.restoreAllMocks() would clobber the spies created in each test.
 })
+
+// ─── RestClient: SIWE bearer token injection ───────────────────────────────
+
+describe('RestClient auth header', () => {
+  const orderBody = {
+    order: {
+      id: 'o1',
+      pair: 'ETH/USDC',
+      side: 'SIDE_BUY',
+      price: '1',
+      size: '1',
+      remainingSize: '1',
+      commitmentKey: 'c',
+      submittedAtUnix: '1700000000',
+      expiresAtUnix: '0',
+    },
+  }
+  const aRequest = () => create(PlaceOrderRequestSchema, { commitment: new Uint8Array([0x01]) })
+
+  it('sends Authorization: Bearer alongside x-api-key when getToken returns a token', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch, getToken: () => 'jwt-123' })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBe('Bearer jwt-123')
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits Authorization when getToken returns null (x-api-key only)', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch, getToken: () => null })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBeUndefined()
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits Authorization entirely when no getToken is configured', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBeUndefined()
+  })
+
+  it('calls onUnauthenticated once on a 401 before throwing UNAUTHENTICATED', async () => {
+    const onUnauthenticated = vi.fn()
+    const { fetch } = captureFetch(makeJsonResponse({ message: 'expired' }, { status: 401 }))
+    const client = new RestClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      fetch,
+      getToken: () => 'jwt',
+      onUnauthenticated,
+    })
+    await expect(client.placeOrder(aRequest())).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.UNAUTHENTICATED,
+    })
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call onUnauthenticated on a non-401 error', async () => {
+    const onUnauthenticated = vi.fn()
+    const { fetch } = captureFetch(makeJsonResponse({ message: 'boom' }, { status: 500 }))
+    const client = new RestClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      fetch,
+      getToken: () => 'jwt',
+      onUnauthenticated,
+    })
+    await expect(client.placeOrder(aRequest())).rejects.toBeInstanceOf(DarkPoolError)
+    expect(onUnauthenticated).not.toHaveBeenCalled()
+  })
+})

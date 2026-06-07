@@ -177,17 +177,31 @@ export interface RestClientOptions {
   apiKey: string
   /** Defaults to globalThis.fetch. Injectable so tests and SSR can swap it. */
   fetch?: typeof fetch
+  /**
+   * Returns the current SIWE session token, read per-request. When it
+   * returns a non-null value the request carries `Authorization: Bearer
+   * <token>` (in addition to `x-api-key`, which the backend accepts as a
+   * fallback). Read lazily so the long-lived client always sees the live
+   * token across login/logout.
+   */
+  getToken?: () => string | null
+  /** Invoked on a 401 so the caller can clear the session and prompt re-auth. */
+  onUnauthenticated?: () => void
 }
 
 export class RestClient implements DarkPoolClient {
   private readonly baseUrl: string
   private readonly apiKey: string
   private readonly fetchImpl: typeof fetch
+  private readonly getToken?: () => string | null
+  private readonly onUnauthenticated?: () => void
 
   constructor(opts: RestClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '')
     this.apiKey = opts.apiKey
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis)
+    this.getToken = opts.getToken
+    this.onUnauthenticated = opts.onUnauthenticated
   }
 
   placeOrder(req: PlaceOrderRequest): Promise<PlaceOrderResponse> {
@@ -272,6 +286,8 @@ export class RestClient implements DarkPoolClient {
       accept: 'application/json',
       'x-api-key': this.apiKey,
     }
+    const token = this.getToken?.()
+    if (token) headers['authorization'] = `Bearer ${token}`
     if (jsonBody !== undefined) headers['content-type'] = 'application/json'
 
     let response: Response
@@ -289,7 +305,11 @@ export class RestClient implements DarkPoolClient {
       )
     }
 
-    if (!response.ok) throw await parseErrorResponse(response)
+    if (!response.ok) {
+      // Let the session layer clear an expired/invalid token and prompt re-auth.
+      if (response.status === 401) this.onUnauthenticated?.()
+      throw await parseErrorResponse(response)
+    }
 
     const text = await response.text()
     const json = text === '' ? {} : (JSON.parse(text) as unknown)
@@ -407,6 +427,10 @@ export interface CreateDarkPoolClientOptions {
   /** Global default. Overridden per-method by `methodOverrides`. */
   useMocks: boolean
   fetch?: typeof fetch
+  /** SIWE session token getter, read per-request by the RestClient. */
+  getToken?: () => string | null
+  /** Invoked on a 401 (e.g. to clear the session and prompt re-auth). */
+  onUnauthenticated?: () => void
   /** Pre-built clients; useful for tests and SSR. */
   mockClient?: DarkPoolClient
   restClient?: DarkPoolClient
@@ -428,6 +452,8 @@ export function createDarkPoolClient(opts: CreateDarkPoolClientOptions): DarkPoo
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
       fetch: opts.fetch,
+      getToken: opts.getToken,
+      onUnauthenticated: opts.onUnauthenticated,
     })
 
   if (!hasOverrides) {

@@ -8,6 +8,7 @@ import { WagmiProvider } from 'wagmi'
 
 import { darkpoolRainbowTheme } from './rainbowkit-theme'
 import { getWagmiConfig } from './wagmi-config'
+import { SiweAuthBridge } from './SiweAuthBridge'
 import { WagmiWalletBridge } from './WagmiWalletBridge'
 import { WrongNetworkModal } from './WrongNetworkModal'
 
@@ -42,6 +43,7 @@ export function WalletProviders({ children }: { children: ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider theme={darkpoolRainbowTheme} modalSize="compact">
           <WagmiWalletBridge />
+          <SiweAuthBridge />
           <WrongNetworkModal />
           {children}
         </RainbowKitProvider>
