@@ -233,6 +233,17 @@ impl Default for OrderBook {
 
 impl Inner {
     fn apply(&mut self, event: &Event) {
+        // Idempotency guard. Persisted events carry a strictly-monotonic
+        // `seq` (>= 1) assigned by the store, and the live path appends
+        // (assigning `seq`) before it applies — so a `seq` at or below the
+        // highest already applied means this event has been seen, and
+        // re-running it would double-subtract in `apply_fill`. Skip it.
+        // `seq == 0` marks an event that never went through the durable log
+        // (e.g. an unpersisted event in a unit test); it cannot be deduped,
+        // so it is always applied.
+        if event.seq != 0 && event.seq <= self.seq {
+            return;
+        }
         if event.seq > self.seq {
             self.seq = event.seq;
         }
@@ -275,6 +286,10 @@ impl Inner {
         let mut emptied: Option<String> = None;
         for (pair, book) in self.books.iter_mut() {
             if let Some(order) = book.bids.get_mut(&fill.order_id) {
+                if fill.size > order.remaining_size {
+                    warn_overfill(fill, order.remaining_size);
+                    break;
+                }
                 order.remaining_size -= fill.size;
                 if order.remaining_size <= Decimal::ZERO {
                     book.bids.remove(&fill.order_id);
@@ -285,6 +300,10 @@ impl Inner {
                 break;
             }
             if let Some(order) = book.asks.get_mut(&fill.order_id) {
+                if fill.size > order.remaining_size {
+                    warn_overfill(fill, order.remaining_size);
+                    break;
+                }
                 order.remaining_size -= fill.size;
                 if order.remaining_size <= Decimal::ZERO {
                     book.asks.remove(&fill.order_id);
@@ -299,6 +318,28 @@ impl Inner {
             self.books.remove(&p);
         }
     }
+}
+
+/// A fill larger than the order's remaining size means the event log is
+/// inconsistent with the book (a matching-engine bug, a corrupted log, or a
+/// duplicated event). Rather than subtract into a negative `remaining_size`
+/// and silently drop the order, leave it untouched and surface the
+/// inconsistency loudly. See issue #171.
+///
+/// Leaving the order intact means it still claims its full remaining size
+/// and can be re-matched next auction (phantom liquidity). That is a
+/// deliberate tradeoff: the alternative (dropping it) silently destroys
+/// liquidity, and neither is correct because the situation should not
+/// occur. We refuse to mutate state from an event we have flagged as
+/// corrupt and rely on the warn + counter to get an operator to look.
+fn warn_overfill(fill: &Fill, remaining: Decimal) {
+    tracing::warn!(
+        order_id = %fill.order_id,
+        fill_size = %fill.size,
+        remaining = %remaining,
+        "apply_fill: fill exceeds remaining size; skipping inconsistent fill"
+    );
+    metrics::counter!(dp_types::metrics::M_BOOK_OVERFILL_REJECTED).increment(1);
 }
 
 #[cfg(test)]
@@ -388,6 +429,185 @@ mod tests {
         let remaining = book.find_order(bid_id).unwrap();
         assert_eq!(remaining.remaining_size, Decimal::new(6, 0));
         assert!(!book.has_order(ask_id));
+    }
+
+    #[test]
+    fn overfill_is_rejected_and_leaves_order_intact() {
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let bid_id = bid.id;
+        book.insert_order(bid);
+
+        // OrderMatched claiming a 15-unit fill against a 10-unit order.
+        // The ask leg targets a non-existent order, so it is a no-op.
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(15, 0),
+                },
+                ask: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(15, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(15, 0),
+            },
+        });
+
+        // The inconsistent fill is rejected, not absorbed: the order is
+        // left untouched rather than driven negative and removed.
+        assert_eq!(book.active_order_count(), 1);
+        let order = book.find_order(bid_id).unwrap();
+        assert_eq!(order.remaining_size, Decimal::new(10, 0));
+    }
+
+    #[test]
+    fn overfill_on_ask_is_rejected_and_leaves_order_intact() {
+        // The ask leg has its own overfill guard, separate from the bid
+        // leg's. Drive an oversized fill against a resting sell order so the
+        // `book.asks` branch is exercised, not just `book.bids`.
+        let book = OrderBook::new();
+        let ask = make_order(Side::Sell, 100, 10);
+        let ask_id = ask.id;
+        book.insert_order(ask);
+
+        // 15-unit fill against a 10-unit ask; the bid leg targets a
+        // non-existent order, so it is a no-op.
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(15, 0),
+                },
+                ask: Fill {
+                    order_id: ask_id,
+                    size: Decimal::new(15, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(15, 0),
+            },
+        });
+
+        assert_eq!(book.active_order_count(), 1);
+        let order = book.find_order(ask_id).unwrap();
+        assert_eq!(order.remaining_size, Decimal::new(10, 0));
+    }
+
+    #[test]
+    fn exact_fill_still_removes_order() {
+        // The guard rejects only fills strictly larger than remaining; an
+        // exact fill is a full fill and must still remove the order.
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let bid_id = bid.id;
+        book.insert_order(bid);
+
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(10, 0),
+                },
+                ask: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(10, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(10, 0),
+            },
+        });
+
+        assert!(!book.has_order(bid_id));
+        assert_eq!(book.active_order_count(), 0);
+    }
+
+    #[test]
+    fn duplicate_match_is_idempotent() {
+        let book = OrderBook::new();
+        let bid = make_order(Side::Buy, 100, 10);
+        let ask = make_order(Side::Sell, 100, 4);
+        let bid_id = bid.id;
+        let ask_id = ask.id;
+        book.insert_order(bid);
+        book.insert_order(ask);
+
+        let matched = Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: bid_id,
+                    size: Decimal::new(4, 0),
+                },
+                ask: Fill {
+                    order_id: ask_id,
+                    size: Decimal::new(4, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(4, 0),
+            },
+        };
+
+        book.apply(&matched);
+        // Re-applying the same event (same seq) must be a no-op, not a
+        // second 4-unit subtraction that would leave the bid at 2.
+        book.apply(&matched);
+
+        let remaining = book.find_order(bid_id).unwrap();
+        assert_eq!(remaining.remaining_size, Decimal::new(6, 0));
+        assert!(!book.has_order(ask_id));
+    }
+
+    #[test]
+    fn zero_seq_event_applies_after_seq_advanced() {
+        // seq == 0 marks an event that never went through the durable log
+        // (e.g. an expiry event built in-memory before persistence). The
+        // idempotency guard must not skip it just because the book has
+        // already advanced past seq 0 — locks the `event.seq != 0` branch.
+        let book = OrderBook::new();
+        let a = make_order(Side::Buy, 100, 1);
+        let b = make_order(Side::Buy, 100, 1);
+        let a_id = a.id;
+        let b_id = b.id;
+        book.insert_order(a);
+        book.insert_order(b);
+
+        // Advance the book's high-water seq to 5 with a real cancel.
+        book.apply(&Event {
+            seq: 5,
+            event_type: EventType::OrderCancelled,
+            timestamp: Utc::now(),
+            data: EventData::OrderCancelled {
+                order_id: a_id,
+                reason: "user".into(),
+            },
+        });
+        assert!(!book.has_order(a_id));
+
+        // A seq == 0 event must still apply even though self.seq is now 5.
+        book.apply(&Event {
+            seq: 0,
+            event_type: EventType::OrderExpired,
+            timestamp: Utc::now(),
+            data: EventData::OrderExpired { order_id: b_id },
+        });
+        assert!(!book.has_order(b_id));
+        assert_eq!(book.active_order_count(), 0);
     }
 
     #[test]

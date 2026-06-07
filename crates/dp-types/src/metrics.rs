@@ -18,3 +18,9 @@ pub const M_EVENT_LOG_SIZE_BYTES: &str = "darkpool_event_log_size_bytes";
 /// key's success series go to zero before deleting it during a rotation
 /// drain.
 pub const M_CRYPTO_DECRYPT_TOTAL: &str = "darkpool_crypto_decrypt_total";
+/// Fills rejected by the book because they exceeded an order's remaining
+/// size — the event log disagreed with book state (matching-engine bug,
+/// corrupted log, or duplicate). Force-registered at zero so operators can
+/// alert on it leaving zero; any non-zero value is a recovery-integrity
+/// signal. See issue #171.
+pub const M_BOOK_OVERFILL_REJECTED: &str = "darkpool_book_overfill_rejected_total";

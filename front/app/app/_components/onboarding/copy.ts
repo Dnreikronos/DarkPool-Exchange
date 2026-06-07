@@ -50,6 +50,7 @@ export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
     body: [
       'Submitting an order builds a zero-knowledge proof of validity in this tab before it leaves your machine. That keeps your price and size hidden from the operator and from any external observer until the batch settles.',
       'Proof generation runs locally and takes roughly fifteen to thirty seconds. The submit button reports each stage so you can watch it progress.',
+      'The same privacy cuts the other way: the venue keeps no per-trader record, so your order and fill history is stored only in this browser. Clearing site data erases it — export the CSV from the portfolio page first if you need a copy.',
     ],
     meta: 'Local proving time: ~15–30 s.',
   },
