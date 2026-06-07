@@ -628,10 +628,17 @@ describe('DarkPoolError', () => {
 describe('RestClient error header capture', () => {
   it('captures retry-after on a 429 response', async () => {
     const { fetch } = captureFetch(
-      new Response(JSON.stringify({ code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED, message: 'slow down' }), {
-        status: 429,
-        headers: { 'content-type': 'application/json', 'retry-after': '30', 'x-request-id': 'req-429' },
-      })
+      new Response(
+        JSON.stringify({ code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED, message: 'slow down' }),
+        {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': '30',
+            'x-request-id': 'req-429',
+          },
+        }
+      )
     )
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
     await expect(

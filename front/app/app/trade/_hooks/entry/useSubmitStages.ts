@@ -20,10 +20,7 @@ import {
   SUCCESS_HOLD_MS,
   type SubmitStageId,
 } from '../../_lib/entry/policy'
-import {
-  randomHex,
-  type StageStep,
-} from '../../_lib/entry/build-submission'
+import { randomHex, type StageStep } from '../../_lib/entry/build-submission'
 import { mapSubmissionError, type SubmitErrorDetail } from '../../_lib/entry/submit-error'
 
 export type { StageStep } from '../../_lib/entry/build-submission'

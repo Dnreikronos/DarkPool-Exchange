@@ -36,7 +36,9 @@ describe('buildWitness', () => {
     })
   })
   it('maps sell→1', () => {
-    expect(buildWitness({ commitmentKey: 'aa', saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side).toBe(1)
+    expect(
+      buildWitness({ commitmentKey: 'aa', saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side
+    ).toBe(1)
   })
 })
 
@@ -91,7 +93,9 @@ describe('createRealSteps', () => {
         .mockReturnValueOnce('dd'.repeat(32)), // salt_hex
       getOperatorPubkey: vi.fn(() => new Uint8Array([0x04, 0x01])),
       prove: vi.fn(async () => ({ proof: new Uint8Array([1]), commitment: new Uint8Array([2]) })),
-      serialize: vi.fn<(payload: DecryptedOrderPayload) => Uint8Array>(() => new Uint8Array([9, 9])),
+      serialize: vi.fn<(payload: DecryptedOrderPayload) => Uint8Array>(
+        () => new Uint8Array([9, 9])
+      ),
       encrypt: vi.fn(() => new Uint8Array([7, 7])),
       placeOrder: vi.fn(async () => undefined),
       ...overrides,
@@ -114,7 +118,11 @@ describe('createRealSteps', () => {
 
     // witness passed to prove
     expect(d.prove).toHaveBeenCalledWith(
-      expect.objectContaining({ commitment_key: 'cc'.repeat(32), salt_hex: 'dd'.repeat(32), side: 0 })
+      expect.objectContaining({
+        commitment_key: 'cc'.repeat(32),
+        salt_hex: 'dd'.repeat(32),
+        side: 0,
+      })
     )
     // payload passed to serialize has the SAME commitment_key, no salt field
     const payload = d.serialize.mock.calls[0][0]

@@ -26,7 +26,11 @@ import { DecimalInput } from './inputs'
 import { BASE_TOKEN, FEE_BPS, QUOTE_TOKEN } from '../../_lib/entry/policy'
 import { PlaceButton, SubmitError } from './ProveSubmitStages'
 import { TotalRow } from './TotalRow'
-import { buildMockSteps, useSubmitStages, type SubmitPayload } from '../../_hooks/entry/useSubmitStages'
+import {
+  buildMockSteps,
+  useSubmitStages,
+  type SubmitPayload,
+} from '../../_hooks/entry/useSubmitStages'
 import { useRealSubmission } from '../../_hooks/entry/useRealSubmission'
 import { useOrderForm } from '../../_hooks/entry/useOrderForm'
 import type { OrderSide } from '../../_lib/entry/validate'
