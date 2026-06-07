@@ -11,25 +11,36 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file darkpool/v1/darkpool.proto.
  */
 export const file_darkpool_v1_darkpool: GenFile = /*@__PURE__*/
-  fileDesc("ChpkYXJrcG9vbC92MS9kYXJrcG9vbC5wcm90bxILZGFya3Bvb2wudjEiUQoRUGxhY2VPcmRlclJlcXVlc3QSEgoKY29tbWl0bWVudBgBIAEoDBINCgVwcm9vZhgCIAEoDBIZChFlbmNyeXB0ZWRfcGF5bG9hZBgDIAEoDCI7ChJQbGFjZU9yZGVyUmVzcG9uc2USJQoFb3JkZXIYASABKAsyFi5kYXJrcG9vbC52MS5PcmRlckluZm8iNgoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhAKCG9yZGVyX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSIVChNDYW5jZWxPcmRlclJlc3BvbnNlIiMKD0dldE9yZGVyUmVxdWVzdBIQCghvcmRlcl9pZBgBIAEoCSI5ChBHZXRPcmRlclJlc3BvbnNlEiUKBW9yZGVyGAEgASgLMhYuZGFya3Bvb2wudjEuT3JkZXJJbmZvIiMKE0dldE9yZGVyQm9va1JlcXVlc3QSDAoEcGFpchgBIAEoCSJyChRHZXRPcmRlckJvb2tSZXNwb25zZRIMCgRwYWlyGAEgASgJEiUKBGJpZHMYAiADKAsyFy5kYXJrcG9vbC52MS5QcmljZUxldmVsEiUKBGFza3MYAyADKAsyFy5kYXJrcG9vbC52MS5QcmljZUxldmVsIkQKClByaWNlTGV2ZWwSDQoFcHJpY2UYASABKAkSEgoKdG90YWxfc2l6ZRgCIAEoCRITCgtvcmRlcl9jb3VudBgDIAEoBSI3ChhHZXRBdWN0aW9uSGlzdG9yeVJlcXVlc3QSDAoEcGFpchgBIAEoCRINCgVsaW1pdBgCIAEoBSJKChlHZXRBdWN0aW9uSGlzdG9yeVJlc3BvbnNlEi0KCGF1Y3Rpb25zGAEgAygLMhsuZGFya3Bvb2wudjEuQXVjdGlvblN1bW1hcnkijwEKDkF1Y3Rpb25TdW1tYXJ5EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyIlChVTdHJlYW1BdWN0aW9uc1JlcXVlc3QSDAoEcGFpchgBIAEoCSKNAQoMQXVjdGlvbkV2ZW50EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyLHAQoJT3JkZXJJbmZvEgoKAmlkGAEgASgJEgwKBHBhaXIYAiABKAkSHwoEc2lkZRgDIAEoDjIRLmRhcmtwb29sLnYxLlNpZGUSDQoFcHJpY2UYBCABKAkSDAoEc2l6ZRgFIAEoCRIWCg5yZW1haW5pbmdfc2l6ZRgGIAEoCRIWCg5jb21taXRtZW50X2tleRgHIAEoCRIZChFzdWJtaXR0ZWRfYXRfdW5peBgIIAEoAxIXCg9leHBpcmVzX2F0X3VuaXgYCSABKAMizwEKCFBhaXJJbmZvEgwKBHBhaXIYASABKAkSEgoKYmFzZV90b2tlbhgCIAEoCRITCgtxdW90ZV90b2tlbhgDIAEoCRIWCg5taW5fb3JkZXJfc2l6ZRgEIAEoCRIRCgl0aWNrX3NpemUYBSABKAkSIAoTYXVjdGlvbl9pbnRlcnZhbF9tcxgGIAEoDUgAiAEBEicKBnN0YXR1cxgHIAEoDjIXLmRhcmtwb29sLnYxLlBhaXJTdGF0dXNCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiEgoQTGlzdFBhaXJzUmVxdWVzdCI5ChFMaXN0UGFpcnNSZXNwb25zZRIkCgVwYWlycxgBIAMoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIhcKFUxpc3RQYWlyc0FkbWluUmVxdWVzdCI+ChZMaXN0UGFpcnNBZG1pblJlc3BvbnNlEiQKBXBhaXJzGAEgAygLMhUuZGFya3Bvb2wudjEuUGFpckluZm8isQEKE1JlZ2lzdGVyUGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCRISCgpiYXNlX3Rva2VuGAIgASgJEhMKC3F1b3RlX3Rva2VuGAMgASgJEhYKDm1pbl9vcmRlcl9zaXplGAQgASgJEhEKCXRpY2tfc2l6ZRgFIAEoCRIgChNhdWN0aW9uX2ludGVydmFsX21zGAYgASgNSACIAQFCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiOwoUUmVnaXN0ZXJQYWlyUmVzcG9uc2USIwoEcGFpchgBIAEoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIiIKElN1c3BlbmRQYWlyUmVxdWVzdBIMCgRwYWlyGAEgASgJIhUKE1N1c3BlbmRQYWlyUmVzcG9uc2UiIQoRRGVsaXN0UGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCSIuChJEZWxpc3RQYWlyUmVzcG9uc2USGAoQY2FuY2VsbGVkX29yZGVycxgBIAEoDSo5CgRTaWRlEhQKEFNJREVfVU5TUEVDSUZJRUQQABIMCghTSURFX0JVWRABEg0KCVNJREVfU0VMTBACKnYKClBhaXJTdGF0dXMSGwoXUEFJUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIWChJQQUlSX1NUQVRVU19BQ1RJVkUQARIZChVQQUlSX1NUQVRVU19TVVNQRU5ERUQQAhIYChRQQUlSX1NUQVRVU19ERUxJU1RFRBADMuoFCg9EYXJrUG9vbFNlcnZpY2USZAoKUGxhY2VPcmRlchIeLmRhcmtwb29sLnYxLlBsYWNlT3JkZXJSZXF1ZXN0Gh8uZGFya3Bvb2wudjEuUGxhY2VPcmRlclJlc3BvbnNlIhWC0+STAg86ASoiCi92MS9vcmRlcnMSbwoLQ2FuY2VsT3JkZXISHy5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlc3BvbnNlIh2C0+STAhcqFS92MS9vcmRlcnMve29yZGVyX2lkfRJmCghHZXRPcmRlchIcLmRhcmtwb29sLnYxLkdldE9yZGVyUmVxdWVzdBodLmRhcmtwb29sLnYxLkdldE9yZGVyUmVzcG9uc2UiHYLT5JMCFxIVL3YxL29yZGVycy97b3JkZXJfaWR9EmoKDEdldE9yZGVyQm9vaxIgLmRhcmtwb29sLnYxLkdldE9yZGVyQm9va1JlcXVlc3QaIS5kYXJrcG9vbC52MS5HZXRPcmRlckJvb2tSZXNwb25zZSIVgtPkkwIPEg0vdjEvb3JkZXJib29rEngKEUdldEF1Y3Rpb25IaXN0b3J5EiUuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXF1ZXN0GiYuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXNwb25zZSIUgtPkkwIOEgwvdjEvYXVjdGlvbnMSUwoOU3RyZWFtQXVjdGlvbnMSIi5kYXJrcG9vbC52MS5TdHJlYW1BdWN0aW9uc1JlcXVlc3QaGS5kYXJrcG9vbC52MS5BdWN0aW9uRXZlbnQiADABEl0KCUxpc3RQYWlycxIdLmRhcmtwb29sLnYxLkxpc3RQYWlyc1JlcXVlc3QaHi5kYXJrcG9vbC52MS5MaXN0UGFpcnNSZXNwb25zZSIRgtPkkwILEgkvdjEvcGFpcnMy5wMKFERhcmtQb29sQWRtaW5TZXJ2aWNlEm8KDFJlZ2lzdGVyUGFpchIgLmRhcmtwb29sLnYxLlJlZ2lzdGVyUGFpclJlcXVlc3QaIS5kYXJrcG9vbC52MS5SZWdpc3RlclBhaXJSZXNwb25zZSIagtPkkwIUOgEqIg8vdjEvYWRtaW4vcGFpcnMSewoLU3VzcGVuZFBhaXISHy5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlcXVlc3QaIC5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlc3BvbnNlIimC0+STAiM6ASoyHi92MS9hZG1pbi9wYWlycy97cGFpcn0vc3VzcGVuZBJtCgpEZWxpc3RQYWlyEh4uZGFya3Bvb2wudjEuRGVsaXN0UGFpclJlcXVlc3QaHy5kYXJrcG9vbC52MS5EZWxpc3RQYWlyUmVzcG9uc2UiHoLT5JMCGCoWL3YxL2FkbWluL3BhaXJzL3twYWlyfRJyCg5MaXN0UGFpcnNBZG1pbhIiLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVxdWVzdBojLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVzcG9uc2UiF4LT5JMCERIPL3YxL2FkbWluL3BhaXJzQkRaQmdpdGh1Yi5jb20vZGFya3Bvb2wtZXhjaGFuZ2Uvc2VydmVyL2FwaS9nZW4vZGFya3Bvb2wvdjE7ZGFya3Bvb2x2MWIGcHJvdG8z", [file_google_api_annotations]);
+  fileDesc("ChpkYXJrcG9vbC92MS9kYXJrcG9vbC5wcm90bxILZGFya3Bvb2wudjEiUQoRUGxhY2VPcmRlclJlcXVlc3QSEgoKY29tbWl0bWVudBgBIAEoDBINCgVwcm9vZhgCIAEoDBIZChFlbmNyeXB0ZWRfcGF5bG9hZBgDIAEoDCI7ChJQbGFjZU9yZGVyUmVzcG9uc2USJQoFb3JkZXIYASABKAsyFi5kYXJrcG9vbC52MS5PcmRlckluZm8iNgoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhAKCG9yZGVyX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSIVChNDYW5jZWxPcmRlclJlc3BvbnNlIiMKD0dldE9yZGVyUmVxdWVzdBIQCghvcmRlcl9pZBgBIAEoCSI5ChBHZXRPcmRlclJlc3BvbnNlEiUKBW9yZGVyGAEgASgLMhYuZGFya3Bvb2wudjEuT3JkZXJJbmZvIiEKEUxpc3RPcmRlcnNSZXF1ZXN0EgwKBHBhaXIYASABKAkiPAoSTGlzdE9yZGVyc1Jlc3BvbnNlEiYKBm9yZGVycxgBIAMoCzIWLmRhcmtwb29sLnYxLk9yZGVySW5mbyI3ChhHZXRBdWN0aW9uSGlzdG9yeVJlcXVlc3QSDAoEcGFpchgBIAEoCRINCgVsaW1pdBgCIAEoBSJKChlHZXRBdWN0aW9uSGlzdG9yeVJlc3BvbnNlEi0KCGF1Y3Rpb25zGAEgAygLMhsuZGFya3Bvb2wudjEuQXVjdGlvblN1bW1hcnkijwEKDkF1Y3Rpb25TdW1tYXJ5EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyIlChVTdHJlYW1BdWN0aW9uc1JlcXVlc3QSDAoEcGFpchgBIAEoCSKNAQoMQXVjdGlvbkV2ZW50EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyLHAQoJT3JkZXJJbmZvEgoKAmlkGAEgASgJEgwKBHBhaXIYAiABKAkSHwoEc2lkZRgDIAEoDjIRLmRhcmtwb29sLnYxLlNpZGUSDQoFcHJpY2UYBCABKAkSDAoEc2l6ZRgFIAEoCRIWCg5yZW1haW5pbmdfc2l6ZRgGIAEoCRIWCg5jb21taXRtZW50X2tleRgHIAEoCRIZChFzdWJtaXR0ZWRfYXRfdW5peBgIIAEoAxIXCg9leHBpcmVzX2F0X3VuaXgYCSABKAMizwEKCFBhaXJJbmZvEgwKBHBhaXIYASABKAkSEgoKYmFzZV90b2tlbhgCIAEoCRITCgtxdW90ZV90b2tlbhgDIAEoCRIWCg5taW5fb3JkZXJfc2l6ZRgEIAEoCRIRCgl0aWNrX3NpemUYBSABKAkSIAoTYXVjdGlvbl9pbnRlcnZhbF9tcxgGIAEoDUgAiAEBEicKBnN0YXR1cxgHIAEoDjIXLmRhcmtwb29sLnYxLlBhaXJTdGF0dXNCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiEgoQTGlzdFBhaXJzUmVxdWVzdCI5ChFMaXN0UGFpcnNSZXNwb25zZRIkCgVwYWlycxgBIAMoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIhcKFUxpc3RQYWlyc0FkbWluUmVxdWVzdCI+ChZMaXN0UGFpcnNBZG1pblJlc3BvbnNlEiQKBXBhaXJzGAEgAygLMhUuZGFya3Bvb2wudjEuUGFpckluZm8isQEKE1JlZ2lzdGVyUGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCRISCgpiYXNlX3Rva2VuGAIgASgJEhMKC3F1b3RlX3Rva2VuGAMgASgJEhYKDm1pbl9vcmRlcl9zaXplGAQgASgJEhEKCXRpY2tfc2l6ZRgFIAEoCRIgChNhdWN0aW9uX2ludGVydmFsX21zGAYgASgNSACIAQFCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiOwoUUmVnaXN0ZXJQYWlyUmVzcG9uc2USIwoEcGFpchgBIAEoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIiIKElN1c3BlbmRQYWlyUmVxdWVzdBIMCgRwYWlyGAEgASgJIhUKE1N1c3BlbmRQYWlyUmVzcG9uc2UiIQoRRGVsaXN0UGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCSIuChJEZWxpc3RQYWlyUmVzcG9uc2USGAoQY2FuY2VsbGVkX29yZGVycxgBIAEoDSo5CgRTaWRlEhQKEFNJREVfVU5TUEVDSUZJRUQQABIMCghTSURFX0JVWRABEg0KCVNJREVfU0VMTBACKnYKClBhaXJTdGF0dXMSGwoXUEFJUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIWChJQQUlSX1NUQVRVU19BQ1RJVkUQARIZChVQQUlSX1NUQVRVU19TVVNQRU5ERUQQAhIYChRQQUlSX1NUQVRVU19ERUxJU1RFRBADMuEFCg9EYXJrUG9vbFNlcnZpY2USZAoKUGxhY2VPcmRlchIeLmRhcmtwb29sLnYxLlBsYWNlT3JkZXJSZXF1ZXN0Gh8uZGFya3Bvb2wudjEuUGxhY2VPcmRlclJlc3BvbnNlIhWC0+STAg86ASoiCi92MS9vcmRlcnMSbwoLQ2FuY2VsT3JkZXISHy5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlc3BvbnNlIh2C0+STAhcqFS92MS9vcmRlcnMve29yZGVyX2lkfRJmCghHZXRPcmRlchIcLmRhcmtwb29sLnYxLkdldE9yZGVyUmVxdWVzdBodLmRhcmtwb29sLnYxLkdldE9yZGVyUmVzcG9uc2UiHYLT5JMCFxIVL3YxL29yZGVycy97b3JkZXJfaWR9EmEKCkxpc3RPcmRlcnMSHi5kYXJrcG9vbC52MS5MaXN0T3JkZXJzUmVxdWVzdBofLmRhcmtwb29sLnYxLkxpc3RPcmRlcnNSZXNwb25zZSISgtPkkwIMEgovdjEvb3JkZXJzEngKEUdldEF1Y3Rpb25IaXN0b3J5EiUuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXF1ZXN0GiYuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXNwb25zZSIUgtPkkwIOEgwvdjEvYXVjdGlvbnMSUwoOU3RyZWFtQXVjdGlvbnMSIi5kYXJrcG9vbC52MS5TdHJlYW1BdWN0aW9uc1JlcXVlc3QaGS5kYXJrcG9vbC52MS5BdWN0aW9uRXZlbnQiADABEl0KCUxpc3RQYWlycxIdLmRhcmtwb29sLnYxLkxpc3RQYWlyc1JlcXVlc3QaHi5kYXJrcG9vbC52MS5MaXN0UGFpcnNSZXNwb25zZSIRgtPkkwILEgkvdjEvcGFpcnMy5wMKFERhcmtQb29sQWRtaW5TZXJ2aWNlEm8KDFJlZ2lzdGVyUGFpchIgLmRhcmtwb29sLnYxLlJlZ2lzdGVyUGFpclJlcXVlc3QaIS5kYXJrcG9vbC52MS5SZWdpc3RlclBhaXJSZXNwb25zZSIagtPkkwIUOgEqIg8vdjEvYWRtaW4vcGFpcnMSewoLU3VzcGVuZFBhaXISHy5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlcXVlc3QaIC5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlc3BvbnNlIimC0+STAiM6ASoyHi92MS9hZG1pbi9wYWlycy97cGFpcn0vc3VzcGVuZBJtCgpEZWxpc3RQYWlyEh4uZGFya3Bvb2wudjEuRGVsaXN0UGFpclJlcXVlc3QaHy5kYXJrcG9vbC52MS5EZWxpc3RQYWlyUmVzcG9uc2UiHoLT5JMCGCoWL3YxL2FkbWluL3BhaXJzL3twYWlyfRJyCg5MaXN0UGFpcnNBZG1pbhIiLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVxdWVzdBojLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVzcG9uc2UiF4LT5JMCERIPL3YxL2FkbWluL3BhaXJzQkRaQmdpdGh1Yi5jb20vZGFya3Bvb2wtZXhjaGFuZ2Uvc2VydmVyL2FwaS9nZW4vZGFya3Bvb2wvdjE7ZGFya3Bvb2x2MWIGcHJvdG8z", [file_google_api_annotations]);
 
 /**
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
- * sees plaintext on the wire; the operator decrypts server-side and the
- * commitment binds the ciphertext to the proof.
+ * sees plaintext on the wire; the operator decrypts server-side.
+ *
+ * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
+ * verified today. The engine ignores the client commitment and re-derives
+ * the canonical Poseidon commitment over the decrypted fields; the proof is
+ * accepted unverified. Order validity is operator-enforced, not
+ * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
+ * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
+ *
+ * Both fields are still SYNTACTICALLY required: `validate_place_order`
+ * rejects an empty `commitment` or `proof`. Until real verification lands,
+ * clients must keep sending non-empty bytes for both (placeholder bytes are
+ * fine — they are not checked, only their presence is).
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
   /**
-   * binds proof to ciphertext
+   * client commitment; re-derived & overridden server-side (unverified)
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment: Uint8Array;
 
   /**
-   * aggregated or per-order ZK proof
+   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
    *
    * @generated from field: bytes proof = 2;
    */
@@ -45,21 +56,32 @@ export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
 
 /**
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
- * sees plaintext on the wire; the operator decrypts server-side and the
- * commitment binds the ciphertext to the proof.
+ * sees plaintext on the wire; the operator decrypts server-side.
+ *
+ * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
+ * verified today. The engine ignores the client commitment and re-derives
+ * the canonical Poseidon commitment over the decrypted fields; the proof is
+ * accepted unverified. Order validity is operator-enforced, not
+ * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
+ * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
+ *
+ * Both fields are still SYNTACTICALLY required: `validate_place_order`
+ * rejects an empty `commitment` or `proof`. Until real verification lands,
+ * clients must keep sending non-empty bytes for both (placeholder bytes are
+ * fine — they are not checked, only their presence is).
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequestJson = {
   /**
-   * binds proof to ciphertext
+   * client commitment; re-derived & overridden server-side (unverified)
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment?: string;
 
   /**
-   * aggregated or per-order ZK proof
+   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
    *
    * @generated from field: bytes proof = 2;
    */
@@ -218,125 +240,62 @@ export const GetOrderResponseSchema: GenMessage<GetOrderResponse, {jsonType: Get
   messageDesc(file_darkpool_v1_darkpool, 5);
 
 /**
- * @generated from message darkpool.v1.GetOrderBookRequest
+ * @generated from message darkpool.v1.ListOrdersRequest
  */
-export type GetOrderBookRequest = Message<"darkpool.v1.GetOrderBookRequest"> & {
+export type ListOrdersRequest = Message<"darkpool.v1.ListOrdersRequest"> & {
   /**
+   * optional filter; empty = every pair
+   *
    * @generated from field: string pair = 1;
    */
   pair: string;
 };
 
 /**
- * @generated from message darkpool.v1.GetOrderBookRequest
+ * @generated from message darkpool.v1.ListOrdersRequest
  */
-export type GetOrderBookRequestJson = {
+export type ListOrdersRequestJson = {
   /**
+   * optional filter; empty = every pair
+   *
    * @generated from field: string pair = 1;
    */
   pair?: string;
 };
 
 /**
- * Describes the message darkpool.v1.GetOrderBookRequest.
- * Use `create(GetOrderBookRequestSchema)` to create a new message.
+ * Describes the message darkpool.v1.ListOrdersRequest.
+ * Use `create(ListOrdersRequestSchema)` to create a new message.
  */
-export const GetOrderBookRequestSchema: GenMessage<GetOrderBookRequest, {jsonType: GetOrderBookRequestJson}> = /*@__PURE__*/
+export const ListOrdersRequestSchema: GenMessage<ListOrdersRequest, {jsonType: ListOrdersRequestJson}> = /*@__PURE__*/
   messageDesc(file_darkpool_v1_darkpool, 6);
 
 /**
- * @generated from message darkpool.v1.GetOrderBookResponse
+ * @generated from message darkpool.v1.ListOrdersResponse
  */
-export type GetOrderBookResponse = Message<"darkpool.v1.GetOrderBookResponse"> & {
+export type ListOrdersResponse = Message<"darkpool.v1.ListOrdersResponse"> & {
   /**
-   * @generated from field: string pair = 1;
+   * @generated from field: repeated darkpool.v1.OrderInfo orders = 1;
    */
-  pair: string;
-
-  /**
-   * @generated from field: repeated darkpool.v1.PriceLevel bids = 2;
-   */
-  bids: PriceLevel[];
-
-  /**
-   * @generated from field: repeated darkpool.v1.PriceLevel asks = 3;
-   */
-  asks: PriceLevel[];
+  orders: OrderInfo[];
 };
 
 /**
- * @generated from message darkpool.v1.GetOrderBookResponse
+ * @generated from message darkpool.v1.ListOrdersResponse
  */
-export type GetOrderBookResponseJson = {
+export type ListOrdersResponseJson = {
   /**
-   * @generated from field: string pair = 1;
+   * @generated from field: repeated darkpool.v1.OrderInfo orders = 1;
    */
-  pair?: string;
-
-  /**
-   * @generated from field: repeated darkpool.v1.PriceLevel bids = 2;
-   */
-  bids?: PriceLevelJson[];
-
-  /**
-   * @generated from field: repeated darkpool.v1.PriceLevel asks = 3;
-   */
-  asks?: PriceLevelJson[];
+  orders?: OrderInfoJson[];
 };
 
 /**
- * Describes the message darkpool.v1.GetOrderBookResponse.
- * Use `create(GetOrderBookResponseSchema)` to create a new message.
+ * Describes the message darkpool.v1.ListOrdersResponse.
+ * Use `create(ListOrdersResponseSchema)` to create a new message.
  */
-export const GetOrderBookResponseSchema: GenMessage<GetOrderBookResponse, {jsonType: GetOrderBookResponseJson}> = /*@__PURE__*/
+export const ListOrdersResponseSchema: GenMessage<ListOrdersResponse, {jsonType: ListOrdersResponseJson}> = /*@__PURE__*/
   messageDesc(file_darkpool_v1_darkpool, 7);
-
-/**
- * @generated from message darkpool.v1.PriceLevel
- */
-export type PriceLevel = Message<"darkpool.v1.PriceLevel"> & {
-  /**
-   * @generated from field: string price = 1;
-   */
-  price: string;
-
-  /**
-   * @generated from field: string total_size = 2;
-   */
-  totalSize: string;
-
-  /**
-   * @generated from field: int32 order_count = 3;
-   */
-  orderCount: number;
-};
-
-/**
- * @generated from message darkpool.v1.PriceLevel
- */
-export type PriceLevelJson = {
-  /**
-   * @generated from field: string price = 1;
-   */
-  price?: string;
-
-  /**
-   * @generated from field: string total_size = 2;
-   */
-  totalSize?: string;
-
-  /**
-   * @generated from field: int32 order_count = 3;
-   */
-  orderCount?: number;
-};
-
-/**
- * Describes the message darkpool.v1.PriceLevel.
- * Use `create(PriceLevelSchema)` to create a new message.
- */
-export const PriceLevelSchema: GenMessage<PriceLevel, {jsonType: PriceLevelJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 8);
 
 /**
  * @generated from message darkpool.v1.GetAuctionHistoryRequest
@@ -377,7 +336,7 @@ export type GetAuctionHistoryRequestJson = {
  * Use `create(GetAuctionHistoryRequestSchema)` to create a new message.
  */
 export const GetAuctionHistoryRequestSchema: GenMessage<GetAuctionHistoryRequest, {jsonType: GetAuctionHistoryRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 9);
+  messageDesc(file_darkpool_v1_darkpool, 8);
 
 /**
  * @generated from message darkpool.v1.GetAuctionHistoryResponse
@@ -404,7 +363,7 @@ export type GetAuctionHistoryResponseJson = {
  * Use `create(GetAuctionHistoryResponseSchema)` to create a new message.
  */
 export const GetAuctionHistoryResponseSchema: GenMessage<GetAuctionHistoryResponse, {jsonType: GetAuctionHistoryResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 10);
+  messageDesc(file_darkpool_v1_darkpool, 9);
 
 /**
  * @generated from message darkpool.v1.AuctionSummary
@@ -481,7 +440,7 @@ export type AuctionSummaryJson = {
  * Use `create(AuctionSummarySchema)` to create a new message.
  */
 export const AuctionSummarySchema: GenMessage<AuctionSummary, {jsonType: AuctionSummaryJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 11);
+  messageDesc(file_darkpool_v1_darkpool, 10);
 
 /**
  * @generated from message darkpool.v1.StreamAuctionsRequest
@@ -512,7 +471,7 @@ export type StreamAuctionsRequestJson = {
  * Use `create(StreamAuctionsRequestSchema)` to create a new message.
  */
 export const StreamAuctionsRequestSchema: GenMessage<StreamAuctionsRequest, {jsonType: StreamAuctionsRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 12);
+  messageDesc(file_darkpool_v1_darkpool, 11);
 
 /**
  * @generated from message darkpool.v1.AuctionEvent
@@ -589,7 +548,7 @@ export type AuctionEventJson = {
  * Use `create(AuctionEventSchema)` to create a new message.
  */
 export const AuctionEventSchema: GenMessage<AuctionEvent, {jsonType: AuctionEventJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 13);
+  messageDesc(file_darkpool_v1_darkpool, 12);
 
 /**
  * @generated from message darkpool.v1.OrderInfo
@@ -696,7 +655,7 @@ export type OrderInfoJson = {
  * Use `create(OrderInfoSchema)` to create a new message.
  */
 export const OrderInfoSchema: GenMessage<OrderInfo, {jsonType: OrderInfoJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 14);
+  messageDesc(file_darkpool_v1_darkpool, 13);
 
 /**
  * @generated from message darkpool.v1.PairInfo
@@ -783,7 +742,7 @@ export type PairInfoJson = {
  * Use `create(PairInfoSchema)` to create a new message.
  */
 export const PairInfoSchema: GenMessage<PairInfo, {jsonType: PairInfoJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 15);
+  messageDesc(file_darkpool_v1_darkpool, 14);
 
 /**
  * @generated from message darkpool.v1.ListPairsRequest
@@ -802,7 +761,7 @@ export type ListPairsRequestJson = {
  * Use `create(ListPairsRequestSchema)` to create a new message.
  */
 export const ListPairsRequestSchema: GenMessage<ListPairsRequest, {jsonType: ListPairsRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 16);
+  messageDesc(file_darkpool_v1_darkpool, 15);
 
 /**
  * @generated from message darkpool.v1.ListPairsResponse
@@ -829,7 +788,7 @@ export type ListPairsResponseJson = {
  * Use `create(ListPairsResponseSchema)` to create a new message.
  */
 export const ListPairsResponseSchema: GenMessage<ListPairsResponse, {jsonType: ListPairsResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 17);
+  messageDesc(file_darkpool_v1_darkpool, 16);
 
 /**
  * @generated from message darkpool.v1.ListPairsAdminRequest
@@ -848,7 +807,7 @@ export type ListPairsAdminRequestJson = {
  * Use `create(ListPairsAdminRequestSchema)` to create a new message.
  */
 export const ListPairsAdminRequestSchema: GenMessage<ListPairsAdminRequest, {jsonType: ListPairsAdminRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 18);
+  messageDesc(file_darkpool_v1_darkpool, 17);
 
 /**
  * @generated from message darkpool.v1.ListPairsAdminResponse
@@ -875,7 +834,7 @@ export type ListPairsAdminResponseJson = {
  * Use `create(ListPairsAdminResponseSchema)` to create a new message.
  */
 export const ListPairsAdminResponseSchema: GenMessage<ListPairsAdminResponse, {jsonType: ListPairsAdminResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 19);
+  messageDesc(file_darkpool_v1_darkpool, 18);
 
 /**
  * @generated from message darkpool.v1.RegisterPairRequest
@@ -952,7 +911,7 @@ export type RegisterPairRequestJson = {
  * Use `create(RegisterPairRequestSchema)` to create a new message.
  */
 export const RegisterPairRequestSchema: GenMessage<RegisterPairRequest, {jsonType: RegisterPairRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 20);
+  messageDesc(file_darkpool_v1_darkpool, 19);
 
 /**
  * @generated from message darkpool.v1.RegisterPairResponse
@@ -979,7 +938,7 @@ export type RegisterPairResponseJson = {
  * Use `create(RegisterPairResponseSchema)` to create a new message.
  */
 export const RegisterPairResponseSchema: GenMessage<RegisterPairResponse, {jsonType: RegisterPairResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 21);
+  messageDesc(file_darkpool_v1_darkpool, 20);
 
 /**
  * @generated from message darkpool.v1.SuspendPairRequest
@@ -1006,7 +965,7 @@ export type SuspendPairRequestJson = {
  * Use `create(SuspendPairRequestSchema)` to create a new message.
  */
 export const SuspendPairRequestSchema: GenMessage<SuspendPairRequest, {jsonType: SuspendPairRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 22);
+  messageDesc(file_darkpool_v1_darkpool, 21);
 
 /**
  * @generated from message darkpool.v1.SuspendPairResponse
@@ -1025,7 +984,7 @@ export type SuspendPairResponseJson = {
  * Use `create(SuspendPairResponseSchema)` to create a new message.
  */
 export const SuspendPairResponseSchema: GenMessage<SuspendPairResponse, {jsonType: SuspendPairResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 23);
+  messageDesc(file_darkpool_v1_darkpool, 22);
 
 /**
  * @generated from message darkpool.v1.DelistPairRequest
@@ -1052,7 +1011,7 @@ export type DelistPairRequestJson = {
  * Use `create(DelistPairRequestSchema)` to create a new message.
  */
 export const DelistPairRequestSchema: GenMessage<DelistPairRequest, {jsonType: DelistPairRequestJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 24);
+  messageDesc(file_darkpool_v1_darkpool, 23);
 
 /**
  * @generated from message darkpool.v1.DelistPairResponse
@@ -1079,7 +1038,7 @@ export type DelistPairResponseJson = {
  * Use `create(DelistPairResponseSchema)` to create a new message.
  */
 export const DelistPairResponseSchema: GenMessage<DelistPairResponse, {jsonType: DelistPairResponseJson}> = /*@__PURE__*/
-  messageDesc(file_darkpool_v1_darkpool, 25);
+  messageDesc(file_darkpool_v1_darkpool, 24);
 
 /**
  * @generated from enum darkpool.v1.Side
@@ -1177,12 +1136,19 @@ export const DarkPoolService: GenService<{
     output: typeof GetOrderResponseSchema;
   },
   /**
-   * @generated from rpc darkpool.v1.DarkPoolService.GetOrderBook
+   * Lists the authenticated caller's own resting orders ("my orders").
+   * Scoped to the wallet identity; a trader never sees another trader's
+   * orders. There is deliberately no public pre-settlement order book —
+   * serving live cross-trader depth would defeat the dark pool (an
+   * observer could reconstruct incoming liquidity and cross it in the
+   * same auction round).
+   *
+   * @generated from rpc darkpool.v1.DarkPoolService.ListOrders
    */
-  getOrderBook: {
+  listOrders: {
     methodKind: "unary";
-    input: typeof GetOrderBookRequestSchema;
-    output: typeof GetOrderBookResponseSchema;
+    input: typeof ListOrdersRequestSchema;
+    output: typeof ListOrdersResponseSchema;
   },
   /**
    * @generated from rpc darkpool.v1.DarkPoolService.GetAuctionHistory

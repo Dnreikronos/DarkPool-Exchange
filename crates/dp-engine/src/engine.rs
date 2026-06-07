@@ -52,6 +52,16 @@ impl Drop for OrderSecrets {
 
 /// Looks up balance/position for a trader. Default impl trusts the caller
 /// — pending escrow oracle integration.
+///
+/// **Per-leg asset semantics (#170).** The solvency constraint checks each
+/// leg's balance in the asset that leg *spends*: a bid (buyer) is checked
+/// against `notional` in the quote asset, an ask (seller) against `size` in
+/// the base asset — mirroring the on-chain `_settleMatch` debits. The real
+/// oracle must therefore return the balance in the right asset for the
+/// order's side: quote for a bid, base for an ask. The lookup is keyed only
+/// by `trader_id` today because the stub is asset-blind; the escrow-backed
+/// oracle wiring (the #165/#153-overlapping follow-up) must thread the side
+/// or per-asset escrow through so the witnessed `balance` matches the leg.
 pub trait BalanceOracle: Send + Sync {
     fn lookup(&self, trader_id: &[u8; 32]) -> (Decimal, i128);
 }
@@ -887,6 +897,9 @@ fn leg_witness_from(
     dp_zk::witness::OrderLegWitness {
         trader_id: hex::encode(secret.trader_id),
         salt: hex::encode(secret.salt),
+        // Circuit checks this in the asset the leg spends: quote for a bid,
+        // base for an ask (#170). The stub oracle is asset-blind; see
+        // `BalanceOracle` for the per-asset wiring the real oracle owes.
         balance: secret.balance,
         position: secret.position.to_string(),
         limit_price: order.price,

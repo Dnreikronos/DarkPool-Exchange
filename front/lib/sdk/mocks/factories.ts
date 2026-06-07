@@ -13,19 +13,10 @@ import { Faker, en } from '@faker-js/faker'
 
 import { Decimal, toWirePrice, toWireSize } from '../../units'
 
-import {
-  AuctionSummarySchema,
-  GetOrderBookResponseSchema,
-  OrderInfoSchema,
-  PriceLevelSchema,
-  Side,
-} from '../proto/darkpool/v1/darkpool_pb.js'
-import type {
-  AuctionSummary,
-  GetOrderBookResponse,
-  OrderInfo,
-  PriceLevel,
-} from '../proto/darkpool/v1/darkpool_pb.js'
+import { AuctionSummarySchema, OrderInfoSchema, Side } from '../proto/darkpool/v1/darkpool_pb.js'
+import type { AuctionSummary, OrderInfo } from '../proto/darkpool/v1/darkpool_pb.js'
+// Order book is mock-only since #178 — hand-written types, not generated.
+import type { OrderBook, PriceLevel } from '../orderbook.js'
 
 // ─── Pair / market defaults ───────────────────────────────────────────────
 //
@@ -137,11 +128,11 @@ export function mockPriceLevel(ctx: FactoryContext, opts: MockPriceLevelOptions)
       ? opts.totalSize
       : sampleDecimal(ctx.faker, { min: '0.5', max: '50', dp: SIZE_DP })
   const orderCount = opts.orderCount ?? ctx.faker.number.int({ min: 1, max: 12 })
-  return create(PriceLevelSchema, {
+  return {
     price: toWirePrice(opts.price),
     totalSize: toWireSize(size),
     orderCount,
-  })
+  }
 }
 
 // ─── mockOrderBook ────────────────────────────────────────────────────────
@@ -157,10 +148,7 @@ export interface MockOrderBookOptions {
   pair?: string
 }
 
-export function mockOrderBook(
-  ctx: FactoryContext,
-  opts: MockOrderBookOptions = {}
-): GetOrderBookResponse {
+export function mockOrderBook(ctx: FactoryContext, opts: MockOrderBookOptions = {}): OrderBook {
   const mid = opts.mid !== undefined ? new Decimal(opts.mid.toString()) : DEFAULT_MID
   const depth = opts.depth ?? 12
   const tick = opts.tickSize !== undefined ? new Decimal(opts.tickSize.toString()) : new Decimal(1)
@@ -180,7 +168,7 @@ export function mockOrderBook(
   bids.sort((a, b) => new Decimal(b.price).cmp(new Decimal(a.price)))
   asks.sort((a, b) => new Decimal(a.price).cmp(new Decimal(b.price)))
 
-  return create(GetOrderBookResponseSchema, { pair, bids, asks })
+  return { pair, bids, asks }
 }
 
 // ─── mockOrderInfo ────────────────────────────────────────────────────────
@@ -334,7 +322,7 @@ export function scaleWireSize(
 }
 
 /** Return the midpoint of best bid / best ask. Throws if either side is empty. */
-export function midFromBook(book: GetOrderBookResponse): Decimal {
+export function midFromBook(book: OrderBook): Decimal {
   if (book.bids.length === 0 || book.asks.length === 0) {
     throw new Error('factories: cannot compute mid on an empty side')
   }
