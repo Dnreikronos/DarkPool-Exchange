@@ -46,7 +46,10 @@ export async function fetchNonce(apiUrl: string, fetchImpl: typeof fetch = fetch
   try {
     response = await fetchImpl(url, { method: 'GET', headers: { accept: 'application/json' } })
   } catch (cause) {
-    throw new SiweApiError(`network error fetching nonce: ${(cause as Error)?.message ?? cause}`, null)
+    throw new SiweApiError(
+      `network error fetching nonce: ${(cause as Error)?.message ?? cause}`,
+      null
+    )
   }
   if (!response.ok) {
     throw new SiweApiError(await readMessage(response), response.status)
@@ -73,7 +76,10 @@ export async function verifySiwe(
       body: JSON.stringify(body),
     })
   } catch (cause) {
-    throw new SiweApiError(`network error verifying signature: ${(cause as Error)?.message ?? cause}`, null)
+    throw new SiweApiError(
+      `network error verifying signature: ${(cause as Error)?.message ?? cause}`,
+      null
+    )
   }
   if (!response.ok) {
     throw new SiweApiError(await readMessage(response), response.status)

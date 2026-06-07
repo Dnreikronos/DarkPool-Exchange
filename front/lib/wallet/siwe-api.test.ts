@@ -57,10 +57,9 @@ describe('verifySiwe', () => {
   it('POSTs {message, signature} and maps expires_at -> expiresAt', async () => {
     const { fetchImpl, calls } = captureFetch(
       () =>
-        new Response(
-          JSON.stringify({ token: 'jwt', expires_at: 1893456000, address: '0xabc' }),
-          { status: 200 }
-        )
+        new Response(JSON.stringify({ token: 'jwt', expires_at: 1893456000, address: '0xabc' }), {
+          status: 200,
+        })
     )
     const result = await verifySiwe(API, { message: 'msg', signature: '0xsig' }, fetchImpl)
     expect(result).toEqual({ token: 'jwt', expiresAt: 1893456000, address: '0xabc' })

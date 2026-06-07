@@ -55,10 +55,14 @@ describe('buildSiweMessage', () => {
   it('falls back to window.location host/origin when domain/uri are omitted', () => {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
-      value: { location: { host: 'trade.darkpool.exchange', origin: 'https://trade.darkpool.exchange' } },
+      value: {
+        location: { host: 'trade.darkpool.exchange', origin: 'https://trade.darkpool.exchange' },
+      },
     })
     const msg = buildSiweMessage({ address: ADDR, chainId: 1, nonce: 'devNonce01' })
-    expect(msg).toContain('trade.darkpool.exchange wants you to sign in with your Ethereum account:')
+    expect(msg).toContain(
+      'trade.darkpool.exchange wants you to sign in with your Ethereum account:'
+    )
     expect(msg).toContain('URI: https://trade.darkpool.exchange')
   })
 })
