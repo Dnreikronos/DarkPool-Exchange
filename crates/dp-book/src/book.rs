@@ -105,33 +105,33 @@ impl OrderBook {
         };
     }
 
-    /// Sorted bids for a single pair (price desc, then submission time asc).
+    /// Sorted bids for a single pair (price desc, then placement `seq` asc).
+    ///
+    /// The tiebreak is the monotonic placement `seq`, not `submitted_at`:
+    /// `seq` is unique and identical live and on replay, so the priority order
+    /// is deterministic (see ADR 0005). `dp_auction::run` re-establishes this
+    /// same `(price, seq)` order internally, so it does not depend on this
+    /// method's ordering — but keeping them aligned avoids surprising
+    /// observers of the book.
     pub fn bids(&self, pair: &str) -> Vec<Order> {
         let inner = self.inner.read();
         let Some(book) = inner.books.get(pair) else {
             return Vec::new();
         };
         let mut out: Vec<Order> = book.bids.values().cloned().collect();
-        out.sort_by(|a, b| {
-            b.price
-                .cmp(&a.price)
-                .then(a.submitted_at.cmp(&b.submitted_at))
-        });
+        out.sort_by(|a, b| b.price.cmp(&a.price).then(a.seq.cmp(&b.seq)));
         out
     }
 
-    /// Sorted asks for a single pair (price asc, then submission time asc).
+    /// Sorted asks for a single pair (price asc, then placement `seq` asc).
+    /// Same priority key as [`Self::bids`]; see its docs.
     pub fn asks(&self, pair: &str) -> Vec<Order> {
         let inner = self.inner.read();
         let Some(book) = inner.books.get(pair) else {
             return Vec::new();
         };
         let mut out: Vec<Order> = book.asks.values().cloned().collect();
-        out.sort_by(|a, b| {
-            a.price
-                .cmp(&b.price)
-                .then(a.submitted_at.cmp(&b.submitted_at))
-        });
+        out.sort_by(|a, b| a.price.cmp(&b.price).then(a.seq.cmp(&b.seq)));
         out
     }
 
@@ -325,6 +325,7 @@ mod tests {
             encrypted_payload: vec![],
             submitted_at: Utc::now(),
             expires_at: DateTime::default(),
+            seq: 0,
         }
     }
 
@@ -437,42 +438,42 @@ mod tests {
     }
 
     #[test]
-    fn bids_sorted_price_desc_time_asc() {
+    fn bids_sorted_price_desc_seq_asc() {
         let book = OrderBook::new();
         let mut o1 = make_order(Side::Buy, 100, 1);
-        o1.submitted_at = Utc::now() - Duration::seconds(10);
+        o1.seq = 1;
         let mut o2 = make_order(Side::Buy, 200, 1);
-        o2.submitted_at = Utc::now();
+        o2.seq = 7;
         let mut o3 = make_order(Side::Buy, 200, 1);
-        o3.submitted_at = Utc::now() - Duration::seconds(5);
+        o3.seq = 3;
 
         book.insert_order(o1.clone());
         book.insert_order(o2.clone());
         book.insert_order(o3.clone());
 
         let bids = book.bids("BTC-USD");
-        assert_eq!(bids[0].id, o3.id); // price 200, earlier
-        assert_eq!(bids[1].id, o2.id); // price 200, later
+        assert_eq!(bids[0].id, o3.id); // price 200, lower seq
+        assert_eq!(bids[1].id, o2.id); // price 200, higher seq
         assert_eq!(bids[2].id, o1.id); // price 100
     }
 
     #[test]
-    fn asks_sorted_price_asc_time_asc() {
+    fn asks_sorted_price_asc_seq_asc() {
         let book = OrderBook::new();
         let mut o1 = make_order(Side::Sell, 300, 1);
-        o1.submitted_at = Utc::now();
+        o1.seq = 9;
         let mut o2 = make_order(Side::Sell, 100, 1);
-        o2.submitted_at = Utc::now() - Duration::seconds(5);
+        o2.seq = 2;
         let mut o3 = make_order(Side::Sell, 100, 1);
-        o3.submitted_at = Utc::now();
+        o3.seq = 5;
 
         book.insert_order(o1.clone());
         book.insert_order(o2.clone());
         book.insert_order(o3.clone());
 
         let asks = book.asks("BTC-USD");
-        assert_eq!(asks[0].id, o2.id); // price 100, earlier
-        assert_eq!(asks[1].id, o3.id); // price 100, later
+        assert_eq!(asks[0].id, o2.id); // price 100, lower seq
+        assert_eq!(asks[1].id, o3.id); // price 100, higher seq
         assert_eq!(asks[2].id, o1.id); // price 300
     }
 

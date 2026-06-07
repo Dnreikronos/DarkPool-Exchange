@@ -32,6 +32,20 @@ fn new_engine() -> Engine {
     engine
 }
 
+/// Distinct trader per placed order. Self-trade prevention keys on the
+/// `trader` address (#168), so a crossing bid/ask sharing an address would be
+/// skipped as a self-cross and match nothing. `0xEE` prefix scheme mirrors
+/// the `dp-auction` and `dp-api` test helpers.
+fn next_trader() -> Address {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xEE;
+    bytes[12..].copy_from_slice(&n.to_be_bytes());
+    Address::from(bytes)
+}
+
 async fn place(
     engine: &Engine,
     pair: &str,
@@ -41,7 +55,7 @@ async fn place(
     key: &str,
 ) -> Result<dp_types::Order, dp_engine::EngineError> {
     let d = DecryptedOrder {
-        trader: Address::ZERO,
+        trader: next_trader(),
         pair: pair.into(),
         side,
         price: dec(price),

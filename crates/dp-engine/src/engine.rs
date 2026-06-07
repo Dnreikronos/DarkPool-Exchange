@@ -52,6 +52,16 @@ impl Drop for OrderSecrets {
 
 /// Looks up balance/position for a trader. Default impl trusts the caller
 /// — pending escrow oracle integration.
+///
+/// **Per-leg asset semantics (#170).** The solvency constraint checks each
+/// leg's balance in the asset that leg *spends*: a bid (buyer) is checked
+/// against `notional` in the quote asset, an ask (seller) against `size` in
+/// the base asset — mirroring the on-chain `_settleMatch` debits. The real
+/// oracle must therefore return the balance in the right asset for the
+/// order's side: quote for a bid, base for an ask. The lookup is keyed only
+/// by `trader_id` today because the stub is asset-blind; the escrow-backed
+/// oracle wiring (the #165/#153-overlapping follow-up) must thread the side
+/// or per-asset escrow through so the witnessed `balance` matches the leg.
 pub trait BalanceOracle: Send + Sync {
     fn lookup(&self, trader_id: &[u8; 32]) -> (Decimal, i128);
 }
@@ -372,9 +382,14 @@ impl Engine {
     ///
     /// Same blocking note as [`Engine::register_pair_with_event`]: the
     /// state mutex is held across the `Store::append` call. Holding the
-    /// lock is load-bearing here — otherwise a trader could place a new
-    /// order between the open-orders snapshot and the status flip and
-    /// survive the delist.
+    /// lock is load-bearing here — the open-orders snapshot, the cancel
+    /// events, and the status flip are one atomic critical section. The
+    /// other half of the invariant lives in `persist_order_placed`, which
+    /// re-checks the pair status under this same lock before inserting
+    /// (issue #162): an order that passed its earlier status check but only
+    /// reaches the insert after this delist commits is rejected, so it can
+    /// never land in the book after the snapshot that would have cancelled
+    /// it.
     pub fn delist_pair(&self, pair: &str) -> Result<usize, EngineError> {
         let canonical = dp_types::Pair::parse(pair)?;
         let key = canonical.as_str().to_string();
@@ -452,18 +467,40 @@ impl Engine {
         self.inner.subscribers.subscribe()
     }
 
+    /// Decrypt, validate, and book an order.
+    ///
+    /// ## What is and isn't cryptographically enforced (issue #158)
+    ///
+    /// Order validity here is **operator-enforced, not proof-enforced**. The
+    /// operator decrypts the ciphertext and re-derives the canonical Poseidon
+    /// commitment over the decrypted fields (`derive_order_secrets` below);
+    /// that re-derived value — never the client's — is what gets persisted and
+    /// carried into the settlement-grade batch IVC proof.
+    ///
+    /// The per-order `proof` argument is **accepted and not verified**. It is a
+    /// placeholder (`dp-client::PLACEHOLDER_PROOF`) on the live path; we record
+    /// only its byte length for observability. A genuinely verified per-order
+    /// proof is deferred to ADR 0001 / issues #97–#98: it needs either richer
+    /// circuit public inputs (so the engine can bind the proof to the decrypted
+    /// fields) or a client-reproducible commitment, plus a one-time trusted
+    /// setup ceremony to pin a canonical VK. The sound keygen/verify primitives
+    /// for that work already exist (`dp_zk::commitment_circuit::generate_keys`
+    /// / `verify_proof_with_vk`, `dp-zk-cli setup-commitment-circuit`); the
+    /// missing piece is the binding, which the post-#153 server-derived salt
+    /// makes incompatible with the current single-public-input circuit.
     #[tracing::instrument(
         name = "dp_engine.place_encrypted_order",
-        skip(self, _client_commitment, proof, ciphertext, caller),
+        skip(self, _client_commitment, _unverified_proof, ciphertext, caller),
         fields(
             ciphertext_bytes = ciphertext.len(),
-            proof_bytes = proof.len(),
+            // Byte length only — the proof is NOT verified (see doc comment).
+            unverified_proof_bytes = _unverified_proof.len(),
         )
     )]
     pub async fn place_encrypted_order(
         &self,
         _client_commitment: Vec<u8>,
-        proof: Vec<u8>,
+        _unverified_proof: Vec<u8>,
         ciphertext: Vec<u8>,
         caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
@@ -484,10 +521,11 @@ impl Engine {
             }
         }
 
-        // Client-supplied commitment is accepted (proto requires it) but no
-        // longer verified content-wise: the engine recomputes the canonical
-        // Poseidon commitment over decrypted fields and that value is what
-        // gets persisted + carried into the ZK circuit.
+        // Neither the client-supplied commitment nor the per-order `proof` is
+        // verified content-wise (issue #158): the commitment is recomputed
+        // from decrypted fields below, and the proof is operator-enforced by
+        // that same re-derivation — see this method's doc comment. The fields
+        // below are the actual validity gate.
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
@@ -557,7 +595,7 @@ impl Engine {
         let expires_at = now
             + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::seconds(600));
 
-        let order = Order {
+        let mut order = Order {
             id: Uuid::new_v4(),
             trader: decrypted.trader,
             pair: pair_key,
@@ -569,6 +607,9 @@ impl Engine {
             encrypted_payload: ciphertext.clone(),
             submitted_at: now,
             expires_at,
+            // Placeholder; the real seq is the store-assigned OrderPlaced seq,
+            // stamped onto both the book copy and this returned order below.
+            seq: 0,
         };
 
         // Capture ZK witness secrets in-memory only. Salt is derived
@@ -589,7 +630,26 @@ impl Engine {
         let commitment = secrets.commitment.to_vec();
         self.inner.secrets.lock().insert(order.id, secrets);
 
-        self.persist_order_placed(order.clone(), commitment, proof, ciphertext, nonce.to_vec())?;
+        // Stamp the returned order with the same seq the book copy got, so a
+        // caller inspecting the result sees the real priority key, not 0.
+        // If persistence rejects (e.g. the in-lock pair-status re-check fails
+        // because a delist/suspend raced in — issue #162), the order never
+        // enters the book, so drop the witness secret we just stashed rather
+        // than leak it until the next `prune_dead_secrets` sweep.
+        match self.persist_order_placed(
+            order.clone(),
+            commitment,
+            // Persisted verbatim for the audit log / replay; still unverified.
+            _unverified_proof,
+            ciphertext,
+            nonce.to_vec(),
+        ) {
+            Ok(seq) => order.seq = seq,
+            Err(e) => {
+                self.drop_secret(order.id);
+                return Err(e);
+            }
+        }
         Ok(order)
     }
 
@@ -643,6 +703,27 @@ impl Engine {
         })
     }
 
+    /// Commitment leaves for the orders admitted to a round — every order that
+    /// was live in the book at tick time (#157). These form the round's
+    /// admitted-set Merkle tree; membership of each settled leg is proven
+    /// against its root, binding the operator to the publicly admitted input.
+    ///
+    /// Reads only the `secrets` lock, so it must never be called while holding
+    /// the `state` lock: the established lock order is secrets→state (see
+    /// [`Self::prune_dead_secrets`]), and inverting it risks deadlock. The tick
+    /// captures the admitted order ids under the state lock and resolves their
+    /// commitments here, on the lock-free async proof path. An order whose
+    /// secret has already been pruned is skipped; a *matched* leg that ends up
+    /// absent is caught downstream by `from_witness_with_admitted`.
+    pub(crate) fn admitted_commitments(&self, order_ids: &[Uuid]) -> Vec<ark_bn254::Fr> {
+        let secrets = self.inner.secrets.lock();
+        order_ids
+            .iter()
+            .filter_map(|id| secrets.get(id))
+            .map(|s| dp_zk::pedersen::bytes_to_scalar(&s.commitment))
+            .collect()
+    }
+
     /// Drop ZK secrets whose backing order has left the book. Bounds the
     /// `secrets` map so it does not grow with every placed order.
     pub(crate) fn prune_dead_secrets(&self) {
@@ -656,14 +737,14 @@ impl Engine {
         self.inner.secrets.lock().remove(&order_id);
     }
 
-    fn persist_order_placed(
+    pub(crate) fn persist_order_placed(
         &self,
-        order: Order,
+        mut order: Order,
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
         salt_nonce: Vec<u8>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<u64, EngineError> {
         let mut events = [Event {
             seq: 0,
             event_type: EventType::OrderPlaced,
@@ -678,8 +759,36 @@ impl Engine {
         }];
 
         let state = self.inner.state.lock();
+        // Re-validate the pair status under the *same* lock that does the
+        // append + insert. The status check in `place_encrypted_order` runs
+        // in an earlier, separately-acquired lock scope; between dropping
+        // that guard and taking this one, `suspend_pair` / `delist_pair` can
+        // flip the pair off `Active`. Re-checking here closes the TOCTOU
+        // (issue #162): a delist snapshots open-order ids and cancels them,
+        // and an order inserted after that snapshot would otherwise land in a
+        // delisted pair's book — never matched, never cancelled, escrow
+        // stranded. The check must be atomic with the insert, so it lives
+        // inside this guard rather than re-checking and then locking again.
+        match state.pair_config(&order.pair).map(|c| c.status) {
+            Some(crate::state::PairStatus::Active) => {}
+            Some(_) => {
+                return Err(EngineError::Validation(DarkPoolError::PairNotAccepting(
+                    order.pair.clone(),
+                )));
+            }
+            None => {
+                return Err(EngineError::Validation(DarkPoolError::PairNotRegistered(
+                    order.pair.clone(),
+                )));
+            }
+        }
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
+        // The store stamped the monotonic seq onto the event during append;
+        // adopt it as the order's price-time priority key so the live book and
+        // a replayed book agree on matching order (issue #161, ADR 0005).
+        order.seq = evt.seq;
+        let assigned_seq = order.seq;
         state.book.apply(evt);
         let side_label = match order.side {
             Side::Buy => "buy",
@@ -687,7 +796,7 @@ impl Engine {
         };
         state.book.insert_order(order);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
-        Ok(())
+        Ok(assigned_seq)
     }
 
     pub fn cancel_order(&self, order_id: Uuid, reason: Option<String>) -> Result<(), EngineError> {
@@ -788,6 +897,9 @@ fn leg_witness_from(
     dp_zk::witness::OrderLegWitness {
         trader_id: hex::encode(secret.trader_id),
         salt: hex::encode(secret.salt),
+        // Circuit checks this in the asset the leg spends: quote for a bid,
+        // base for an ask (#170). The stub oracle is asset-blind; see
+        // `BalanceOracle` for the per-asset wiring the real oracle owes.
         balance: secret.balance,
         position: secret.position.to_string(),
         limit_price: order.price,

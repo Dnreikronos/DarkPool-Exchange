@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CancelOrderRequestSchema,
   GetAuctionHistoryRequestSchema,
-  GetOrderBookRequestSchema,
   GetOrderRequestSchema,
   PlaceOrderRequestSchema,
   Side,
@@ -141,14 +140,20 @@ describe('RestClient.getOrder', () => {
 })
 
 describe('RestClient.getOrderBook', () => {
-  it('GETs /v1/orderbook with the pair query param', async () => {
+  // #178 removed the public pre-settlement order book from the backend — a
+  // dark pool does not expose cross-trader depth, so there is no
+  // GET /v1/orderbook to call. The REST path is an explicit UNIMPLEMENTED
+  // throw and never touches the network; the panel runs on the mock store.
+  it('throws UNIMPLEMENTED without making a request', async () => {
     const { fetch, calls } = captureFetch(
       makeJsonResponse({ pair: 'ETH/USDC', bids: [], asks: [] })
     )
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
-    const resp = await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
-    expect(calls[0].url).toBe(`${BASE}/v1/orderbook?pair=ETH%2FUSDC`)
-    expect(resp.bids).toEqual([])
+    await expect(client.getOrderBook({ pair: 'ETH/USDC' })).rejects.toMatchObject({
+      name: 'DarkPoolError',
+      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+    })
+    expect(calls).toHaveLength(0)
   })
 })
 
@@ -399,7 +404,9 @@ describe('RestClient error mapping', () => {
     )
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
     await expect(
-      client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+      client.getAuctionHistory(
+        create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 0 })
+      )
     ).rejects.toMatchObject({
       code: DARK_POOL_ERROR_CODES.UNAVAILABLE,
       retryable: true,
@@ -467,7 +474,7 @@ describe('MockClient', () => {
 
   it('getOrderBook returns an empty book for the configured pair', async () => {
     const mock = new MockClient()
-    const book = await mock.getOrderBook(create(GetOrderBookRequestSchema, { pair: '' }))
+    const book = await mock.getOrderBook({ pair: '' })
     expect(book.pair).toBe('ETH/USDC')
     expect(book.bids).toEqual([])
     expect(book.asks).toEqual([])
@@ -577,7 +584,7 @@ describe('createDarkPoolClient', () => {
       },
     })
 
-    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    await client.getOrderBook({ pair: 'ETH/USDC' })
     await client.placeOrder(create(PlaceOrderRequestSchema))
     await client.getAuctionHistory(
       create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 0 })
@@ -656,14 +663,16 @@ describe('methodOverridesFromEnv', () => {
   })
 })
 
-// ─── I2.4 wire test: NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false flips just  ──
-//      `getOrderBook` to the live RestClient while everything else stays
-//      on the StoreMockClient. Locks the documented Phase-2 ramp so a
-//      regression in either the env parser or the routing client surfaces
-//      here instead of as a silent mocked response in the browser.
+// ─── Order book is mock-only since #178 ──────────────────────────────────
+//      The public pre-settlement order book was removed from the backend
+//      (no GET /v1/orderbook). NEXT_PUBLIC_USE_MOCKS_ORDERBOOK still parses,
+//      but flipping it false routes getOrderBook to the RestClient, whose
+//      path is now an explicit UNIMPLEMENTED throw — there is no live
+//      endpoint to flip to. This locks that contract so a regression
+//      surfaces here instead of as a runtime 404 in the browser.
 
-describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false', () => {
-  it('routes getOrderBook to REST while siblings stay on the StoreMockClient', async () => {
+describe('Order book is mock-only — NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false', () => {
+  it('routes getOrderBook to REST, which throws UNIMPLEMENTED without a request', async () => {
     const overrides = methodOverridesFromEnv({
       NEXT_PUBLIC_USE_MOCKS_ORDERBOOK: 'false',
     })
@@ -684,15 +693,14 @@ describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false', () => {
       methodOverrides: overrides,
     })
 
-    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    await expect(client.getOrderBook({ pair: 'ETH/USDC' })).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+    })
     await client.getAuctionHistory(
       create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
     )
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0].url).toBe(`${BASE}/v1/orderbook?pair=ETH%2FUSDC`)
-    const headers = calls[0].init.headers as Record<string, string>
-    expect(headers['x-api-key']).toBe(KEY)
+    expect(calls).toHaveLength(0)
     expect(mockCalls).toEqual(['getAuctionHistory'])
   })
 })
@@ -726,7 +734,7 @@ describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false', () => {
     await client.getAuctionHistory(
       create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
     )
-    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    await client.getOrderBook({ pair: 'ETH/USDC' })
 
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe(`${BASE}/v1/auctions?pair=ETH%2FUSDC&limit=50`)

@@ -10,7 +10,7 @@ use dp_api::config::{Config, TlsMode};
 use dp_api::handler::ApiHandler;
 use dp_api::observability::{self, M_EVENT_LOG_SIZE_BYTES};
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
-use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
+use dp_api::ratelimit::{RateLimitCore, RateLimitLayer, TrustedProxies};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
 use dp_api::tls;
@@ -53,6 +53,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "default-on" TLS today.
     let tls_mode = cfg
         .tls_mode()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    // Fail closed before binding: plaintext on a non-loopback interface
+    // leaks credentials and order metadata on the wire. Loopback-only
+    // plaintext (local dev) and an explicit --insecure override are the
+    // only ways past this check.
+    cfg.validate_plaintext_bind(&tls_mode)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     if matches!(tls_mode, TlsMode::Plaintext) {
         warn!(
@@ -297,7 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let siwe_state = if cfg.siwe_enabled {
         let secret = cfg.session_secret().unwrap();
         let jwt_manager = Arc::new(dp_api::siwe::JwtManager::new(secret, cfg.session_ttl));
-        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(Duration::from_secs(300)));
+        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(dp_api::siwe::NONCE_TTL));
         nonce_store.start_cleanup(cancel.clone(), Duration::from_secs(60));
         let chain_id = if cfg.chain_id > 0 {
             Some(cfg.chain_id)
@@ -337,7 +343,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
     let admin_auth_core = AuthCore::new(operator_keys);
-    let rl_core = RateLimitCore::new(cfg.rate_limit, cfg.rate_burst, cfg.rate_stale_after);
+    let trusted_proxies = TrustedProxies::parse(&cfg.trusted_proxies)
+        .map_err(|e| format!("DARKPOOL_TRUSTED_PROXIES: {e}"))?;
+    if trusted_proxies.is_empty() {
+        info!(
+            "no trusted proxies configured; rate limiting keys on the TCP peer IP. \
+             Set DARKPOOL_TRUSTED_PROXIES if a reverse proxy or load balancer fronts \
+             this listener (otherwise per-IP limits collapse onto the proxy IP)."
+        );
+    } else {
+        info!(
+            trusted_proxies = %cfg.trusted_proxies,
+            "trusting X-Forwarded-For / X-Real-IP from configured proxy ranges"
+        );
+    }
+    let rl_core = RateLimitCore::with_trusted_proxies(
+        cfg.rate_limit,
+        cfg.rate_burst,
+        cfg.rate_stale_after,
+        trusted_proxies,
+    );
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
     let auth = AuthLayer::from_core(auth_core.clone());

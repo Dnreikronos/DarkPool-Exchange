@@ -95,6 +95,13 @@ pub enum EventData {
         batch_id: Uuid,
         round_index: u64,
         pair: String,
+        /// Canonical Merkle root over the commitments of every order admitted
+        /// to this round's auction (#157). Folded into the proof's `z[4]`
+        /// chain; published here so a watcher can recompute it from the public
+        /// `OrderPlaced` log and confirm the operator matched only orders that
+        /// were publicly admitted. Empty for events stored before #157.
+        #[serde(default)]
+        input_root: Vec<u8>,
     },
 }
 
@@ -229,6 +236,7 @@ mod tests {
                     batch_id,
                     round_index: 0,
                     pair: "ETH/USDC".into(),
+                    input_root: Vec::new(),
                 },
                 EventType::BatchFolded,
             ),

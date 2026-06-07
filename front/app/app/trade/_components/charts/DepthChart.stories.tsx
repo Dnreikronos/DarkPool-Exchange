@@ -1,21 +1,16 @@
 import * as React from 'react'
-import { create } from '@bufbuild/protobuf'
 
-import {
-  GetOrderBookResponseSchema,
-  PriceLevelSchema,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
-import type { GetOrderBookResponse, PriceLevel } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { OrderBook, PriceLevel } from '@/lib/sdk/orderbook'
 
 import { DepthChartView } from './DepthChart'
 import { buildDepthSeries } from '../../_lib/charts/selectors'
 
 function level(price: string, totalSize: string, orderCount = 1): PriceLevel {
-  return create(PriceLevelSchema, { price, totalSize, orderCount })
+  return { price, totalSize, orderCount }
 }
 
-function book(bids: PriceLevel[], asks: PriceLevel[]): GetOrderBookResponse {
-  return create(GetOrderBookResponseSchema, { pair: 'ETH/USDC', bids, asks })
+function book(bids: PriceLevel[], asks: PriceLevel[]): OrderBook {
+  return { pair: 'ETH/USDC', bids, asks }
 }
 
 const FRAME = 'border border-brand-border bg-brand-surface p-4 w-[640px] h-[280px]'

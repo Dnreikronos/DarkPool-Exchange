@@ -25,6 +25,21 @@ use uuid::Uuid;
 
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Distinct `trader` address per call. Self-trade prevention keys on `trader`
+/// (#168), so a crossing bid/ask placed under one address would be skipped as
+/// a self-cross. The `0xEE` prefix keeps these clear of `Address::ZERO` and
+/// the small hand-written addresses used elsewhere; the same scheme is
+/// mirrored in the `dp-auction` and `dp-engine` test helpers. Tests wanting a
+/// shared owner use `place_test_order_as`.
+fn next_trader() -> Address {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xEE;
+    bytes[12..].copy_from_slice(&n.to_be_bytes());
+    Address::from(bytes)
+}
+
 fn new_handler() -> ApiHandler {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store, Duration::from_secs(1));
@@ -70,7 +85,7 @@ async fn place_test_order(
 ) -> String {
     let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
     let d = DecryptedOrder {
-        trader: Address::ZERO,
+        trader: next_trader(),
         pair: pair.to_string(),
         side,
         price: price.parse().unwrap(),
@@ -235,15 +250,16 @@ async fn place_order_proof_too_large() {
 #[tokio::test]
 async fn cancel_order_success() {
     let h = new_handler();
-    // place_test_order owns the order as Address::ZERO; cancel is caller-
-    // scoped, so the request carries a matching wallet identity.
-    let id = place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
+    // Cancel is caller-scoped: the order's owner and the request's wallet
+    // identity must be the same address.
+    let owner = Address::repeat_byte(3);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
     h.cancel_order(wallet_req(
         CancelOrderRequest {
             order_id: id,
             reason: "testing".into(),
         },
-        Address::ZERO,
+        owner,
     ))
     .await
     .unwrap();
@@ -331,10 +347,11 @@ async fn cancel_order_without_wallet_identity_is_not_found() {
 #[tokio::test]
 async fn get_order_success() {
     let h = new_handler();
-    // place_test_order owns the order as Address::ZERO.
-    let id = place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
+    // GetOrder is caller-scoped: owner and wallet identity must match.
+    let owner = Address::repeat_byte(3);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
     let resp = h
-        .get_order(wallet_req(GetOrderRequest { order_id: id }, Address::ZERO))
+        .get_order(wallet_req(GetOrderRequest { order_id: id }, owner))
         .await
         .unwrap()
         .into_inner();

@@ -128,8 +128,8 @@ impl ProofAggregator for StubAggregator {
         Box::pin(async move {
             Ok(dp_zk::folding::FinalProof {
                 proof_bytes,
-                z_0: [Fr::zero(); 4],
-                z_n: [Fr::zero(); 4],
+                z_0: [Fr::zero(); 5],
+                z_n: [Fr::zero(); 5],
                 n_steps: 1,
                 policy_hash: Fr::zero(),
             })
@@ -218,8 +218,8 @@ impl ProofAggregator for BlockingAggregator {
         Box::pin(async move {
             Ok(dp_zk::folding::FinalProof {
                 proof_bytes: vec![0u8; 32],
-                z_0: [Fr::zero(); 4],
-                z_n: [Fr::zero(); 4],
+                z_0: [Fr::zero(); 5],
+                z_n: [Fr::zero(); 5],
                 n_steps: 1,
                 policy_hash: Fr::zero(),
             })
@@ -311,6 +311,23 @@ pub fn last_proof_for_batch(store: &dyn Store, batch_id: Uuid) -> Option<Vec<u8>
     found
 }
 
+/// Distinct `trader` address per placed order. Self-trade prevention keys on
+/// `trader` (#168), so a crossing bid/ask sharing an address would be skipped
+/// as a self-cross and match nothing. The `0xEE` prefix keeps these clear of
+/// `Address::ZERO` and the small hand-written addresses (`repeat_byte(1)`,
+/// `0x..01`) used elsewhere; the same scheme is mirrored in the `dp-auction`
+/// and `dp-api` test helpers. Tests that *want* a self-trade place both legs
+/// under one address with [`place_plaintext_order_as`].
+fn next_trader() -> alloy_primitives::Address {
+    use std::sync::atomic::AtomicU64;
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xEE;
+    bytes[12..].copy_from_slice(&n.to_be_bytes());
+    alloy_primitives::Address::from(bytes)
+}
+
 pub async fn place_plaintext_order(
     engine: &crate::Engine,
     pair: &str,
@@ -320,7 +337,33 @@ pub async fn place_plaintext_order(
     commitment_key: &str,
     ttl: Duration,
 ) -> Result<dp_types::Order, crate::EngineError> {
-    let trader = alloy_primitives::Address::ZERO;
+    place_plaintext_order_as(
+        engine,
+        next_trader(),
+        pair,
+        side,
+        price,
+        size,
+        commitment_key,
+        ttl,
+    )
+    .await
+}
+
+/// Like [`place_plaintext_order`] but places the order under an explicit
+/// `trader` address — used to exercise trader-keyed self-trade prevention
+/// (#168) by placing both legs under the same address.
+#[allow(clippy::too_many_arguments)]
+pub async fn place_plaintext_order_as(
+    engine: &crate::Engine,
+    trader: alloy_primitives::Address,
+    pair: &str,
+    side: dp_types::Side,
+    price: rust_decimal::Decimal,
+    size: rust_decimal::Decimal,
+    commitment_key: &str,
+    ttl: Duration,
+) -> Result<dp_types::Order, crate::EngineError> {
     let (commit, ct) = crate::engine::build_decrypted_ciphertext(
         trader,
         pair,
