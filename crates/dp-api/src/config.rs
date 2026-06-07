@@ -35,6 +35,20 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_TLS_CLIENT_CA", default_value = "")]
     pub tls_client_ca: String,
 
+    /// Permit binding plaintext (no TLS) on a non-loopback address.
+    /// Without it, a plaintext bind to anything other than a loopback
+    /// interface is a hard boot failure: the API key, the SIWE bearer
+    /// token, and order ciphertext/metadata would otherwise travel in
+    /// the clear to any on-path observer, defeating the SIWE replay
+    /// mitigations that assume TLS. Loopback-only plaintext (local dev)
+    /// never needs this flag. Set it only for trusted-network
+    /// development or when a TLS-terminating reverse proxy / load
+    /// balancer fronts the service (in which case also set
+    /// --trusted-proxies). Never point a plaintext listener directly at
+    /// an untrusted network. See [`Config::validate_plaintext_bind`].
+    #[arg(long, env = "DARKPOOL_INSECURE", default_value = "false")]
+    pub insecure: bool,
+
     #[arg(long, env = "DARKPOOL_AUCTION_INTERVAL", default_value = "5s", value_parser = parse_duration)]
     pub auction_interval: Duration,
 
@@ -83,6 +97,26 @@ pub struct Config {
 
     #[arg(long, env = "DARKPOOL_RATE_STALE_AFTER", default_value = "10m", value_parser = parse_duration)]
     pub rate_stale_after: Duration,
+
+    /// Comma/whitespace-separated CIDRs or IPs of trusted reverse
+    /// proxies / load balancers. When the TCP peer matches one of these,
+    /// rate limiting and the SIWE nonce cap key on the client IP from
+    /// `X-Forwarded-For` / `X-Real-IP` instead of the proxy's address.
+    ///
+    /// Operator requirement: every proxy listed here MUST *append* the real
+    /// peer to `X-Forwarded-For` (e.g. nginx `$proxy_add_x_forwarded_for`)
+    /// and MUST NOT forward a client-supplied `X-Forwarded-For` verbatim.
+    /// The rightmost-untrusted client lookup is spoof-resistant only because
+    /// the hop the trusted proxy appends is the one entry the caller cannot
+    /// control; a pass-through proxy lets the caller forge their own
+    /// rate-limit / nonce key and evade or misattribute the per-IP budget.
+    ///
+    /// Empty (the default) means the listener is directly exposed and
+    /// forwarding headers are ignored — set this whenever a TLS-terminating
+    /// proxy or LB sits in front, or per-IP limits collapse onto the proxy
+    /// IP and become a single shared budget (issue #159).
+    #[arg(long, env = "DARKPOOL_TRUSTED_PROXIES", default_value = "")]
+    pub trusted_proxies: String,
 
     #[arg(long, env = "DARKPOOL_EVENT_LOG", default_value = "")]
     pub event_log: String,
@@ -316,6 +350,41 @@ impl Config {
         Ok(())
     }
 
+    /// Fail-closed guard against serving plaintext on an
+    /// externally-reachable interface. With no TLS material configured
+    /// the server defaults to binding `0.0.0.0` (every interface) in the
+    /// clear — exposing the API key, the SIWE bearer token, and order
+    /// ciphertext/metadata to any on-path observer. Refuse to boot in
+    /// that posture unless every plaintext listener is loopback-only, or
+    /// the operator explicitly accepts the risk with `--insecure`
+    /// (e.g. a TLS-terminating proxy fronts the service). TLS / mTLS
+    /// modes encrypt the wire and are always allowed.
+    ///
+    /// Takes the already-resolved [`TlsMode`] so the boot path validates
+    /// the same posture it is about to bind, rather than re-deriving it.
+    pub fn validate_plaintext_bind(&self, tls_mode: &TlsMode) -> Result<(), String> {
+        if !matches!(tls_mode, TlsMode::Plaintext) || self.insecure {
+            return Ok(());
+        }
+        let exposed: Vec<String> = [self.grpc_addr, self.http_addr]
+            .iter()
+            .filter(|addr| !addr.ip().is_loopback())
+            .map(|addr| addr.to_string())
+            .collect();
+        if exposed.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "plaintext transport on non-loopback bind(s) {} — the API key, SIWE \
+             bearer token, and order ciphertext/metadata would travel in the clear. \
+             Configure TLS with --tls-cert/--tls-key (see \
+             docs/operations/tls-setup.md), bind loopback only, or pass --insecure / \
+             DARKPOOL_INSECURE=true to override (e.g. when a TLS-terminating proxy \
+             fronts the service).",
+            exposed.join(", "),
+        ))
+    }
+
     pub fn tls_cert_path(&self) -> Option<&str> {
         opt(&self.tls_cert)
     }
@@ -365,8 +434,10 @@ impl Config {
 /// of what the operator can ask for via [`Config::tls_mode`]:
 ///
 /// - `Plaintext` — no TLS material configured; both listeners bind
-///   plaintext. Acceptable for local dev only; main.rs logs a loud
-///   warning at boot.
+///   plaintext. Loopback-only is acceptable for local dev (main.rs logs
+///   a loud warning); a non-loopback plaintext bind is a hard boot
+///   failure unless `--insecure` is set. See
+///   [`Config::validate_plaintext_bind`].
 /// - `Tls` — server-auth TLS, no client cert required.
 /// - `Mtls` — mutual TLS, clients must present a cert signed by
 ///   `client_ca`.
@@ -599,5 +670,88 @@ mod tests {
         let cfg = cfg_with_admin("op-secret-1", true);
         assert!(cfg.validate_admin_auth().is_ok());
         assert_eq!(cfg.operator_api_keys(), vec!["op-secret-1"]);
+    }
+
+    fn cfg_with_bind(grpc: &str, http: &str, insecure: bool) -> Config {
+        let mut args = vec![
+            "darkpool-server".to_string(),
+            "--grpc-addr".into(),
+            grpc.into(),
+            "--http-addr".into(),
+            http.into(),
+        ];
+        if insecure {
+            args.push("--insecure".into());
+        }
+        Config::parse_from(args)
+    }
+
+    #[test]
+    fn plaintext_bind_loopback_only_is_ok() {
+        // Local dev on loopback needs no opt-in.
+        let cfg = cfg_with_bind("127.0.0.1:9090", "127.0.0.1:8080", false);
+        assert!(cfg.validate_plaintext_bind(&TlsMode::Plaintext).is_ok());
+    }
+
+    #[test]
+    fn plaintext_bind_ipv6_loopback_is_ok() {
+        let cfg = cfg_with_bind("[::1]:9090", "[::1]:8080", false);
+        assert!(cfg.validate_plaintext_bind(&TlsMode::Plaintext).is_ok());
+    }
+
+    #[test]
+    fn plaintext_bind_non_loopback_fails_without_insecure() {
+        // 0.0.0.0 (the default) is unspecified, not loopback — externally
+        // reachable, so plaintext there must be refused at boot.
+        let cfg = cfg_with_bind("0.0.0.0:9090", "0.0.0.0:8080", false);
+        let err = cfg
+            .validate_plaintext_bind(&TlsMode::Plaintext)
+            .unwrap_err();
+        assert!(err.contains("0.0.0.0:9090"), "msg: {err}");
+        assert!(err.contains("0.0.0.0:8080"), "msg: {err}");
+        assert!(err.contains("--insecure"), "msg: {err}");
+    }
+
+    #[test]
+    fn plaintext_bind_non_loopback_ok_with_insecure() {
+        let cfg = cfg_with_bind("0.0.0.0:9090", "0.0.0.0:8080", true);
+        assert!(cfg.insecure);
+        assert!(cfg.validate_plaintext_bind(&TlsMode::Plaintext).is_ok());
+    }
+
+    #[test]
+    fn plaintext_bind_flags_only_the_exposed_listener() {
+        // gRPC on loopback, REST on every interface → only REST is flagged.
+        let cfg = cfg_with_bind("127.0.0.1:9090", "0.0.0.0:8080", false);
+        let err = cfg
+            .validate_plaintext_bind(&TlsMode::Plaintext)
+            .unwrap_err();
+        assert!(err.contains("0.0.0.0:8080"), "msg: {err}");
+        assert!(
+            !err.contains("9090"),
+            "loopback listener must not be flagged: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_bind_non_loopback_ok_without_insecure() {
+        // TLS encrypts the wire — a non-loopback bind needs no override.
+        let cfg = cfg_with_bind("0.0.0.0:9090", "0.0.0.0:8080", false);
+        let mode = TlsMode::Tls {
+            cert: "/srv/cert.pem".into(),
+            key: "/srv/key.pem".into(),
+        };
+        assert!(cfg.validate_plaintext_bind(&mode).is_ok());
+    }
+
+    #[test]
+    fn mtls_bind_non_loopback_ok_without_insecure() {
+        let cfg = cfg_with_bind("0.0.0.0:9090", "0.0.0.0:8080", false);
+        let mode = TlsMode::Mtls {
+            cert: "/srv/cert.pem".into(),
+            key: "/srv/key.pem".into(),
+            client_ca: "/srv/ca.pem".into(),
+        };
+        assert!(cfg.validate_plaintext_bind(&mode).is_ok());
     }
 }
