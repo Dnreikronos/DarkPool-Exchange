@@ -11,24 +11,22 @@ function anchor(auctionId: string, timestampUnix: bigint): SettlementAnchor {
   return { auctionId, timestampUnix }
 }
 
-function event(batchId: string, timestampUnix: bigint, txHash = `0xtx-${batchId}`): SettlementEvent {
+function event(
+  batchId: string,
+  timestampUnix: bigint,
+  txHash = `0xtx-${batchId}`
+): SettlementEvent {
   return { batchId, txHash, timestampUnix }
 }
 
 describe('correlateSettlements', () => {
   it('links an auction to a settlement event within the window', () => {
-    const links = correlateSettlements(
-      [anchor('auction-1', 1000n)],
-      [event('0xbatch1', 1005n)]
-    )
+    const links = correlateSettlements([anchor('auction-1', 1000n)], [event('0xbatch1', 1005n)])
     expect(links.get('auction-1')?.batchId).toBe('0xbatch1')
   })
 
   it('does not link an event outside the 30s window', () => {
-    const links = correlateSettlements(
-      [anchor('auction-1', 1000n)],
-      [event('0xbatch1', 1031n)]
-    )
+    const links = correlateSettlements([anchor('auction-1', 1000n)], [event('0xbatch1', 1031n)])
     expect(links.size).toBe(0)
   })
 
@@ -43,10 +41,7 @@ describe('correlateSettlements', () => {
   it('links when the event timestamp precedes the auction timestamp', () => {
     // Out-of-order arrival: the chain event can land before the engine
     // reports the auction. Correlation is symmetric around the anchor.
-    const links = correlateSettlements(
-      [anchor('auction-1', 1000n)],
-      [event('0xbatch1', 985n)]
-    )
+    const links = correlateSettlements([anchor('auction-1', 1000n)], [event('0xbatch1', 985n)])
     expect(links.get('auction-1')?.batchId).toBe('0xbatch1')
   })
 
@@ -84,6 +79,17 @@ describe('correlateSettlements', () => {
       [event('0xbatch1', 1001n)]
     )
     expect(links.size).toBe(1)
+    expect(links.get('auction-1')?.batchId).toBe('0xbatch1')
+  })
+
+  it('never links anchors with an empty auctionId (#101 backfill-synthesized fills)', () => {
+    // Backfilled fills carry auctionId '' — without this guard one event
+    // could claim the '' anchor and stamp its tx onto every such fill.
+    const links = correlateSettlements(
+      [anchor('', 1000n), anchor('auction-1', 1010n)],
+      [event('0xbatch1', 1001n)]
+    )
+    expect(links.has('')).toBe(false)
     expect(links.get('auction-1')?.batchId).toBe('0xbatch1')
   })
 

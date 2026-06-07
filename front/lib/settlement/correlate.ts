@@ -88,10 +88,16 @@ export function correlateSettlements(
   return links
 }
 
-/** Keep one anchor per auctionId — the earliest-timestamped occurrence. */
+/**
+ * Keep one anchor per auctionId — the earliest-timestamped occurrence.
+ * Anchors with an empty auctionId are dropped entirely: backfill-synthesized
+ * fills (#101) carry auctionId '' and a boot-time timestamp, so letting ''
+ * compete would stamp one settlement tx onto every such fill.
+ */
 function dedupeAnchors(anchors: readonly SettlementAnchor[]): SettlementAnchor[] {
   const byId = new Map<string, SettlementAnchor>()
   for (const anchor of anchors) {
+    if (anchor.auctionId === '') continue
     const prev = byId.get(anchor.auctionId)
     if (!prev || anchor.timestampUnix < prev.timestampUnix) byId.set(anchor.auctionId, anchor)
   }
