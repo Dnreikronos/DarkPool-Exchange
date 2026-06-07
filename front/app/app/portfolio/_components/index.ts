@@ -17,10 +17,5 @@ export {
   weightedAvgEntry,
 } from '../_lib/pnl'
 export type { DivergenceResult, PortfolioSummary, Position } from '../_lib/pnl'
-export {
-  selectLatestClearingPrice,
-  selectPortfolioFills,
-  selectPortfolioSummary,
-  usePortfolio,
-} from '../_hooks/usePortfolio'
+export { selectLatestClearingPrice, usePortfolio } from '../_hooks/usePortfolio'
 export type { UsePortfolioReturn } from '../_hooks/usePortfolio'
