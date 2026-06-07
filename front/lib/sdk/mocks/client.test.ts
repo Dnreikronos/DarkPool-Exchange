@@ -7,7 +7,6 @@ import { createMockStore } from '../../mock-store'
 import {
   CancelOrderRequestSchema,
   GetAuctionHistoryRequestSchema,
-  GetOrderBookRequestSchema,
   GetOrderRequestSchema,
   PlaceOrderRequestSchema,
   Side,
@@ -99,7 +98,7 @@ describe('StoreMockClient.getOrder', () => {
 describe('StoreMockClient.getOrderBook', () => {
   it('returns the live store snapshot', async () => {
     const { store, client } = freshClient()
-    const resp = await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    const resp = await client.getOrderBook({ pair: 'ETH/USDC' })
     expect(resp.bids).toEqual(store.getState().orderbook.bids)
     expect(resp.asks).toEqual(store.getState().orderbook.asks)
     expect(resp.pair).toBe('ETH/USDC')
@@ -107,13 +106,13 @@ describe('StoreMockClient.getOrderBook', () => {
 
   it('falls back to the store pair when no pair is requested', async () => {
     const { client } = freshClient()
-    const resp = await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: '' }))
+    const resp = await client.getOrderBook({ pair: '' })
     expect(resp.pair).toBe('ETH/USDC')
   })
 
   it('keeps the orderbook sorted (best bid first, best ask first)', async () => {
     const { client } = freshClient()
-    const resp = await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    const resp = await client.getOrderBook({ pair: 'ETH/USDC' })
     for (let i = 1; i < resp.bids.length; i++) {
       expect(new Decimal(resp.bids[i].price).lt(resp.bids[i - 1].price)).toBe(true)
     }

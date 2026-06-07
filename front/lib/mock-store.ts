@@ -10,23 +10,15 @@
 // singleton, stashed on a `Symbol.for`-keyed slot of `globalThis` so it
 // survives Next.js hot-module reloads in dev.
 
-import { create as createMessage } from '@bufbuild/protobuf'
 import { useSyncExternalStore } from 'react'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
 import { Decimal, toWireSize } from './units'
 
-import {
-  GetOrderBookResponseSchema,
-  PriceLevelSchema,
-  Side,
-} from './sdk/proto/darkpool/v1/darkpool_pb.js'
-import type {
-  AuctionSummary,
-  GetOrderBookResponse,
-  OrderInfo,
-  PriceLevel,
-} from './sdk/proto/darkpool/v1/darkpool_pb.js'
+import { Side } from './sdk/proto/darkpool/v1/darkpool_pb.js'
+import type { AuctionSummary, OrderInfo } from './sdk/proto/darkpool/v1/darkpool_pb.js'
+// Order book is mock-only since #178 — hand-written types, not generated.
+import type { OrderBook, PriceLevel } from './sdk/orderbook.js'
 
 import {
   DEFAULT_MID,
@@ -47,7 +39,7 @@ import {
 
 export interface MockStoreState {
   pair: string
-  orderbook: GetOrderBookResponse
+  orderbook: OrderBook
   /** Newest first. Capped at `RECENT_AUCTIONS_CAP`. */
   recentAuctions: AuctionSummary[]
   balances: Balances
@@ -259,25 +251,25 @@ export function useMockStore<T>(selector: (state: MockStore) => T): T {
 
 // ─── Orderbook mutation helpers ──────────────────────────────────────────
 
-function perturbBook(ctx: FactoryContext, book: GetOrderBookResponse): GetOrderBookResponse {
+function perturbBook(ctx: FactoryContext, book: OrderBook): OrderBook {
   const tweak = (level: PriceLevel): PriceLevel => {
     if (!ctx.faker.datatype.boolean({ probability: PERTURB_PROBABILITY })) return level
     const goesUp = ctx.faker.datatype.boolean()
     const factor = goesUp ? UP_FACTOR : DOWN_FACTOR
-    return createMessage(PriceLevelSchema, {
+    return {
       price: level.price,
       totalSize: scaleWireSize(level.totalSize, factor, SIZE_FLOOR),
       orderCount: level.orderCount,
-    })
+    }
   }
-  return createMessage(GetOrderBookResponseSchema, {
+  return {
     pair: book.pair,
     bids: book.bids.map(tweak),
     asks: book.asks.map(tweak),
-  })
+  }
 }
 
-function addOrderToBook(book: GetOrderBookResponse, order: OrderInfo): GetOrderBookResponse {
+function addOrderToBook(book: OrderBook, order: OrderInfo): OrderBook {
   const isBuy = order.side === Side.BUY
   const sideLevels = isBuy ? book.bids : book.asks
   const otherLevels = isBuy ? book.asks : book.bids
@@ -287,27 +279,27 @@ function addOrderToBook(book: GetOrderBookResponse, order: OrderInfo): GetOrderB
   if (idx >= 0) {
     const existing = sideLevels[idx]
     updated = [...sideLevels]
-    updated[idx] = createMessage(PriceLevelSchema, {
+    updated[idx] = {
       price: existing.price,
       totalSize: toWireSize(new Decimal(existing.totalSize).plus(order.remainingSize)),
       orderCount: existing.orderCount + 1,
-    })
+    }
   } else {
-    const inserted = createMessage(PriceLevelSchema, {
+    const inserted: PriceLevel = {
       price: order.price,
       totalSize: order.remainingSize,
       orderCount: 1,
-    })
+    }
     updated = sortSide(isBuy, [...sideLevels, inserted])
   }
-  return createMessage(GetOrderBookResponseSchema, {
+  return {
     pair: book.pair,
     bids: isBuy ? updated : otherLevels,
     asks: isBuy ? otherLevels : updated,
-  })
+  }
 }
 
-function removeOrderFromBook(book: GetOrderBookResponse, order: OrderInfo): GetOrderBookResponse {
+function removeOrderFromBook(book: OrderBook, order: OrderInfo): OrderBook {
   const isBuy = order.side === Side.BUY
   const sideLevels = isBuy ? book.bids : book.asks
   const otherLevels = isBuy ? book.asks : book.bids
@@ -321,17 +313,17 @@ function removeOrderFromBook(book: GetOrderBookResponse, order: OrderInfo): GetO
     updated = sideLevels.filter((_, i) => i !== idx)
   } else {
     updated = [...sideLevels]
-    updated[idx] = createMessage(PriceLevelSchema, {
+    updated[idx] = {
       price: existing.price,
       totalSize: toWireSize(newSize),
       orderCount: existing.orderCount - 1,
-    })
+    }
   }
-  return createMessage(GetOrderBookResponseSchema, {
+  return {
     pair: book.pair,
     bids: isBuy ? updated : otherLevels,
     asks: isBuy ? otherLevels : updated,
-  })
+  }
 }
 
 function sortSide(isBuy: boolean, levels: PriceLevel[]): PriceLevel[] {
