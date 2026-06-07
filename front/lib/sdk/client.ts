@@ -16,6 +16,7 @@ import { create, fromJson, toJson } from '@bufbuild/protobuf'
 import type { DescMessage, MessageShape } from '@bufbuild/protobuf'
 
 import {
+  AuctionEventSchema,
   CancelOrderResponseSchema,
   GetAuctionHistoryResponseSchema,
   GetOrderResponseSchema,
@@ -258,21 +259,114 @@ export class RestClient implements DarkPoolClient {
     )
   }
 
-  // eslint-disable-next-line require-yield
   async *streamAuctions(
     req: StreamAuctionsRequest,
     opts?: StreamOptions
   ): AsyncIterable<AuctionEvent> {
-    void req
-    void opts
-    // SSE bridge ships in #83 (C3); WASM streaming consumer lands with
-    // #95 (I2.6). Until either is on main, set
-    // NEXT_PUBLIC_USE_MOCKS_STREAM_AUCTIONS=true to keep panels on mocks.
-    throw new DarkPoolError(
-      DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
-      'StreamAuctions over REST is not wired yet — depends on the SSE bridge in #83. ' +
-        'Use NEXT_PUBLIC_USE_MOCKS_STREAM_AUCTIONS=true until then.'
-    )
+    const signal = opts?.signal
+    if (signal?.aborted) return
+
+    const search = new URLSearchParams()
+    if (req.pair) search.set('pair', req.pair)
+    const qs = search.toString()
+    const url = `${this.baseUrl}/v1/auctions/stream${qs ? `?${qs}` : ''}`
+
+    let response: Response
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: { accept: 'text/event-stream', 'x-api-key': this.apiKey },
+        signal,
+      })
+    } catch (cause) {
+      if (signal?.aborted) return
+      throw new DarkPoolError(
+        DARK_POOL_ERROR_CODES.UNAVAILABLE,
+        `Network error contacting ${url}: ${(cause as Error)?.message ?? cause}`,
+        { cause }
+      )
+    }
+
+    if (!response.ok) throw await parseErrorResponse(response)
+    if (!response.body) {
+      throw new DarkPoolError(
+        DARK_POOL_ERROR_CODES.UNAVAILABLE,
+        `Auction stream from ${url} returned no body`
+      )
+    }
+
+    const reader = response.body.getReader()
+    const onAbort = () => {
+      void reader.cancel()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      while (true) {
+        let chunk
+        try {
+          chunk = await reader.read()
+        } catch (cause) {
+          if (signal?.aborted) return
+          throw new DarkPoolError(
+            DARK_POOL_ERROR_CODES.UNAVAILABLE,
+            `Auction stream from ${url} dropped: ${(cause as Error)?.message ?? cause}`,
+            { cause }
+          )
+        }
+        if (chunk.done) return
+        buffer += decoder.decode(chunk.value, { stream: true })
+
+        let split = nextSseFrame(buffer)
+        while (split !== null) {
+          const frame = parseSseFrame(split.frame)
+          buffer = split.rest
+          if (frame !== null) {
+            if (frame.event === 'error') {
+              // Only an explicit {"lagged":N} payload is broadcast lag — the
+              // one error frame the server emits. Anything else (proxy error
+              // pages, malformed frames) is a broken stream, not data loss.
+              const lagged = readLagged(frame.data)
+              if (lagged !== null) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.DATA_LOSS,
+                  `Auction stream lagged: ${lagged} events dropped`
+                )
+              }
+              throw new DarkPoolError(
+                DARK_POOL_ERROR_CODES.UNAVAILABLE,
+                `Auction stream error frame: ${frame.data}`
+              )
+            }
+            if ((frame.event === 'auction' || frame.event === '') && frame.data !== '') {
+              let event: AuctionEvent
+              try {
+                const json = JSON.parse(frame.data) as unknown
+                event = fromJson(
+                  AuctionEventSchema,
+                  json as Parameters<typeof fromJson<typeof AuctionEventSchema>>[1]
+                )
+              } catch (cause) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.INTERNAL,
+                  `Auction frame parse failed: ${(cause as Error)?.message ?? cause}`,
+                  { cause }
+                )
+              }
+              yield event
+            }
+            // any other event type is ignored
+          }
+          split = nextSseFrame(buffer)
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+      void reader.cancel()
+      reader.releaseLock()
+    }
   }
 
   private async requestJson<S extends DescMessage>(
@@ -314,6 +408,61 @@ export class RestClient implements DarkPoolClient {
     const text = await response.text()
     const json = text === '' ? {} : (JSON.parse(text) as unknown)
     return fromJson(responseSchema, json as Parameters<typeof fromJson<S>>[1])
+  }
+}
+
+// ─── SSE frame parsing (private to streamAuctions) ─────────────────────────
+
+interface SseFrame {
+  event: string
+  data: string
+}
+
+// Find the next event boundary (a blank line). Handles both LF and CRLF
+// servers; returns the frame text and the remaining buffer, or null if no
+// complete frame has arrived yet.
+function nextSseFrame(buffer: string): { frame: string; rest: string } | null {
+  const lf = buffer.indexOf('\n\n')
+  const crlf = buffer.indexOf('\r\n\r\n')
+  let idx = -1
+  let len = 0
+  if (lf !== -1 && (crlf === -1 || lf < crlf)) {
+    idx = lf
+    len = 2
+  } else if (crlf !== -1) {
+    idx = crlf
+    len = 4
+  }
+  if (idx === -1) return null
+  return { frame: buffer.slice(0, idx), rest: buffer.slice(idx + len) }
+}
+
+// Parse one frame into its `event` (last wins, '' if absent) and `data`
+// (multiple data: lines joined by \n, per the SSE spec). Comment (`:`) lines
+// and other fields (id, retry) are ignored.
+function parseSseFrame(frame: string): SseFrame | null {
+  let event = ''
+  const dataLines: string[] = []
+  for (let line of frame.split('\n')) {
+    if (line.endsWith('\r')) line = line.slice(0, -1)
+    if (line === '' || line.startsWith(':')) continue
+    const colon = line.indexOf(':')
+    const field = colon === -1 ? line : line.slice(0, colon)
+    let value = colon === -1 ? '' : line.slice(colon + 1)
+    if (value.startsWith(' ')) value = value.slice(1)
+    if (field === 'event') event = value
+    else if (field === 'data') dataLines.push(value)
+  }
+  if (event === '' && dataLines.length === 0) return null
+  return { event, data: dataLines.join('\n') }
+}
+
+function readLagged(data: string): number | null {
+  try {
+    const parsed = JSON.parse(data) as { lagged?: unknown }
+    return typeof parsed.lagged === 'number' ? parsed.lagged : null
+  } catch {
+    return null
   }
 }
 

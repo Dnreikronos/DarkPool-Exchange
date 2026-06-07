@@ -9,8 +9,7 @@ import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
 import { TapeRow } from './TapeRow'
 import { TapeEmpty } from './states'
-import { auctionsFromQuery } from '../../_lib/tape/auctions'
-import { useAuctionHistory } from '../../_hooks/tape/useAuctionHistory'
+import { useAuctionFeed } from '../../_hooks/tape/useAuctionFeed'
 import { useNow } from '../../_hooks/tape/useNow'
 
 export interface TapeProps {
@@ -36,8 +35,7 @@ export function Tape(props: TapeProps = {}): JSX.Element {
 }
 
 export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.Element {
-  const query = useAuctionHistory({ limit, refetchIntervalMs })
-  const auctions = auctionsFromQuery(query)
+  const { auctions, status } = useAuctionFeed({ limit, refetchIntervalMs })
   const nowSeconds = useNow()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
 
@@ -50,7 +48,11 @@ export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.E
 
   return (
     <div className="flex h-full min-h-[200px] flex-col">
-      <Countdown latestAuctionUnixSeconds={latestUnix} nowUnixSeconds={nowSeconds} />
+      <Countdown
+        latestAuctionUnixSeconds={latestUnix}
+        nowUnixSeconds={nowSeconds}
+        status={status}
+      />
       <TableHeader />
       {auctions.length === 0 ? (
         <TapeEmpty />
