@@ -5,6 +5,7 @@ import { WalletProviders } from '@/lib/wallet'
 import { ConnectButton } from './_components/ConnectButton'
 import { HistoryBoot } from './_components/HistoryBoot'
 import { OnboardingMount } from './_components/onboarding'
+import { SettlementWatcher } from './_components/SettlementWatcher'
 import { AuctionStrip } from './_shell/AuctionStrip'
 import { ArbitrumHex } from './_shell/icons'
 import { PairSelector } from './_shell/PairSelector'
@@ -34,6 +35,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <main className="pt-16 lg:pl-56">{children}</main>
           <OnboardingMount />
           <HistoryBoot />
+          <SettlementWatcher />
           <Toaster />
         </div>
       </DarkPoolClientProvider>

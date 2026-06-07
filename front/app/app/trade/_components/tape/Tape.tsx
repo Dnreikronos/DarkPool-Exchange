@@ -4,6 +4,12 @@ import * as React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { AuctionSummary } from '@/lib/sdk'
+import {
+  correlateSettlements,
+  settlementLink,
+  useSettlementEvents,
+  type SettlementLink,
+} from '@/lib/settlement'
 
 import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
@@ -44,6 +50,15 @@ export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.E
     return auctions.find((a) => a.auctionId === selectedId) ?? null
   }, [auctions, selectedId])
 
+  // On-chain settlement linkage (#100): correlate the visible auctions
+  // against observed BatchSettled events so the drawer can show the tx.
+  const settlements = useSettlementEvents()
+  const selectedLink = React.useMemo<SettlementLink | null>(() => {
+    if (!selected) return null
+    const links = correlateSettlements(auctions, settlements)
+    return settlementLink(links.get(selected.auctionId))
+  }, [auctions, settlements, selected])
+
   const latestUnix: bigint | null = auctions.length > 0 ? auctions[0].timestampUnix : null
 
   return (
@@ -68,7 +83,7 @@ export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.E
           ))}
         </ol>
       )}
-      <TapeDrawer auction={selected} onClose={() => setSelectedId(null)} />
+      <TapeDrawer auction={selected} link={selectedLink} onClose={() => setSelectedId(null)} />
     </div>
   )
 }

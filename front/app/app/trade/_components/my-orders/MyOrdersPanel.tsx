@@ -14,6 +14,13 @@
 import * as React from 'react'
 
 import { useToast } from '@/components/ui/use-toast'
+import { useMockStore, type Fill, type MockStoreState } from '@/lib/mock-store'
+import {
+  correlateSettlements,
+  settlementLink,
+  useSettlementEvents,
+  type SettlementLink,
+} from '@/lib/settlement'
 import { useWallet } from '@/lib/wallet/hooks'
 
 import {
@@ -32,9 +39,33 @@ export interface MyOrdersPanelProps {
   useOrders?: (options?: UseMyOrdersOptions) => UseMyOrdersReturn
 }
 
+const selectFillHistory = (state: MockStoreState): readonly Fill[] => state.fillHistory
+
+/**
+ * orderId → settlement link (#100). A filled order is tied to its
+ * auction through the fill history, and the auction to a BatchSettled
+ * event by timestamp correlation. Newest-first fill order means a
+ * partially-filled order surfaces its most recent settlement.
+ */
+function useOrderSettlementLinks(): ReadonlyMap<string, SettlementLink> {
+  const fills = useMockStore(selectFillHistory)
+  const events = useSettlementEvents()
+  return React.useMemo(() => {
+    const byAuction = correlateSettlements(fills, events)
+    const byOrder = new Map<string, SettlementLink>()
+    for (const fill of fills) {
+      if (byOrder.has(fill.orderId)) continue
+      const link = settlementLink(byAuction.get(fill.auctionId))
+      if (link) byOrder.set(fill.orderId, link)
+    }
+    return byOrder
+  }, [fills, events])
+}
+
 export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = {}): JSX.Element {
   const { isConnected } = useWallet()
   const { rows, cancel } = useOrders()
+  const links = useOrderSettlementLinks()
   const { toast } = useToast()
   const headerId = React.useId()
 
@@ -62,7 +93,12 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
           <ColumnHeader />
           <div role="rowgroup">
             {rows.map((row) => (
-              <OrderRow key={row.order.id} row={row} onCancel={handleCancel} />
+              <OrderRow
+                key={row.order.id}
+                row={row}
+                link={links.get(row.order.id) ?? null}
+                onCancel={handleCancel}
+              />
             ))}
           </div>
         </div>
@@ -88,15 +124,17 @@ function ColumnHeader(): JSX.Element {
   return (
     <div
       role="row"
-      className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_5.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
+      className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_7.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
     >
       <span>TIME</span>
       <span>SIDE</span>
       <span className="text-right">PRICE</span>
       <span className="text-right">SIZE</span>
       <span>STATUS</span>
-      <span className="text-right" aria-hidden="true">
-        {/* cancel column header is intentionally blank — action, not data */}
+      <span className="text-right">
+        {/* visually blank: the column holds the cancel action, or the
+            settlement tx once a filled row links (#100) */}
+        <span className="sr-only">Action / settlement transaction</span>
       </span>
     </div>
   )
