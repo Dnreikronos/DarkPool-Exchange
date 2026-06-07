@@ -8,6 +8,15 @@ export function PairSelector() {
     <details
       className="relative"
       onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      // Native <details> toggles with Enter/Space but never closes on
+      // Escape — standard disclosure keyboard contract (#80). Focus
+      // returns to the summary so the keyboard user isn't stranded.
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !event.currentTarget.open) return
+        event.preventDefault()
+        event.currentTarget.open = false
+        event.currentTarget.querySelector('summary')?.focus()
+      }}
     >
       <summary
         aria-label="Trading pair selector"
