@@ -5,6 +5,7 @@ import { create } from '@bufbuild/protobuf'
 
 import { config } from '@/lib/config'
 import { encryptOrder, serializeOrder, useOperatorPubkey } from '@/lib/crypto'
+import { persistPlacedOrder } from '@/lib/history'
 import { useProver } from '@/lib/prover'
 import { PlaceOrderRequestSchema } from '@/lib/sdk'
 import { useDarkPoolClient } from '@/lib/api-client'
@@ -50,7 +51,13 @@ export function useRealSubmission(): UseRealSubmissionResult {
         prove: (witness) => prove(witness),
         serialize: serializeOrder,
         encrypt: encryptOrder,
-        placeOrder: (trio) => client.placeOrder(create(PlaceOrderRequestSchema, trio)),
+        placeOrder: async (trio) => {
+          const resp = await client.placeOrder(create(PlaceOrderRequestSchema, trio))
+          // Fire-and-forget: the engine accepted the order; the local
+          // history write (#101) must not fail or delay the submission UX.
+          void persistPlacedOrder(resp, address)
+          return resp
+        },
       }),
     [address, prove, client]
   )
