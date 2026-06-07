@@ -7,7 +7,7 @@ import { useWallet } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
 import { DepositModal } from './DepositModal'
-import { useTxState } from '../../_hooks/deposit/hooks'
+import { useDepositTxState } from '../../_hooks/deposit/hooks'
 import { WithdrawModal } from './WithdrawModal'
 
 interface DepositTriggersProps {
@@ -28,7 +28,7 @@ export function DepositTriggers({ initialToken = 'USDC', compact }: DepositTrigg
   const [depositOpen, setDepositOpen] = React.useState(false)
   const [withdrawOpen, setWithdrawOpen] = React.useState(false)
   const { isConnected } = useWallet()
-  const tx = useTxState()
+  const tx = useDepositTxState()
   const disabled = !isConnected || tx.paused
 
   return (

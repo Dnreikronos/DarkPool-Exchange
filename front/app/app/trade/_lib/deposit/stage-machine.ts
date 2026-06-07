@@ -11,14 +11,26 @@
 
 export type StageKind = 'idle' | 'approving' | 'submitting' | 'confirmed' | 'error'
 
+/**
+ * In-flight sub-phase for the `approving` / `submitting` stages, mapping
+ * to wagmi's write lifecycle: `signing` is `useWriteContract`'s
+ * `isPending` (the wallet prompt is open), `mining` is
+ * `useWaitForTransactionReceipt`'s `isLoading` (the tx is on-chain,
+ * awaiting confirmation). Undefined for non-in-flight kinds.
+ */
+export type StagePhase = 'signing' | 'mining'
+
 export interface Stage {
   kind: StageKind
+  /** Filled only when `kind` is `approving` | `submitting`. */
+  phase?: StagePhase
   /** Filled only when `kind === 'error'`. */
   errorMessage?: string
 }
 
 export type StageAction =
   | { type: 'start'; needsApproval: boolean }
+  | { type: 'signed' }
   | { type: 'approvalDone' }
   | { type: 'submitted' }
   | { type: 'fail'; message: string }
@@ -33,10 +45,17 @@ export function reduceStage(state: Stage, action: StageAction): Stage {
       // (e.g. close the modal) before kicking off a new one. Allowed
       // entry points: idle, or recovering from an error.
       if (state.kind !== 'idle' && state.kind !== 'error') return state
-      return { kind: action.needsApproval ? 'approving' : 'submitting' }
+      return { kind: action.needsApproval ? 'approving' : 'submitting', phase: 'signing' }
+    case 'signed':
+      // Hash received: the open wallet prompt closed and the tx is now
+      // mining. Only advances a signing in-flight stage; mining/idle/
+      // terminal states ignore it.
+      if (state.kind !== 'approving' && state.kind !== 'submitting') return state
+      if (state.phase !== 'signing') return state
+      return { kind: state.kind, phase: 'mining' }
     case 'approvalDone':
       if (state.kind !== 'approving') return state
-      return { kind: 'submitting' }
+      return { kind: 'submitting', phase: 'signing' }
     case 'submitted':
       if (state.kind !== 'submitting') return state
       return { kind: 'confirmed' }
