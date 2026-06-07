@@ -42,6 +42,11 @@ const SIWE_ENABLED = config.siweEnabled && !config.useMocks
 // or several mounted consumers) coalesce into one wallet prompt.
 let inFlight: Promise<void> | null = null
 
+// Bumped on every sign-out (manual or auto). An in-flight sign-in captures
+// the epoch after its own clearSession() and re-checks it before storing the
+// session, so a completion that races a sign-out can't resurrect the token.
+let authEpoch = 0
+
 function sameAddress(a: Address | null, b: Address | null): boolean {
   return a !== null && b !== null && a.toLowerCase() === b.toLowerCase()
 }
@@ -60,8 +65,11 @@ export function useSiweAuth(options: UseSiweAuthOptions = {}): UseSiweAuthReturn
   const [error, setError] = useState<string | null>(null)
 
   const address: Address | null = wagmiAddress ?? null
-  const validSessionAddress =
-    session && session.expiresAt > nowSeconds() ? session.address : null
+  // Live view of the connected address so an in-flight sign-in can detect a
+  // disconnect / account switch that happened after it captured `address`.
+  const liveAddress = useRef<Address | null>(address)
+  liveAddress.current = address
+  const validSessionAddress = session && session.expiresAt > nowSeconds() ? session.address : null
   const isAuthenticated = SIWE_ENABLED
     ? sameAddress(validSessionAddress, address)
     : status === 'connected'
@@ -75,10 +83,15 @@ export function useSiweAuth(options: UseSiweAuthOptions = {}): UseSiweAuthReturn
       setIsAuthenticating(true)
       try {
         clearSession() // drop any stale token before re-authenticating
+        const startEpoch = authEpoch
         const nonce = await fetchNonce(config.apiUrl)
         const message = buildSiweMessage({ address, chainId, nonce })
         const signature = await signMessageAsync({ message })
         const result = await verifySiwe(config.apiUrl, { message, signature })
+        // Stale completion: the user signed out, disconnected or switched
+        // accounts while the flow was in flight — drop the result instead of
+        // resurrecting a session the user already invalidated.
+        if (startEpoch !== authEpoch || !sameAddress(liveAddress.current, address)) return
         setSession({ token: result.token, expiresAt: result.expiresAt, address })
       } catch (cause) {
         setError((cause as Error)?.message ?? 'Sign-in failed')
@@ -94,6 +107,7 @@ export function useSiweAuth(options: UseSiweAuthOptions = {}): UseSiweAuthReturn
   }, [address, chainId, signMessageAsync])
 
   const signOut = useCallback((): void => {
+    authEpoch += 1
     clearSession()
     setError(null)
   }, [])
@@ -113,8 +127,12 @@ export function useSiweAuth(options: UseSiweAuthOptions = {}): UseSiweAuthReturn
     if (status === 'connected' && address) prevAddress.current = address
     else if (status === 'disconnected') prevAddress.current = null
 
-    if (action.kind === 'sign-in') void signIn()
-    else if (action.kind === 'sign-out') clearSession()
+    if (action.kind === 'sign-in') {
+      void signIn()
+    } else if (action.kind === 'sign-out') {
+      authEpoch += 1
+      clearSession()
+    }
   }, [options.autoSignIn, status, address, validSessionAddress, signIn])
 
   return { isAuthenticated, isAuthenticating, address, error, signIn, signOut }

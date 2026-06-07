@@ -121,6 +121,76 @@ describe('useSiweAuth (SIWE enabled)', () => {
     expect(result.current.isAuthenticated).toBe(false)
   })
 
+  it('does not recreate the session when signOut() happens mid sign-in', async () => {
+    account = { address: ADDR, status: 'connected' }
+    let resolveSig: (s: string) => void = () => {}
+    signMessageAsync.mockImplementationOnce(() => new Promise<string>((res) => (resolveSig = res)))
+    const { result } = renderHook(() => useSiweAuth())
+
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = result.current.signIn()
+    })
+    await waitFor(() => expect(signMessageAsync).toHaveBeenCalled())
+    // The wallet prompt is still open; the user signs out first.
+    act(() => {
+      result.current.signOut()
+    })
+    await act(async () => {
+      resolveSig(SIG)
+      await pending
+    })
+
+    expect(getSessionToken()).toBeNull()
+    expect(result.current.isAuthenticated).toBe(false)
+  })
+
+  it('drops a stale sign-in completion after the wallet disconnects', async () => {
+    account = { address: ADDR, status: 'connected' }
+    let resolveSig: (s: string) => void = () => {}
+    signMessageAsync.mockImplementationOnce(() => new Promise<string>((res) => (resolveSig = res)))
+    const { result, rerender } = renderHook(() => useSiweAuth())
+
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = result.current.signIn()
+    })
+    await waitFor(() => expect(signMessageAsync).toHaveBeenCalled())
+    // The wallet disconnects while the signature prompt is open.
+    account = { address: undefined, status: 'disconnected' }
+    rerender()
+    await act(async () => {
+      resolveSig(SIG)
+      await pending
+    })
+
+    expect(getSessionToken()).toBeNull()
+  })
+
+  it('drops a stale sign-in completion after an account switch', async () => {
+    const OTHER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
+    account = { address: ADDR, status: 'connected' }
+    let resolveSig: (s: string) => void = () => {}
+    signMessageAsync.mockImplementationOnce(() => new Promise<string>((res) => (resolveSig = res)))
+    const { result, rerender } = renderHook(() => useSiweAuth())
+
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = result.current.signIn()
+    })
+    await waitFor(() => expect(signMessageAsync).toHaveBeenCalled())
+    // The user switches to a different account mid-flow.
+    account = { address: OTHER, status: 'connected' }
+    rerender()
+    await act(async () => {
+      resolveSig(SIG)
+      await pending
+    })
+
+    expect(getSessionToken()).toBeNull()
+    expect(result.current.isAuthenticated).toBe(false)
+  })
+
   it('auto-signs-in on connect when autoSignIn is set', async () => {
     account = { address: ADDR, status: 'connected' }
     renderHook(() => useSiweAuth({ autoSignIn: true }))
