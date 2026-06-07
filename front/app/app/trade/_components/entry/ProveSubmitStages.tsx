@@ -1,16 +1,9 @@
 'use client'
 
 // Visual layer for the multi-stage submission. Renders the place-button
-// label (which mutates through the stages) and the thin progress bar
-// directly underneath the button — no modal stacking, per the
-// DESIGN-INSPIRATIONS pattern "Submission: button label mutates through
-// the 4 stages, with a thin tertiary progress bar underneath the button
-// (height 2px, filling left to right). No modals."
-//
-// The component is presentational only. The state machine and the
-// progress numbers come from useSubmitStages.ts; this file just maps
-// them to DOM. F1.12 (#79) reuses the same stage labels so renaming is
-// a coordinated change.
+// label (which mutates through the stages, now with real elapsed seconds),
+// the thin progress bar underneath it, and the inline error area below.
+// Presentational only — state comes from useSubmitStages.
 
 import * as React from 'react'
 
@@ -25,16 +18,40 @@ export interface PlaceButtonProps {
   phase: SubmissionPhase
   disabled?: boolean
   onClick: () => void
-  /**
-   * When true, the button is rendered as the accent surface (lime).
-   * The accent migrates here from the auction countdown when the form
-   * is valid and not submitting — see DESIGN-INSPIRATIONS.md.
-   */
+  /** Lime accent surface when the form is valid and idle. */
   accent: boolean
+  /** Live proving percentage (0-100), used for the proving-stage bar. */
+  provingPct?: number | null
+  /** Injectable clock for tests; defaults to Date.now. */
+  now?: () => number
 }
 
-export function PlaceButton({ idleLabel, phase, disabled, onClick, accent }: PlaceButtonProps) {
-  const label = labelFor(phase, idleLabel)
+/** Live seconds since the current running stage started (0 when unknown). */
+function useStageElapsed(phase: SubmissionPhase, now: () => number): number {
+  const [, force] = React.useState(0)
+  const running = phase.kind === 'running' && phase.stageStartedAtMs !== undefined
+  const stageKey = phase.kind === 'running' ? phase.stage : null
+  React.useEffect(() => {
+    if (!running) return
+    const id = setInterval(() => force((n) => n + 1), 100)
+    return () => clearInterval(id)
+  }, [running, stageKey])
+
+  if (phase.kind !== 'running' || phase.stageStartedAtMs === undefined) return 0
+  return Math.max(0, (now() - phase.stageStartedAtMs) / 1000)
+}
+
+export function PlaceButton({
+  idleLabel,
+  phase,
+  disabled,
+  onClick,
+  accent,
+  provingPct,
+  now = Date.now,
+}: PlaceButtonProps) {
+  const elapsed = useStageElapsed(phase, now)
+  const label = labelFor(phase, idleLabel, elapsed)
   const isRunning = phase.kind === 'running'
   const showSuccess = phase.kind === 'success'
 
@@ -49,16 +66,11 @@ export function PlaceButton({ idleLabel, phase, disabled, onClick, accent }: Pla
         className={cn(
           'relative flex h-12 items-center justify-center px-8',
           'font-mono uppercase tracking-[0.15em] text-[11px] font-medium leading-none',
-          // Custom transition-property so colors AND shadow both animate —
-          // chaining `transition-colors transition-shadow` lets the second
-          // class win and only shadow tweens.
           'transition-[color,background-color,box-shadow] duration-150 ease-out',
           'focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent',
           accent
             ? 'bg-brand-accent text-brand-on-accent hover:shadow-accent-glow'
             : 'bg-transparent text-brand-muted border border-brand-border shadow-[inset_0_0_0_1px_#0C0C12]',
-          // Hold ground on hover when not eligible — the form is the
-          // signal of validity; the button itself shouldn't flicker.
           'disabled:cursor-not-allowed',
           accent
             ? 'disabled:bg-brand-border disabled:text-brand-muted disabled:shadow-none'
@@ -67,17 +79,22 @@ export function PlaceButton({ idleLabel, phase, disabled, onClick, accent }: Pla
       >
         <span className="block">{label}</span>
       </button>
-      <ProgressBar phase={phase} success={showSuccess} />
+      <ProgressBar phase={phase} success={showSuccess} provingPct={provingPct} />
     </div>
   )
 }
 
-function labelFor(phase: SubmissionPhase, idleLabel: string): string {
+function labelFor(phase: SubmissionPhase, idleLabel: string, elapsedSecs: number): string {
   switch (phase.kind) {
     case 'idle':
       return idleLabel
-    case 'running':
-      return `${STAGE_LABELS[phase.stage]} …`
+    case 'running': {
+      const base = STAGE_LABELS[phase.stage]
+      // Show real elapsed seconds once the stage start is known.
+      return phase.stageStartedAtMs !== undefined
+        ? `${base} · ${elapsedSecs.toFixed(1)}s …`
+        : `${base} …`
+    }
     case 'success':
       return 'ORDER PLACED'
     case 'error':
@@ -85,8 +102,16 @@ function labelFor(phase: SubmissionPhase, idleLabel: string): string {
   }
 }
 
-function ProgressBar({ phase, success }: { phase: SubmissionPhase; success: boolean }) {
-  const width = progressWidth(phase, success)
+function ProgressBar({
+  phase,
+  success,
+  provingPct,
+}: {
+  phase: SubmissionPhase
+  success: boolean
+  provingPct?: number | null
+}) {
+  const width = progressWidth(phase, success, provingPct)
   const visible = phase.kind === 'running' || success
   return (
     <div
@@ -106,19 +131,74 @@ function ProgressBar({ phase, success }: { phase: SubmissionPhase; success: bool
   )
 }
 
-function progressWidth(phase: SubmissionPhase, success: boolean): number {
+function progressWidth(
+  phase: SubmissionPhase,
+  success: boolean,
+  provingPct?: number | null
+): number {
   if (success) return 1
-  if (phase.kind === 'running') return phase.progress
-  return 0
+  if (phase.kind !== 'running') return 0
+  // During proving, follow the real prover percentage when available.
+  if (phase.stage === 'proving' && provingPct != null) {
+    return Math.min(1, Math.max(0, provingPct / 100))
+  }
+  return phase.progress
 }
 
 export function StageReadout({ phase }: { phase: SubmissionPhase }) {
-  // Optional out-of-band readout for cases that want the textual stage
-  // label outside the button (Storybook variants, debugging surfaces).
   if (phase.kind !== 'running') return null
   return (
     <span className="font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-brand-muted">
       {STAGE_LABELS[phase.stage as SubmitStageId]} …
     </span>
+  )
+}
+
+/**
+ * Inline error area shown below the place button when a submission fails.
+ * Specific message per tonic code; on 429 a retry-after hint; on 5xx a
+ * collapsible technical block carrying the x-request-id (C7).
+ */
+export function SubmitError({ phase }: { phase: SubmissionPhase }) {
+  if (phase.kind !== 'error') return null
+  const detail = phase.detail
+  const showTechnical = detail != null && detail.httpStatus != null && detail.httpStatus >= 500
+
+  return (
+    <div role="alert" className="flex flex-col gap-2 border border-brand-border px-3 py-2">
+      <p className="font-mono text-body-sm text-brand-fg">{phase.message}</p>
+
+      {detail?.retryAfter && (
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-muted">
+          Retry after {detail.retryAfter}s
+        </p>
+      )}
+
+      {showTechnical && (
+        <details className="font-mono text-[10px] text-brand-muted">
+          <summary className="cursor-pointer uppercase tracking-[0.2em]">
+            [ TECHNICAL DETAIL ]
+          </summary>
+          <dl className="mt-2 flex flex-col gap-1">
+            <div className="flex gap-2">
+              <dt className="text-brand-muted">request-id</dt>
+              <dd className="text-brand-fg">{detail?.requestId ?? '—'}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-brand-muted">code</dt>
+              <dd className="text-brand-fg">
+                {detail?.codeName} ({detail?.httpStatus})
+              </dd>
+            </div>
+            {detail?.serverMessage && (
+              <div className="flex gap-2">
+                <dt className="text-brand-muted">message</dt>
+                <dd className="text-brand-fg">{detail.serverMessage}</dd>
+              </div>
+            )}
+          </dl>
+        </details>
+      )}
+    </div>
   )
 }

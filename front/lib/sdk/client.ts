@@ -84,17 +84,28 @@ export class DarkPoolError extends Error {
   readonly codeName: DarkPoolErrorName
   readonly httpStatus: number | null
   readonly retryable: boolean
+  /** `x-request-id` response header, when the server sent one (C7). */
+  readonly requestId: string | null
+  /** `retry-after` response header (seconds or HTTP-date), when present. */
+  readonly retryAfter: string | null
 
   constructor(
     code: DarkPoolErrorCode,
     message: string,
-    opts: { httpStatus?: number | null; cause?: unknown } = {}
+    opts: {
+      httpStatus?: number | null
+      requestId?: string | null
+      retryAfter?: string | null
+      cause?: unknown
+    } = {}
   ) {
     super(message)
     this.name = 'DarkPoolError'
     this.code = code
     this.codeName = CODE_NAMES.get(code) ?? 'UNKNOWN'
     this.httpStatus = opts.httpStatus ?? null
+    this.requestId = opts.requestId ?? null
+    this.retryAfter = opts.retryAfter ?? null
     this.retryable = isRetryableCode(code)
     if (opts.cause !== undefined) {
       ;(this as { cause?: unknown }).cause = opts.cause
@@ -479,7 +490,11 @@ async function parseErrorResponse(response: Response): Promise<DarkPoolError> {
     typeof body.message === 'string' && body.message.length > 0
       ? body.message
       : `HTTP ${response.status} from ${response.url}`
-  return new DarkPoolError(code, message, { httpStatus: response.status })
+  return new DarkPoolError(code, message, {
+    httpStatus: response.status,
+    requestId: response.headers.get('x-request-id'),
+    retryAfter: response.headers.get('retry-after'),
+  })
 }
 
 // ─── MockClient ───────────────────────────────────────────────────────────

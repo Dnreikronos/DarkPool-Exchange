@@ -67,3 +67,18 @@ export const STAGE_LABELS: Record<SubmitStageId, string> = {
 
 /** Brief flash after a successful submission before the form resets. */
 export const SUCCESS_HOLD_MS = 800
+
+/**
+ * Canonical pair string the operator's registry accepts. The engine
+ * canonicalises to uppercase + slash (dp-types `Pair::parse`), and the
+ * single seeded market is "ETH/USDC". Multi-pair is gated on #29.
+ */
+export const ORDER_PAIR = 'ETH/USDC'
+
+/**
+ * Order time-to-live, in NANOSECONDS. The engine reads `ttl` as a duration
+ * in nanoseconds and sets `expires_at = now + ttl`
+ * (dp-engine/src/engine.rs:551,557). 5 minutes keeps the order alive across
+ * a few auction rounds without lingering.
+ */
+export const ORDER_TTL_NS = 5 * 60 * 1_000_000_000 // 300_000_000_000

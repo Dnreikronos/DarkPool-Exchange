@@ -7,12 +7,22 @@
 // their own dedicated tests.
 
 import * as React from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { walletStore } from '@/lib/wallet/mock-store'
 
 import { OrderEntry } from './OrderEntry'
+
+// useRealSubmission requires DarkPoolClientProvider + a Web Worker (neither
+// available in node/vitest). In tests NEXT_PUBLIC_USE_MOCKS='true' so the
+// real submission path is never taken — stub it out so the smoke renders work.
+vi.mock('../../_hooks/entry/useRealSubmission', () => ({
+  useRealSubmission: () => ({
+    buildSteps: () => [],
+    provingPct: null,
+  }),
+}))
 
 function renderPanel(): string {
   return renderToStaticMarkup(<OrderEntry />)
@@ -73,5 +83,15 @@ describe('OrderEntry composition', () => {
     // class which would only set bg-brand-accent if `accentActive` were
     // true.
     expect(html).not.toMatch(/class="[^"]*bg-brand-accent[^"]*"[^>]*>\s*<span[^>]*>\s*\[ BUY/)
+  })
+
+  it('does not render the inline submission-error block in the idle/default state', () => {
+    walletStore.connect()
+    const html = renderPanel()
+    // SubmitError only renders on a failed submission, never at idle.
+    expect(html).not.toContain('[ TECHNICAL DETAIL ]')
+    expect(html).not.toContain('Retry after')
+    // sanity: the form is present
+    expect(html).toContain('order-entry-form')
   })
 })
