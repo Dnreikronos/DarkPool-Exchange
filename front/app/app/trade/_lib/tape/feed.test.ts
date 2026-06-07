@@ -1,10 +1,7 @@
 import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 
-import {
-  AuctionEventSchema,
-  AuctionSummarySchema,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import { AuctionEventSchema, AuctionSummarySchema } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
 import {
   addLive,
@@ -54,6 +51,15 @@ describe('feed reducer', () => {
     const out = selectAuctions(state, 50)
     expect(out.map((a) => a.auctionId)).toEqual(['a1', 'a2'])
     expect(out[0].timestampUnix).toBe(9n)
+  })
+
+  it('mergeHistory keeps the newer row when a poll returns an older snapshot', () => {
+    let state = emptyFeed()
+    // A live SSE update lands first…
+    state = addLive(state, event('a1', 9n))
+    // …then a slower REST backfill returns a stale snapshot of the same auction.
+    state = mergeHistory(state, [summary('a1', 4n)])
+    expect(state.byId.get('a1')?.timestampUnix).toBe(9n)
   })
 
   it('addLive upserts and selectAuctions sorts newest-first', () => {

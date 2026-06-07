@@ -6,10 +6,7 @@
 import { create } from '@bufbuild/protobuf'
 
 import { AuctionSummarySchema } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
-import type {
-  AuctionEvent,
-  AuctionSummary,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import type { AuctionEvent, AuctionSummary } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
 // Bound memory for a long-lived live stream. A 5 s cadence fills 200 rows in
 // ~17 min; older clears scroll out of any realistic viewport.
@@ -48,13 +45,16 @@ function prune(map: Map<string, AuctionSummary>): Map<string, AuctionSummary> {
   return new Map(newest.map((a) => [a.auctionId, a]))
 }
 
-export function mergeHistory(
-  state: FeedState,
-  summaries: readonly AuctionSummary[]
-): FeedState {
+export function mergeHistory(state: FeedState, summaries: readonly AuctionSummary[]): FeedState {
   if (summaries.length === 0) return state
   const next = new Map(state.byId)
-  for (const s of summaries) next.set(s.auctionId, s)
+  for (const s of summaries) {
+    // A slow poll/backfill can return a snapshot older than what the live
+    // stream already delivered for the same auction — never regress a row.
+    const existing = next.get(s.auctionId)
+    if (existing && existing.timestampUnix > s.timestampUnix) continue
+    next.set(s.auctionId, s)
+  }
   return { byId: prune(next) }
 }
 
