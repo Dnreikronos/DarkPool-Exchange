@@ -52,9 +52,9 @@ function fakeClient(opts: FakeOpts) {
   const getAuctionHistory = vi.fn(async () => opts.history ?? historyResponse([]))
   const stream =
     opts.stream ??
-    (async function* () {
+    async function* () {
       await new Promise(() => {}) // block forever
-    })
+    }
   // Production calls streamAuctions(request, { signal }); forward the abort
   // signal to the scripted generator (which expects it as its first arg).
   const streamAuctions = (_req: unknown, callOpts?: { signal?: AbortSignal }) =>

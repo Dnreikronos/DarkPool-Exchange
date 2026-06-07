@@ -3,10 +3,7 @@
 import * as React from 'react'
 
 import { DEFAULT_PAIR } from '@/lib/sdk/mocks/factories'
-import type {
-  AuctionEvent,
-  AuctionSummary,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import type { AuctionEvent, AuctionSummary } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
 import {
   addLive,
@@ -62,16 +59,13 @@ export function useAuctionFeed(opts: UseAuctionFeedOptions = {}): AuctionFeed {
   // onLag must call history.refetch, but history is created below; bounce
   // through a ref so the callback identity stays stable.
   const refetchRef = React.useRef<() => void>(() => {})
-  const onEvent = React.useCallback(
-    (event: AuctionEvent) => dispatch({ type: 'live', event }),
-    []
-  )
+  const onEvent = React.useCallback((event: AuctionEvent) => dispatch({ type: 'live', event }), [])
   const onLag = React.useCallback(() => refetchRef.current(), [])
 
   const { status } = useAuctionStream({ pair, onEvent, onLag })
 
   const pollInterval: number | false =
-    status === 'live' ? false : opts.refetchIntervalMs ?? AUCTION_HISTORY_POLL_MS
+    status === 'live' ? false : (opts.refetchIntervalMs ?? AUCTION_HISTORY_POLL_MS)
   const history = useAuctionHistory({ pair, limit, refetchIntervalMs: pollInterval })
   refetchRef.current = () => {
     void history.refetch()
