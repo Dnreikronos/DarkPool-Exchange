@@ -87,10 +87,11 @@ Live `{ allowances: Balances, paused: boolean, refetch }`:
 - `enabled` owned by caller; dormant under mocks / no wallet.
 - Tested with `vi.mock('wagmi')` (jsdom) — assert contract shape + refetch wiring.
 
-### `_hooks/deposit/useLiveDepositController.ts` / `useLiveWithdrawController.ts`
+### `_hooks/deposit/live-controllers.ts`
 
 Implement the `DepositController` / `WithdrawController` interfaces so the form
-is agnostic. Use `useWriteContract` (async) + `useWaitForTransactionReceipt`:
+is agnostic. Use `useWriteContract` (async) + `waitForTransactionReceipt`
+(checking `receipt.status` — a mined-but-reverted receipt routes to `fail`):
 
 - Deposit: read fresh allowance for the token; if `< amount`, `approve(darkPool,
   amount)` (exact), `signed`→`approvalDone` on receipt, then
@@ -148,7 +149,7 @@ refetches chain-state on confirm. No change needed to the balances panel.
 | `stage-machine.test.ts` | node | none |
 | `errors.test.ts` | node | synthetic viem errors |
 | `useDepositChainState.test.ts` | jsdom | wagmi, config, wallet/hooks |
-| `useLiveDepositController.test.ts` / withdraw | jsdom | wagmi, config, wallet/hooks |
+| `live-controllers.test.ts` (deposit + withdraw) | jsdom | wagmi, config, wallet/hooks |
 | `DepositForm.test.tsx` / `WithdrawModal.test.tsx` | node | config(useMocks:true), wagmi(inert) |
 
 Full suite: `npm run test` (vitest run). Type-check + lint per repo scripts.
