@@ -42,7 +42,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </a>
           <Banner />
           <Rail />
-          <main id="main" className="pt-16 lg:pl-56">
+          {/* tabIndex={-1} lets the skip link programmatically focus the
+              region on browsers that don't move sequential focus to
+              fragment targets. */}
+          <main id="main" tabIndex={-1} className="pt-16 lg:pl-56 focus:outline-none">
             {children}
           </main>
           <OnboardingMount />

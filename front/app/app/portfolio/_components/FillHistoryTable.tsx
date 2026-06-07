@@ -47,8 +47,15 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
       {/* Below ~576px the fixed columns (10rem time + 4rem side + 9rem
           batch) outgrow the viewport and the 1fr numeric columns collapse
           to zero, overlapping their text (#80). Scroll the table
-          horizontally instead of letting columns crush. */}
-      <div className="flex flex-1 flex-col overflow-x-auto">
+          horizontally instead of letting columns crush. tabIndex + region
+          keep the scroller keyboard-reachable (WCAG 2.1.1) — rows are
+          plain text, so there may be nothing focusable inside. */}
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Fill history table"
+        className="flex flex-1 flex-col overflow-x-auto focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
+      >
         <div className="flex min-w-[36rem] flex-col">
           <TableHeader />
           {fills.length > 0 ? (

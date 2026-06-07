@@ -92,8 +92,15 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
         // Complete ARIA table tree (table > rowgroup > row > cell) — an
         // orphan row/rowgroup is an axe critical violation (#80). The
         // horizontal scroll wrapper keeps the six fixed-ish columns
-        // (~34rem) from crushing each other below ~544px viewports.
-        <div className="flex flex-1 flex-col overflow-x-auto overflow-y-auto">
+        // (~34rem) from crushing each other below ~544px viewports;
+        // tabIndex + region keep it keyboard-scrollable (WCAG 2.1.1) even
+        // when every row's cancel button is disabled.
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="My orders table"
+          className="flex flex-1 flex-col overflow-x-auto overflow-y-auto focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
+        >
           <div
             role="table"
             aria-labelledby={headerId}

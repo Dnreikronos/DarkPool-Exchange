@@ -61,9 +61,10 @@ export function PlaceButton({
   // sr-only role="status" region announces only stage TRANSITIONS (label
   // without the timer). Errors are announced by <SubmitError>'s
   // role="alert" — keep them out of this region to avoid double-speak.
+  // No trailing ellipsis — some screen readers verbalize it.
   const announcement =
     phase.kind === 'running'
-      ? `${STAGE_LABELS[phase.stage]} …`
+      ? STAGE_LABELS[phase.stage]
       : phase.kind === 'success'
         ? 'ORDER PLACED'
         : ''
