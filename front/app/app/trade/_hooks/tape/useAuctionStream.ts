@@ -34,9 +34,9 @@ const TERMINAL_CODES: ReadonlySet<number> = new Set([
   DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
 ])
 
-export function useAuctionStream(
-  opts: UseAuctionStreamOptions
-): { status: StreamConnectionStatus } {
+export function useAuctionStream(opts: UseAuctionStreamOptions): {
+  status: StreamConnectionStatus
+} {
   const { pair, enabled = true } = opts
   const client = useDarkPoolClient()
   const [status, setStatus] = React.useState<StreamConnectionStatus>('connecting')
@@ -68,10 +68,9 @@ export function useAuctionStream(
       if (stopped || abort.signal.aborted) return
       setStatus((s) => (s === 'live' ? s : 'connecting'))
       try {
-        const stream = client.streamAuctions(
-          create(StreamAuctionsRequestSchema, { pair }),
-          { signal: abort.signal }
-        )
+        const stream = client.streamAuctions(create(StreamAuctionsRequestSchema, { pair }), {
+          signal: abort.signal,
+        })
         for await (const event of stream) {
           if (stopped) return
           attempt = 0
@@ -84,10 +83,10 @@ export function useAuctionStream(
         schedule(backoffDelay(attempt++, backoffRef.current))
       } catch (err) {
         if (stopped || abort.signal.aborted) return
-        if (
-          err instanceof DarkPoolError &&
-          err.code === DARK_POOL_ERROR_CODES.DATA_LOSS
-        ) {
+        if (err instanceof DarkPoolError && err.code === DARK_POOL_ERROR_CODES.DATA_LOSS) {
+          // Events were dropped: the badge must leave LIVE (and let polling
+          // resume) until the reconnect catches back up.
+          setStatus('degraded')
           onLagRef.current?.()
           attempt = 0
           schedule(0) // link is healthy; reconnect immediately to catch up

@@ -22,10 +22,7 @@ vi.mock('@/lib/config', () => ({
 import { useAuctionStream } from './useAuctionStream'
 import { DarkPoolClientProvider } from '@/lib/sdk/provider'
 import { DARK_POOL_ERROR_CODES, DarkPoolError, type DarkPoolClient } from '@/lib/sdk/client'
-import {
-  AuctionEventSchema,
-  type AuctionEvent,
-} from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import { AuctionEventSchema, type AuctionEvent } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
 
 function ev(id: string): AuctionEvent {
   return create(AuctionEventSchema, {
@@ -120,6 +117,26 @@ describe('useAuctionStream', () => {
     await waitFor(() => expect(onLag).toHaveBeenCalledTimes(1))
     await vi.advanceTimersByTimeAsync(5)
     await waitFor(() => expect(onEvent).toHaveBeenCalledTimes(1))
+  })
+
+  it('leaves live while reconnecting after DATA_LOSS', async () => {
+    const onLag = vi.fn()
+    const onEvent = vi.fn()
+    const client = scriptClient([
+      async function* () {
+        yield ev('a1')
+        throw new DarkPoolError(DARK_POOL_ERROR_CODES.DATA_LOSS, 'lagged')
+      },
+      // Reconnect succeeds but has nothing to yield yet — the badge must not
+      // still read LIVE (which would also keep polling suppressed).
+      (signal) => liveThenBlock([], signal),
+    ])
+    const { result } = renderHook(
+      () => useAuctionStream({ pair: 'ETH/USDC', onEvent, onLag, backoff: ZERO_BACKOFF }),
+      { wrapper: makeWrapper(client) }
+    )
+    await waitFor(() => expect(onLag).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(result.current.status).not.toBe('live'))
   })
 
   it('stops retrying on a terminal auth error', async () => {
