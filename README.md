@@ -95,7 +95,7 @@ flowchart TB
 4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (bincode-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
 5. Matched pairs are handed to a pluggable `ProofAggregator` (subprocess / FFI / RPC), then submitted on-chain via a pluggable `Submitter`. The Solidity verifier checks the aggregated proof and transfers tokens atomically.
 
-> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` exists in `dp-settlement`, but bootstrap glue from `--eth-rpc` to a live submitter is not yet wired in `darkpool-server`; setting the flag today logs a warning and runs with the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; circuits and on-chain wiring need their final integrations before mainnet.
+> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` in `dp-settlement` is wired into `darkpool-server`: setting `--eth-rpc` together with `--signer-key-uri` (and `--contract-addr`) builds a live on-chain submitter, while `--eth-rpc` without a signer logs a warning and falls back to the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; the Groth16 settlement path is live, but the HyperNova decider verifier is still a stub and its trusted setup is pending before mainnet.
 
 ---
 
@@ -107,7 +107,7 @@ flowchart TB
 - Clearing price computed as the price that maximizes matched volume.
 - Partial fills are supported. Residual quantity carries over to the next auction round.
 - Orders expire after a configurable TTL (default: 10 min).
-- Orders from the same commitment key cannot match each other.
+- Orders from the same trader cannot match each other.
 - Minimum order size is enforced at the circuit level, not in the engine.
 
 ### Settlement
