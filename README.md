@@ -195,7 +195,7 @@ cargo run   --release --bin darkpool-server
                                  # multi-key rotation mode (issue #28)
 --signer-key-uri file:/etc/dp/eth.hex   # independent Ethereum signer URI
 --aggregator-bin /usr/local/bin/dp-aggregate  # proof aggregator subprocess (omit → noop)
---eth-rpc wss://...              # settlement RPC (currently warns; submitter wiring deferred)
+--eth-rpc https://...            # settlement RPC (with --signer-key-uri + --contract-addr → on-chain)
 --api-keys k1,k2                 # comma-separated API keys (omit → no auth)
 --rate-limit 100  --rate-burst 20  --rate-stale-after 5m
 ```
