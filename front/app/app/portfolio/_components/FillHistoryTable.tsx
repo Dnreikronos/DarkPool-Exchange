@@ -3,6 +3,12 @@
 import * as React from 'react'
 
 import type { Fill } from '@/lib/mock-store'
+import {
+  correlateSettlements,
+  settlementLink,
+  useSettlementEvents,
+  type SettlementLink,
+} from '@/lib/settlement'
 
 import { ExportCsvButton } from './ExportCsvButton'
 import { FillHistoryRow } from './FillHistoryRow'
@@ -12,7 +18,26 @@ export interface FillHistoryTableProps {
   fills: readonly Fill[]
 }
 
+/**
+ * fillId → settlement link, derived from BatchSettled events observed
+ * this session (#100). Memoised so row links keep a stable identity and
+ * `React.memo` on FillHistoryRow stays effective across re-renders.
+ */
+function useFillSettlementLinks(fills: readonly Fill[]): ReadonlyMap<string, SettlementLink> {
+  const events = useSettlementEvents()
+  return React.useMemo(() => {
+    const byAuction = correlateSettlements(fills, events)
+    const byFill = new Map<string, SettlementLink>()
+    for (const fill of fills) {
+      const link = settlementLink(byAuction.get(fill.auctionId))
+      if (link) byFill.set(fill.fillId, link)
+    }
+    return byFill
+  }, [fills, events])
+}
+
 export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element {
+  const links = useFillSettlementLinks(fills)
   return (
     <section
       aria-label="Fill history"
@@ -25,7 +50,7 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
       ) : (
         <ol className="flex-1 overflow-y-auto">
           {fills.map((f) => (
-            <FillHistoryRow key={f.fillId} fill={f} />
+            <FillHistoryRow key={f.fillId} fill={f} link={links.get(f.fillId) ?? null} />
           ))}
         </ol>
       )}

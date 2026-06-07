@@ -4,16 +4,22 @@ import * as React from 'react'
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import type { AuctionSummary } from '@/lib/sdk'
+import { shortTxHash, type SettlementLink } from '@/lib/settlement'
 
 import { formatFullTimestamp } from '../../_lib/tape/format'
 import styles from './tape.module.css'
 
 export interface TapeDrawerProps {
   auction: AuctionSummary | null
+  /**
+   * On-chain settlement correlated to this auction (#100). Null until a
+   * BatchSettled event lands within the correlation window.
+   */
+  link?: SettlementLink | null
   onClose: () => void
 }
 
-export function TapeDrawer({ auction, onClose }: TapeDrawerProps): JSX.Element {
+export function TapeDrawer({ auction, link = null, onClose }: TapeDrawerProps): JSX.Element {
   const open = auction !== null
   return (
     <Dialog
@@ -45,17 +51,48 @@ export function TapeDrawer({ auction, onClose }: TapeDrawerProps): JSX.Element {
               <span className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
                 ETHERSCAN
               </span>
-              <span
-                aria-label="Etherscan link pending Phase 2 integration"
-                className="font-mono text-label-lg uppercase tracking-label text-brand-muted"
-              >
-                [ ETHERSCAN · PENDING ]
-              </span>
+              <SettlementReceipt link={link} />
             </div>
           </>
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SettlementReceipt({ link }: { link: SettlementLink | null }): JSX.Element {
+  if (!link) {
+    return (
+      <span
+        aria-label="Etherscan link pending settlement"
+        className="font-mono text-label-lg uppercase tracking-label text-brand-muted"
+      >
+        [ ETHERSCAN · PENDING ]
+      </span>
+    )
+  }
+  if (!link.url) {
+    // Local devnets have no block explorer — surface the hash as text.
+    return (
+      <span
+        title={link.txHash}
+        className="font-mono text-label-lg tracking-label text-brand-fg tabular-nums"
+      >
+        [ {shortTxHash(link.txHash)} ]
+      </span>
+    )
+  }
+  return (
+    <a
+      href={link.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`View settlement transaction ${link.txHash} on the block explorer`}
+      title={link.txHash}
+      className="font-mono text-label-lg tracking-label text-brand-fg tabular-nums underline decoration-brand-border underline-offset-4 transition-colors hover:decoration-brand-fg focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent"
+    >
+      [ {shortTxHash(link.txHash)} ]
+    </a>
   )
 }
 
