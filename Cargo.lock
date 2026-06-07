@@ -2381,10 +2381,12 @@ dependencies = [
  "chrono",
  "dp-event",
  "dp-types",
+ "metrics",
  "parking_lot",
  "rust_decimal",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
 ]
 

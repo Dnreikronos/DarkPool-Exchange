@@ -31,8 +31,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 // integration tests) keep importing them through this module.
 pub use dp_types::metrics::{
     M_ACTIVE_ORDERS, M_AUCTIONS_TOTAL, M_AUCTION_DURATION, M_BATCH_SUBMISSION_DURATION,
-    M_CLEARING_PRICE, M_CRYPTO_DECRYPT_TOTAL, M_EVENT_LOG_SIZE_BYTES, M_ORDERS_EXPIRED,
-    M_ORDERS_MATCHED, M_ORDERS_PLACED, M_SETTLEMENT_CONFIRMATIONS,
+    M_BOOK_OVERFILL_REJECTED, M_CLEARING_PRICE, M_CRYPTO_DECRYPT_TOTAL, M_EVENT_LOG_SIZE_BYTES,
+    M_ORDERS_EXPIRED, M_ORDERS_MATCHED, M_ORDERS_PLACED, M_SETTLEMENT_CONFIRMATIONS,
 };
 
 const AUCTION_BUCKETS: &[f64] = &[
@@ -75,6 +75,10 @@ pub fn init_metrics() -> Result<PrometheusHandle, ObservabilityError> {
         "Matches produced in successful auctions (one increment per bid/ask pair)"
     );
     describe_counter!(M_ORDERS_EXPIRED, "Orders dropped because their TTL elapsed");
+    describe_counter!(
+        M_BOOK_OVERFILL_REJECTED,
+        "Fills rejected because they exceeded an order's remaining size (event log inconsistent with book state); any non-zero value is a recovery-integrity signal"
+    );
     describe_gauge!(
         M_CLEARING_PRICE,
         "Latest auction clearing price, labeled by pair"
@@ -102,6 +106,7 @@ pub fn init_metrics() -> Result<PrometheusHandle, ObservabilityError> {
     metrics::counter!(M_AUCTIONS_TOTAL).absolute(0);
     metrics::counter!(M_ORDERS_MATCHED).absolute(0);
     metrics::counter!(M_ORDERS_EXPIRED).absolute(0);
+    metrics::counter!(M_BOOK_OVERFILL_REJECTED).absolute(0);
     metrics::counter!(M_SETTLEMENT_CONFIRMATIONS).absolute(0);
     metrics::counter!(M_ORDERS_PLACED, "side" => "buy").absolute(0);
     metrics::counter!(M_ORDERS_PLACED, "side" => "sell").absolute(0);
@@ -294,6 +299,7 @@ mod tests {
             M_ORDERS_PLACED,
             M_ORDERS_MATCHED,
             M_ORDERS_EXPIRED,
+            M_BOOK_OVERFILL_REJECTED,
             M_SETTLEMENT_CONFIRMATIONS,
             M_ACTIVE_ORDERS,
             M_EVENT_LOG_SIZE_BYTES,
