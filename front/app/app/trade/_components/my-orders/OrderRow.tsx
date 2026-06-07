@@ -22,9 +22,12 @@ export interface OrderRowProps {
 }
 
 // Six-column layout matching DESIGN-INSPIRATIONS §My orders:
-// time · side · price · size · status · cancel. Numerics align right
-// with tabular figures so they read like a Bloomberg blotter.
-const COLS = 'grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_5.5rem]'
+// time · side · price · size · status · action. Numerics align right
+// with tabular figures so they read like a Bloomberg blotter. The
+// action track fits the wider of `[ CANCEL ]` and a settlement hash
+// like `[ 0xdead…beef ]` (#100). Keep in sync with ColumnHeader in
+// MyOrdersPanel.tsx.
+const COLS = 'grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_7.5rem]'
 
 export function OrderRow({ row, link = null, onCancel }: OrderRowProps): JSX.Element {
   const { order, status } = row

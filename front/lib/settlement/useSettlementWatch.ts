@@ -5,6 +5,10 @@
 // occurrence (plus its tx hash) to the settlement store. Mounted once
 // per session by SettlementWatcher in the /app layout so events
 // observed while trading are still correlatable on /app/portfolio.
+//
+// Note: only the Groth16 path emits BatchSettled. The HyperNova IVC
+// path settles via AuctionSettled(auctionId, batchId) — extend the
+// watcher when that path goes live (direct id linkage, no window).
 
 import { useCallback } from 'react'
 import { useWatchContractEvent } from 'wagmi'

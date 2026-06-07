@@ -124,15 +124,17 @@ function ColumnHeader(): JSX.Element {
   return (
     <div
       role="row"
-      className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_5.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
+      className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_7.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
     >
       <span>TIME</span>
       <span>SIDE</span>
       <span className="text-right">PRICE</span>
       <span className="text-right">SIZE</span>
       <span>STATUS</span>
-      <span className="text-right" aria-hidden="true">
-        {/* cancel column header is intentionally blank — action, not data */}
+      <span className="text-right">
+        {/* visually blank: the column holds the cancel action, or the
+            settlement tx once a filled row links (#100) */}
+        <span className="sr-only">Action / settlement transaction</span>
       </span>
     </div>
   )

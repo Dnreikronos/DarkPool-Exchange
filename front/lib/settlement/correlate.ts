@@ -6,6 +6,14 @@
 // map is recomputed from the full lists on every change, which makes
 // arrival order irrelevant (event-before-fill and fill-before-event both
 // converge to the same result).
+//
+// Caveat: each panel correlates against its own anchor set (the tape
+// uses the visible auctions, order panels the user's fills), so with a
+// 5s auction cadence the greedy assignment can resolve the same event
+// to different auctions across panels, and a neighbour auction's
+// settlement can claim a fill whose own event was missed (the watcher
+// is session-scoped). Accepted for the 30s-window heuristic the issue
+// specifies; a shared correlation source is a possible follow-up.
 
 /** An on-chain BatchSettled occurrence, as captured by the watcher. */
 export interface SettlementEvent {
