@@ -70,10 +70,13 @@ function TableTitleBar({ count, fills }: { count: number; fills: readonly Fill[]
 }
 
 function TableHeader() {
+  // Visual column guide only — not an ARIA table. An orphan role="row"
+  // (no table/rowgroup ancestor) is an axe violation; each list row below
+  // carries a complete aria-label instead (#80).
   return (
     <div
+      aria-hidden="true"
       className="grid grid-cols-[10rem_4rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,9rem)] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
-      role="row"
     >
       <span>TIME</span>
       <span>SIDE</span>

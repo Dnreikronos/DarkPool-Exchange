@@ -33,8 +33,9 @@ export interface StreamStatusProps {
 }
 
 export function StreamStatus({ status }: StreamStatusProps): JSX.Element {
-  // No aria-live here: the single mount point (Countdown) already wraps this
-  // badge in a polite live region — nesting another would double-announce.
+  // No aria-live here: the single mount point (Countdown) owns the one
+  // live region (an sr-only role="status" announcing LIVE/DELAYED
+  // transitions) — nesting another would double-announce.
   return (
     <span className="inline-flex items-center gap-2 font-mono text-body-sm">
       <span className={PILL[status]} aria-hidden="true" />

@@ -89,8 +89,16 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
       ) : rows.length === 0 ? (
         <MyOrdersEmpty />
       ) : (
-        <div className="flex flex-1 flex-col overflow-y-auto">
-          <ColumnHeader />
+        // Complete ARIA table tree (table > rowgroup > row > cell) — an
+        // orphan row/rowgroup is an axe critical violation (#80).
+        <div
+          role="table"
+          aria-labelledby={headerId}
+          className="flex flex-1 flex-col overflow-y-auto"
+        >
+          <div role="rowgroup">
+            <ColumnHeader />
+          </div>
           <div role="rowgroup">
             {rows.map((row) => (
               <OrderRow
@@ -126,12 +134,16 @@ function ColumnHeader(): JSX.Element {
       role="row"
       className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_7.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
     >
-      <span>TIME</span>
-      <span>SIDE</span>
-      <span className="text-right">PRICE</span>
-      <span className="text-right">SIZE</span>
-      <span>STATUS</span>
-      <span className="text-right">
+      <span role="columnheader">TIME</span>
+      <span role="columnheader">SIDE</span>
+      <span role="columnheader" className="text-right">
+        PRICE
+      </span>
+      <span role="columnheader" className="text-right">
+        SIZE
+      </span>
+      <span role="columnheader">STATUS</span>
+      <span role="columnheader" className="text-right">
         {/* visually blank: the column holds the cancel action, or the
             settlement tx once a filled row links (#100) */}
         <span className="sr-only">Action / settlement transaction</span>

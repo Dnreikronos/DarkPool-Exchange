@@ -43,21 +43,30 @@ export function OrderRow({ row, link = null, onCancel }: OrderRowProps): JSX.Ele
         status !== 'open' ? 'opacity-60' : ''
       }`}
     >
-      <span className="uppercase tracking-label text-brand-muted">
+      <span role="cell" className="uppercase tracking-label text-brand-muted">
         {formatSubmittedAt(order.submittedAtUnix)}
       </span>
-      <span className="uppercase tracking-label text-brand-fg">{sideLabel(order.side)}</span>
-      <NumericText value={order.price} kind="price" align="right" className="text-brand-fg" />
+      <span role="cell" className="uppercase tracking-label text-brand-fg">
+        {sideLabel(order.side)}
+      </span>
       <NumericText
+        role="cell"
+        value={order.price}
+        kind="price"
+        align="right"
+        className="text-brand-fg"
+      />
+      <NumericText
+        role="cell"
         value={order.remainingSize}
         kind="size"
         align="right"
         className="text-brand-fg"
       />
-      <span className="flex justify-start">
+      <span role="cell" className="flex justify-start">
         <StatusPill status={status} />
       </span>
-      <div className="flex justify-end">
+      <div role="cell" className="flex justify-end">
         {settled ? (
           <SettlementCell link={settled} />
         ) : (

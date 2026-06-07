@@ -31,15 +31,26 @@ export function Countdown({
         secondsToNextAuction(latestAuctionUnixSeconds, nowUnixSeconds, intervalSeconds)
       )} ]`
 
+  // The visible label re-renders every second — putting aria-live on it
+  // would make screen readers announce the tick continuously (#80). The
+  // bar stays readable on demand (no aria-hidden); the SINGLE live region
+  // is the sr-only status below, whose text only changes on meaningful
+  // transitions (waiting → counting, LIVE ↔ DELAYED). StreamStatus stays
+  // presentational — do not add a nested live region there.
+  const announcement = `${waiting ? 'Waiting for first auction' : 'Auction countdown running'}${
+    status ? `. Feed ${status === 'live' ? 'live' : 'delayed'}` : ''
+  }`
+
   return (
     <div
-      aria-live="polite"
-      aria-atomic="true"
       className={`relative flex h-9 items-center justify-center border-b border-brand-border bg-brand-bg px-4 font-mono text-label-lg uppercase tracking-label ${
         waiting ? 'text-brand-muted' : 'text-brand-accent'
       }`}
     >
       {label}
+      <span role="status" aria-atomic="true" className="sr-only">
+        {announcement}
+      </span>
       {status ? (
         <span className="absolute right-3 top-1/2 -translate-y-1/2">
           <StreamStatus status={status} />

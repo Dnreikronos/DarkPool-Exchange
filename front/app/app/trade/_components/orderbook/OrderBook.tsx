@@ -152,9 +152,12 @@ export function OrderBookContent({
 }
 
 function ColumnHeader() {
+  // Visual column guide only — not an ARIA table. An orphan role="row"
+  // (no table/rowgroup ancestor) is an axe violation; depth rows carry
+  // their own aria-labels inside the DepthTable lists (#80).
   return (
     <div
-      role="row"
+      aria-hidden="true"
       className="grid grid-cols-3 gap-2 border-b border-brand-border px-4 py-2 font-mono text-label-md uppercase text-brand-muted"
     >
       <span className="text-left">Price</span>

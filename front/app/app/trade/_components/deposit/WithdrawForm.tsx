@@ -130,6 +130,7 @@ export function WithdrawForm({ initialToken = 'USDC', onConfirmed, titleId }: Wi
           {!validation.ok && validation.reason !== 'empty' && amount !== '' ? (
             <p
               id="withdraw-error"
+              role="alert"
               className="font-mono text-label-md uppercase tracking-label text-brand-fg"
             >
               {validation.message}
