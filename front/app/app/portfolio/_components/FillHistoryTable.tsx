@@ -44,16 +44,25 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
       className="flex min-h-[280px] flex-col border border-brand-border bg-brand-surface"
     >
       <TableTitleBar count={fills.length} fills={fills} />
-      <TableHeader />
-      {fills.length === 0 ? (
-        <FillHistoryEmpty />
-      ) : (
-        <ol className="flex-1 overflow-y-auto">
-          {fills.map((f) => (
-            <FillHistoryRow key={f.fillId} fill={f} link={links.get(f.fillId) ?? null} />
-          ))}
-        </ol>
-      )}
+      {/* Below ~576px the fixed columns (10rem time + 4rem side + 9rem
+          batch) outgrow the viewport and the 1fr numeric columns collapse
+          to zero, overlapping their text (#80). Scroll the table
+          horizontally instead of letting columns crush. */}
+      <div className="flex flex-1 flex-col overflow-x-auto">
+        <div className="flex min-w-[36rem] flex-col">
+          <TableHeader />
+          {fills.length > 0 ? (
+            <ol className="flex-1 overflow-y-auto">
+              {fills.map((f) => (
+                <FillHistoryRow key={f.fillId} fill={f} link={links.get(f.fillId) ?? null} />
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      </div>
+      {/* Empty state sits outside the min-width scroller so it centers on
+          the visible panel, not on the 36rem virtual table. */}
+      {fills.length === 0 ? <FillHistoryEmpty /> : null}
     </section>
   )
 }
@@ -61,7 +70,7 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
 function TableTitleBar({ count, fills }: { count: number; fills: readonly Fill[] }) {
   return (
     <div className="flex h-9 items-center justify-between border-b border-brand-border px-4">
-      <span className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
+      <span className="whitespace-nowrap font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
         [ FILL HISTORY · {count.toString().padStart(2, '0')} ]
       </span>
       <ExportCsvButton fills={fills} />

@@ -40,7 +40,9 @@ export function PairSelector() {
         >
           ETH / USDC
         </div>
-        <div className="mt-2 font-mono text-label-md uppercase text-brand-muted/70">
+        {/* Full-strength muted: brand-muted is already ~3:1 on the canvas —
+            a /70 alpha pushes ambient metadata below any readable floor (#80). */}
+        <div className="mt-2 font-mono text-label-md uppercase text-brand-muted">
           MULTI-PAIR · POST-MVP
         </div>
       </div>

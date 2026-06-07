@@ -90,24 +90,28 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
         <MyOrdersEmpty />
       ) : (
         // Complete ARIA table tree (table > rowgroup > row > cell) — an
-        // orphan row/rowgroup is an axe critical violation (#80).
-        <div
-          role="table"
-          aria-labelledby={headerId}
-          className="flex flex-1 flex-col overflow-y-auto"
-        >
-          <div role="rowgroup">
-            <ColumnHeader />
-          </div>
-          <div role="rowgroup">
-            {rows.map((row) => (
-              <OrderRow
-                key={row.order.id}
-                row={row}
-                link={links.get(row.order.id) ?? null}
-                onCancel={handleCancel}
-              />
-            ))}
+        // orphan row/rowgroup is an axe critical violation (#80). The
+        // horizontal scroll wrapper keeps the six fixed-ish columns
+        // (~34rem) from crushing each other below ~544px viewports.
+        <div className="flex flex-1 flex-col overflow-x-auto overflow-y-auto">
+          <div
+            role="table"
+            aria-labelledby={headerId}
+            className="flex min-w-[34rem] flex-1 flex-col"
+          >
+            <div role="rowgroup">
+              <ColumnHeader />
+            </div>
+            <div role="rowgroup">
+              {rows.map((row) => (
+                <OrderRow
+                  key={row.order.id}
+                  row={row}
+                  link={links.get(row.order.id) ?? null}
+                  onCancel={handleCancel}
+                />
+              ))}
+            </div>
           </div>
         </div>
       )}

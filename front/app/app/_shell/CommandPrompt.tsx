@@ -38,7 +38,9 @@ export function CommandPrompt() {
           Real Cmd-K behavior (jump-to-section, place-order shortcuts, wallet actions) lands in a
           follow-up issue. The shortcut is wired so the affordance is honest.
         </DialogDescription>
-        <div className="mt-6 font-mono text-label-md uppercase text-brand-muted/70">
+        {/* Full-strength muted: brand-muted is already ~3:1 on the canvas —
+            a /70 alpha pushes ambient metadata below any readable floor (#80). */}
+        <div className="mt-6 font-mono text-label-md uppercase text-brand-muted">
           [ TRACKED · TODO ]
         </div>
       </DialogContent>
