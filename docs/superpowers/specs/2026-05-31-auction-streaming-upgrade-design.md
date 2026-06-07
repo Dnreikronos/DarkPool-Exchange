@@ -66,7 +66,7 @@ tests drive it with a `Response` whose body is a `ReadableStream`.
 
 ## Architecture — three layers
 
-```
+```text
 RestClient.streamAuctions  ──>  useAuctionStream  ──>  useAuctionFeed  ──>  Tape
 (SDK: 1 SSE connection)        (reconnect FSM)       (merge + degrade)    (rows + badge)
         │                            │                      │
@@ -76,7 +76,7 @@ RestClient.streamAuctions  ──>  useAuctionStream  ──>  useAuctionFeed  �
 
 ### Layer 1 — SDK transport (`front/lib/sdk/client.ts`, body of `streamAuctions`)
 
-```
+```text
 async *streamAuctions(req, opts): AsyncIterable<AuctionEvent>
 ```
 
@@ -106,7 +106,7 @@ Constraints honored: signature and `StreamOptions` are **unchanged**; the only
 additions to `client.ts` beyond the method body are one import
 (`AuctionEventSchema`) and one private parser function. No new exports → minimal
 collision surface with #148, which owns the file's header/auth structure. If
-#148 merges first and extracts a shared header builder, the rebase is a
+`#148` merges first and extracts a shared header builder, the rebase is a
 one-line swap of the inline `x-api-key` header for that helper.
 
 ### Layer 2 — reconnect FSM (`_hooks/tape/useAuctionStream.ts`, new)

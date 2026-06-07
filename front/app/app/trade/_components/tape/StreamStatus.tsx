@@ -33,8 +33,10 @@ export interface StreamStatusProps {
 }
 
 export function StreamStatus({ status }: StreamStatusProps): JSX.Element {
+  // No aria-live here: the single mount point (Countdown) already wraps this
+  // badge in a polite live region — nesting another would double-announce.
   return (
-    <span className="inline-flex items-center gap-2 font-mono text-body-sm" aria-live="polite">
+    <span className="inline-flex items-center gap-2 font-mono text-body-sm">
       <span className={PILL[status]} aria-hidden="true" />
       <span className={`uppercase tracking-label ${LABEL_COLOR[status]}`}>{LABEL[status]}</span>
     </span>
