@@ -48,10 +48,7 @@ function parseAmountRaw(token: TokenSymbol, amount: string): bigint | null {
  * Funnel that into the error path so the stage machine can't read a reverted
  * write as success.
  */
-async function waitForSuccessfulReceipt(
-  wagmiConfig: Config,
-  hash: `0x${string}`
-): Promise<void> {
+async function waitForSuccessfulReceipt(wagmiConfig: Config, hash: `0x${string}`): Promise<void> {
   const receipt = await waitForTransactionReceipt(wagmiConfig, { hash })
   if (receipt.status === 'reverted') {
     throw new Error('transaction reverted on-chain')
