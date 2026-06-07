@@ -467,6 +467,42 @@ mod tests {
     }
 
     #[test]
+    fn overfill_on_ask_is_rejected_and_leaves_order_intact() {
+        // The ask leg has its own overfill guard, separate from the bid
+        // leg's. Drive an oversized fill against a resting sell order so the
+        // `book.asks` branch is exercised, not just `book.bids`.
+        let book = OrderBook::new();
+        let ask = make_order(Side::Sell, 100, 10);
+        let ask_id = ask.id;
+        book.insert_order(ask);
+
+        // 15-unit fill against a 10-unit ask; the bid leg targets a
+        // non-existent order, so it is a no-op.
+        book.apply(&Event {
+            seq: 1,
+            event_type: EventType::OrderMatched,
+            timestamp: Utc::now(),
+            data: EventData::OrderMatched {
+                auction_id: Uuid::new_v4(),
+                bid: Fill {
+                    order_id: Uuid::new_v4(),
+                    size: Decimal::new(15, 0),
+                },
+                ask: Fill {
+                    order_id: ask_id,
+                    size: Decimal::new(15, 0),
+                },
+                price: Decimal::new(100, 0),
+                size: Decimal::new(15, 0),
+            },
+        });
+
+        assert_eq!(book.active_order_count(), 1);
+        let order = book.find_order(ask_id).unwrap();
+        assert_eq!(order.remaining_size, Decimal::new(10, 0));
+    }
+
+    #[test]
     fn exact_fill_still_removes_order() {
         // The guard rejects only fills strictly larger than remaining; an
         // exact fill is a full fill and must still remove the order.
