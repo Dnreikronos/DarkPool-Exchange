@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use alloy_primitives::Address;
 use dp_aggregator::ProofAggregator;
-use dp_crypto::DecryptedOrder;
+use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::Submitter;
 use dp_types::{EventType, Side};
@@ -16,10 +16,18 @@ use crate::test_helpers::{
 };
 use crate::Engine;
 
+/// Fixed snapshot cipher for tests that exercise the snapshot store. Writer
+/// and restorer engines must share this key so a sealed envelope round-trips
+/// on recover. Production loads a key via `DARKPOOL_SNAPSHOT_KEY_URI`.
+fn test_snapshot_cipher() -> Arc<SnapshotCipher> {
+    Arc::new(SnapshotCipher::from_bytes(&[7u8; 32]).unwrap())
+}
+
 fn make_engine() -> (Engine, Arc<MemStore>) {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
+    engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
     // IVC path: finalize after every fold step so tests with a single
     // matching tick produce a submitted batch immediately.
     engine.set_finalize_every(1);
@@ -1396,12 +1404,19 @@ mod snapshot_recover {
     use dp_types::Side;
     use rust_decimal::Decimal;
 
+    use super::test_snapshot_cipher;
     use crate::snapshot::{take_snapshot, SnapshotConfig};
-    use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
+    use crate::test_helpers::{
+        place_plaintext_order, place_plaintext_order_as, StubAggregator, StubSubmitter,
+    };
     use crate::Engine;
 
     fn dec(n: i64) -> Decimal {
         Decimal::new(n, 0)
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
     }
 
     fn wire_engine(store: Arc<MemStore>) -> Engine {
@@ -1411,9 +1426,74 @@ mod snapshot_recover {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
         // IVC path: finalize after every fold so each tick produces a batch.
         engine.set_finalize_every(1);
         engine
+    }
+
+    /// Privacy-at-rest canary (#203): a snapshot envelope must not contain the
+    /// cleartext order fields that live in the serialized book. Mirrors
+    /// `event_store_contains_no_plaintext`, but inspects the snapshot path —
+    /// which had zero plaintext coverage before this fix.
+    #[tokio::test]
+    async fn snapshot_contains_no_plaintext() {
+        const COMMIT_MARKER: &str = "SUPER-SECRET-COMMITMENT-KEY";
+        // Distinctive trader bytes — long enough that a coincidental match in
+        // ciphertext is astronomically unlikely.
+        let trader = Address::repeat_byte(0xAB);
+
+        let engine = wire_engine(Arc::new(MemStore::new()));
+        engine
+            .register_pair_with_event(
+                "BTC-USD",
+                crate::state::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),
+            )
+            .expect("register pair");
+        place_plaintext_order_as(
+            &engine,
+            trader,
+            "BTC-USD",
+            Side::Buy,
+            dec(1234),
+            dec(7),
+            COMMIT_MARKER,
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("place order");
+
+        let snap_store = MemSnapshotStore::new();
+        let seq = take_snapshot(&engine, &snap_store, &SnapshotConfig::default(), 0)
+            .expect("snapshot must be written");
+        let envelope = snap_store
+            .read_at(seq)
+            .expect("read_at")
+            .expect("envelope present");
+
+        // Sanity: the markers really are in the *unencrypted* serialized state,
+        // so a passing canary below means the encryption is what hides them —
+        // not a mistyped marker that would never have matched anyway.
+        let (state, _) = engine.capture_snapshot_state(0);
+        let plain = bincode::serialize(&state).expect("serialize state");
+        assert!(
+            contains(&plain, COMMIT_MARKER.as_bytes()),
+            "marker must appear in the unencrypted serialized state"
+        );
+        assert!(
+            contains(&plain, &[0xABu8; 20]),
+            "trader bytes must appear in the unencrypted serialized state"
+        );
+
+        // The sealed envelope must reveal neither.
+        assert!(
+            !contains(&envelope, COMMIT_MARKER.as_bytes()),
+            "commitment_key leaked into the snapshot envelope"
+        );
+        assert!(
+            !contains(&envelope, &[0xABu8; 20]),
+            "trader address bytes leaked into the snapshot envelope"
+        );
     }
 
     async fn drive_scenario(engine: &Engine) {
@@ -1863,6 +1943,7 @@ mod snapshot_recover_prop {
     use proptest::prelude::*;
     use rust_decimal::Decimal;
 
+    use super::test_snapshot_cipher;
     use crate::snapshot::{take_snapshot, SnapshotConfig};
     use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
     use crate::Engine;
@@ -1881,6 +1962,7 @@ mod snapshot_recover_prop {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
         // IVC path: finalize after every fold so each tick produces a batch.
         engine.set_finalize_every(1);
         engine

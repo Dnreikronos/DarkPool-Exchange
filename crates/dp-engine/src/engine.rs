@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use dp_aggregator::{NoopAggregator, ProofAggregator};
-use dp_crypto::{Decrypter, NoopDecrypter};
+use dp_crypto::{Decrypter, NoopDecrypter, SnapshotCipher};
 use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_settlement::{NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
@@ -103,6 +103,11 @@ pub(crate) struct Inner {
     /// the snapshot pipeline — recover then always falls back to full
     /// event replay. Set at boot via [`Engine::set_snapshot_store`].
     pub(crate) snapshot_store: RwLock<Option<Arc<dyn SnapshotStore>>>,
+    /// AEAD cipher that seals every snapshot envelope at rest (#203). Set at
+    /// boot via [`Engine::set_snapshot_cipher`]. When a `snapshot_store` is
+    /// installed this MUST be `Some`, or the snapshotter refuses to run rather
+    /// than write plaintext; the boot path (`dp-api`) enforces that policy.
+    pub(crate) snapshot_cipher: RwLock<Option<Arc<SnapshotCipher>>>,
     /// Per-pair IVC round counter: how many fold steps have been
     /// executed for each pair since the last `finalize`.
     pub(crate) ivc_round: Mutex<std::collections::HashMap<String, u64>>,
@@ -140,6 +145,7 @@ impl Engine {
                 salt_nonce,
                 batch_size: 8,
                 snapshot_store: RwLock::new(None),
+                snapshot_cipher: RwLock::new(None),
                 ivc_round: Mutex::new(std::collections::HashMap::new()),
                 finalize_every: std::sync::atomic::AtomicU64::new(60),
             }),
@@ -206,6 +212,21 @@ impl Engine {
     /// loading the latest envelope.
     pub fn snapshot_store_clone(&self) -> Option<Arc<dyn SnapshotStore>> {
         self.inner.snapshot_store.read().clone()
+    }
+
+    /// Install the AEAD cipher used to seal/open snapshot envelopes at rest.
+    /// Must be set whenever a [`SnapshotStore`] is wired — the snapshotter
+    /// fails closed (writes nothing) without it, and recovery cannot decode
+    /// existing envelopes. See [`Inner::snapshot_cipher`].
+    pub fn set_snapshot_cipher(&self, cipher: Option<Arc<SnapshotCipher>>) {
+        *self.inner.snapshot_cipher.write() = cipher;
+    }
+
+    /// Clone of the active snapshot [`SnapshotCipher`], if one is installed.
+    /// Consulted by [`crate::snapshot::take_snapshot`] before writing and by
+    /// the recover path before decoding an envelope.
+    pub fn snapshot_cipher_clone(&self) -> Option<Arc<SnapshotCipher>> {
+        self.inner.snapshot_cipher.read().clone()
     }
 
     /// Highest event sequence number observed by the underlying event

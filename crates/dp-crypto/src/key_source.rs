@@ -49,29 +49,7 @@ impl KeySource {
     /// panicking, so a typo in operator config fails fast at boot.
     pub fn from_uri(uri: &str) -> Result<Self, CryptoError> {
         let uri = uri.trim();
-        let secret = if let Some(path) = uri.strip_prefix("file:") {
-            load_operator_key_file(path)?
-        } else if let Some(path) = uri.strip_prefix("age:") {
-            // Both the passphrase and the decrypted hex blob are
-            // wrapped so they are scrubbed on early-return / error
-            // paths as well as on the happy path.
-            let pass = Zeroizing::new(std::env::var("DARKPOOL_KEY_PASSPHRASE").map_err(|_| {
-                CryptoError::KeySource(
-                    "age: key URI requires DARKPOOL_KEY_PASSPHRASE env var".into(),
-                )
-            })?);
-            let mut bytes = decrypt_age_passphrase(Path::new(path), &pass)
-                .map_err(|e| CryptoError::KeySource(format!("age: {e}")))?;
-            let secret = parse_hex_secret(&bytes)?;
-            bytes.zeroize();
-            secret
-        } else if let Some(rest) = uri.strip_prefix("awskms:") {
-            decrypt_via_aws_kms(rest)?
-        } else {
-            return Err(CryptoError::KeySource(format!(
-                "unsupported key URI scheme: {uri}"
-            )));
-        };
+        let secret = resolve_secret_bytes(uri)?;
         if secret.len() != 32 {
             return Err(CryptoError::InvalidKeyFile(format!(
                 "expected 32-byte secp256k1 secret, got {}",
@@ -101,6 +79,38 @@ pub fn decrypter_from_uri(uri: &str) -> Result<Arc<dyn Decrypter>, CryptoError> 
     let source = KeySource::from_uri(uri)?;
     let dec = source.into_decrypter()?;
     Ok(Arc::new(dec))
+}
+
+/// Resolve a key URI into raw secret bytes, without imposing a length or
+/// curve interpretation. Shared by [`KeySource::from_uri`] (which then
+/// enforces the 32-byte secp256k1 contract) and the snapshot-key loader
+/// (which uses the bytes directly as a symmetric AEAD key). Keeping the
+/// `file:` / `age:` / `awskms:` dispatch in one place means a new scheme is
+/// added once and both consumers pick it up.
+pub(crate) fn resolve_secret_bytes(uri: &str) -> Result<Vec<u8>, CryptoError> {
+    let uri = uri.trim();
+    let secret = if let Some(path) = uri.strip_prefix("file:") {
+        load_operator_key_file(path)?
+    } else if let Some(path) = uri.strip_prefix("age:") {
+        // Both the passphrase and the decrypted hex blob are wrapped so
+        // they are scrubbed on early-return / error paths as well as on
+        // the happy path.
+        let pass = Zeroizing::new(std::env::var("DARKPOOL_KEY_PASSPHRASE").map_err(|_| {
+            CryptoError::KeySource("age: key URI requires DARKPOOL_KEY_PASSPHRASE env var".into())
+        })?);
+        let mut bytes = decrypt_age_passphrase(Path::new(path), &pass)
+            .map_err(|e| CryptoError::KeySource(format!("age: {e}")))?;
+        let secret = parse_hex_secret(&bytes)?;
+        bytes.zeroize();
+        secret
+    } else if let Some(rest) = uri.strip_prefix("awskms:") {
+        decrypt_via_aws_kms(rest)?
+    } else {
+        return Err(CryptoError::KeySource(format!(
+            "unsupported key URI scheme: {uri}"
+        )));
+    };
+    Ok(secret)
 }
 
 fn parse_hex_secret(bytes: &[u8]) -> Result<Vec<u8>, CryptoError> {

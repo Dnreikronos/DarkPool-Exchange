@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use alloy_primitives::U256;
 use chrono::{DateTime, Utc};
-use dp_crypto::Decrypter;
+use dp_crypto::{Decrypter, SnapshotCipher};
 use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_types::{EventType, Order, Pair};
 use rust_decimal::Decimal;
@@ -72,6 +72,7 @@ fn apply_and_log_snapshot(
 fn try_restore_from_snapshots(
     engine: &Engine,
     snap_store: &dyn SnapshotStore,
+    cipher: Option<&SnapshotCipher>,
     placed_orders: &mut HashMap<Uuid, Order>,
 ) -> SnapshotRecoveryOutcome {
     let seqs = match snap_store.list_seqs() {
@@ -81,6 +82,17 @@ fn try_restore_from_snapshots(
     if seqs.is_empty() {
         return SnapshotRecoveryOutcome::NoneAvailable;
     }
+    // Envelopes are AEAD-sealed (#203); without a cipher they cannot be read.
+    // Treat that as "all corrupt" so the caller applies the same safety net it
+    // uses for genuinely unreadable envelopes (full replay only when the event
+    // log still covers seq 1, else refuse to boot).
+    let Some(cipher) = cipher else {
+        tracing::error!(
+            "snapshot envelopes present but no SnapshotCipher configured — cannot \
+             decrypt; set DARKPOOL_SNAPSHOT_KEY_URI. Falling back to event replay."
+        );
+        return SnapshotRecoveryOutcome::AllCorrupt;
+    };
     let mut attempts = 0usize;
     for &seq in seqs.iter().rev() {
         let bytes = match snap_store.read_at(seq) {
@@ -92,7 +104,7 @@ fn try_restore_from_snapshots(
             }
         };
         attempts += 1;
-        match decode_envelope(&bytes) {
+        match decode_envelope(&bytes, cipher) {
             Ok((decoded_seq, snap_state)) => {
                 apply_and_log_snapshot(
                     engine,
@@ -168,6 +180,7 @@ impl Engine {
         }
 
         let decrypter = self.inner.decrypter.read().clone();
+        let snapshot_cipher = self.inner.snapshot_cipher.read().clone();
         let aggregator = self.inner.aggregator.read().clone();
         let store = self.inner.store.clone();
 
@@ -212,8 +225,12 @@ impl Engine {
         //   3. Only when the event log still starts at seq 1 do we fall
         //      back to a full replay.
         if let Some(snap_store) = self.inner.snapshot_store.read().clone() {
-            let restored =
-                try_restore_from_snapshots(self, snap_store.as_ref(), &mut placed_orders);
+            let restored = try_restore_from_snapshots(
+                self,
+                snap_store.as_ref(),
+                snapshot_cipher.as_deref(),
+                &mut placed_orders,
+            );
             match restored {
                 SnapshotRecoveryOutcome::Restored(seq) => {
                     if !event_log_continuous_after(store.as_ref(), seq)? {
