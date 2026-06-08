@@ -30,9 +30,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 'body input,body textarea,body [contenteditable=true]{cursor:text !important}',
             }}
           />
+          {/* Keyboard users land on the banner/rail chrome first — give
+              them a one-Tab bypass straight to the panels (#80). Visible
+              only while focused; styled as a bracketed mono tag per
+              DESIGN.md (zero radius, 1px outline, lime focus ring). */}
+          <a
+            href="#main"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:border focus:border-brand-border focus:bg-brand-bg focus:px-4 focus:py-2 focus:font-mono focus:text-label-lg focus:uppercase focus:tracking-label focus:text-brand-fg focus:outline focus:outline-1 focus:outline-offset-2 focus:outline-brand-accent"
+          >
+            [ SKIP TO CONTENT ]
+          </a>
           <Banner />
           <Rail />
-          <main className="pt-16 lg:pl-56">{children}</main>
+          {/* tabIndex={-1} lets the skip link programmatically focus the
+              region on browsers that don't move sequential focus to
+              fragment targets. */}
+          <main id="main" tabIndex={-1} className="pt-16 lg:pl-56 focus:outline-none">
+            {children}
+          </main>
           <OnboardingMount />
           <HistoryBoot />
           <SettlementWatcher />

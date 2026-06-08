@@ -55,14 +55,30 @@ export function PlaceButton({
   const isRunning = phase.kind === 'running'
   const showSuccess = phase.kind === 'success'
 
+  // Screen-reader announcements (#80): the visible button label re-renders
+  // every 100 ms with elapsed seconds — aria-live on the button would spam
+  // screen readers through the whole 5–30 s proving stage. Instead an
+  // sr-only role="status" region announces only stage TRANSITIONS (label
+  // without the timer). Errors are announced by <SubmitError>'s
+  // role="alert" — keep them out of this region to avoid double-speak.
+  // No trailing ellipsis — some screen readers verbalize it.
+  const announcement =
+    phase.kind === 'running'
+      ? STAGE_LABELS[phase.stage]
+      : phase.kind === 'success'
+        ? 'ORDER PLACED'
+        : ''
+
   return (
     <div className="flex flex-col">
+      <span role="status" aria-atomic="true" className="sr-only">
+        {announcement}
+      </span>
       <button
         type="button"
         onClick={onClick}
         disabled={disabled || isRunning}
         aria-busy={isRunning || undefined}
-        aria-live="polite"
         className={cn(
           'relative flex h-12 items-center justify-center px-8',
           'font-mono uppercase tracking-[0.15em] text-[11px] font-medium leading-none',
@@ -114,17 +130,20 @@ function ProgressBar({
   const width = progressWidth(phase, success, provingPct)
   const visible = phase.kind === 'running' || success
   return (
+    // State-driven movement, not a hover affordance — both transitions
+    // freeze under prefers-reduced-motion per the DESIGN.md motion
+    // contract (#80); the bar still snaps to each stage's width.
     <div
       aria-hidden
       className={cn(
         'h-[2px] w-full overflow-hidden bg-brand-border/0',
-        'transition-opacity duration-150',
+        'transition-opacity duration-150 motion-reduce:transition-none',
         visible ? 'opacity-100' : 'opacity-0'
       )}
     >
       <div
         data-testid="place-progress"
-        className="h-full bg-brand-accent transition-[width] duration-150 ease-out"
+        className="h-full bg-brand-accent transition-[width] duration-150 ease-out motion-reduce:transition-none"
         style={{ width: `${(width * 100).toFixed(2)}%` }}
       />
     </div>

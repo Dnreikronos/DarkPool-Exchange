@@ -89,17 +89,36 @@ export function MyOrdersPanel({ useOrders = useMyOrders }: MyOrdersPanelProps = 
       ) : rows.length === 0 ? (
         <MyOrdersEmpty />
       ) : (
-        <div className="flex flex-1 flex-col overflow-y-auto">
-          <ColumnHeader />
-          <div role="rowgroup">
-            {rows.map((row) => (
-              <OrderRow
-                key={row.order.id}
-                row={row}
-                link={links.get(row.order.id) ?? null}
-                onCancel={handleCancel}
-              />
-            ))}
+        // Complete ARIA table tree (table > rowgroup > row > cell) — an
+        // orphan row/rowgroup is an axe critical violation (#80). The
+        // horizontal scroll wrapper keeps the six fixed-ish columns
+        // (~34rem) from crushing each other below ~544px viewports;
+        // tabIndex + region keep it keyboard-scrollable (WCAG 2.1.1) even
+        // when every row's cancel button is disabled.
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="My orders table"
+          className="flex flex-1 flex-col overflow-x-auto overflow-y-auto focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
+        >
+          <div
+            role="table"
+            aria-labelledby={headerId}
+            className="flex min-w-[34rem] flex-1 flex-col"
+          >
+            <div role="rowgroup">
+              <ColumnHeader />
+            </div>
+            <div role="rowgroup">
+              {rows.map((row) => (
+                <OrderRow
+                  key={row.order.id}
+                  row={row}
+                  link={links.get(row.order.id) ?? null}
+                  onCancel={handleCancel}
+                />
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -126,12 +145,16 @@ function ColumnHeader(): JSX.Element {
       role="row"
       className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_7.5rem] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
     >
-      <span>TIME</span>
-      <span>SIDE</span>
-      <span className="text-right">PRICE</span>
-      <span className="text-right">SIZE</span>
-      <span>STATUS</span>
-      <span className="text-right">
+      <span role="columnheader">TIME</span>
+      <span role="columnheader">SIDE</span>
+      <span role="columnheader" className="text-right">
+        PRICE
+      </span>
+      <span role="columnheader" className="text-right">
+        SIZE
+      </span>
+      <span role="columnheader">STATUS</span>
+      <span role="columnheader" className="text-right">
         {/* visually blank: the column holds the cancel action, or the
             settlement tx once a filled row links (#100) */}
         <span className="sr-only">Action / settlement transaction</span>

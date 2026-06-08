@@ -20,6 +20,7 @@ const SheetOverlay = React.forwardRef<
     className={cn(
       'fixed inset-0 z-50 bg-[rgba(6,6,10,0.85)]',
       'data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out',
+      'motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none',
       className
     )}
     {...props}
@@ -28,7 +29,13 @@ const SheetOverlay = React.forwardRef<
 SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 
 const sheetVariants = cva(
-  cn('fixed z-50 bg-brand-surface text-brand-fg p-8', 'focus:outline-none'),
+  cn(
+    'fixed z-50 bg-brand-surface text-brand-fg p-8',
+    'focus:outline-none',
+    // DESIGN.md motion contract: entrance/exit animations skip to their
+    // final state under prefers-reduced-motion (#80).
+    'motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none'
+  ),
   {
     variants: {
       side: {

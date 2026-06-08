@@ -44,16 +44,32 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
       className="flex min-h-[280px] flex-col border border-brand-border bg-brand-surface"
     >
       <TableTitleBar count={fills.length} fills={fills} />
-      <TableHeader />
-      {fills.length === 0 ? (
-        <FillHistoryEmpty />
-      ) : (
-        <ol className="flex-1 overflow-y-auto">
-          {fills.map((f) => (
-            <FillHistoryRow key={f.fillId} fill={f} link={links.get(f.fillId) ?? null} />
-          ))}
-        </ol>
-      )}
+      {/* Below ~576px the fixed columns (10rem time + 4rem side + 9rem
+          batch) outgrow the viewport and the 1fr numeric columns collapse
+          to zero, overlapping their text (#80). Scroll the table
+          horizontally instead of letting columns crush. tabIndex + region
+          keep the scroller keyboard-reachable (WCAG 2.1.1) — rows are
+          plain text, so there may be nothing focusable inside. */}
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Fill history table"
+        className="flex flex-1 flex-col overflow-x-auto focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-accent"
+      >
+        <div className="flex min-w-[36rem] flex-col">
+          <TableHeader />
+          {fills.length > 0 ? (
+            <ol className="flex-1 overflow-y-auto">
+              {fills.map((f) => (
+                <FillHistoryRow key={f.fillId} fill={f} link={links.get(f.fillId) ?? null} />
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      </div>
+      {/* Empty state sits outside the min-width scroller so it centers on
+          the visible panel, not on the 36rem virtual table. */}
+      {fills.length === 0 ? <FillHistoryEmpty /> : null}
     </section>
   )
 }
@@ -61,7 +77,7 @@ export function FillHistoryTable({ fills }: FillHistoryTableProps): JSX.Element 
 function TableTitleBar({ count, fills }: { count: number; fills: readonly Fill[] }) {
   return (
     <div className="flex h-9 items-center justify-between border-b border-brand-border px-4">
-      <span className="font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
+      <span className="whitespace-nowrap font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
         [ FILL HISTORY · {count.toString().padStart(2, '0')} ]
       </span>
       <ExportCsvButton fills={fills} />
@@ -70,10 +86,13 @@ function TableTitleBar({ count, fills }: { count: number; fills: readonly Fill[]
 }
 
 function TableHeader() {
+  // Visual column guide only — not an ARIA table. An orphan role="row"
+  // (no table/rowgroup ancestor) is an axe violation; each list row below
+  // carries a complete aria-label instead (#80).
   return (
     <div
+      aria-hidden="true"
       className="grid grid-cols-[10rem_4rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,9rem)] gap-3 border-b border-brand-border bg-brand-surface px-4 py-2 font-mono text-label-md uppercase tracking-labelWide text-brand-muted"
-      role="row"
     >
       <span>TIME</span>
       <span>SIDE</span>

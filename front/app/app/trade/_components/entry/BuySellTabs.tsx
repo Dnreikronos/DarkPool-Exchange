@@ -25,15 +25,22 @@ interface OptionProps {
   onClick: () => void
 }
 
-function Option({ side, label, active, disabled, onClick }: OptionProps) {
+const Option = React.forwardRef<HTMLButtonElement, OptionProps>(function Option(
+  { side, label, active, disabled, onClick },
+  ref
+) {
   return (
     <button
+      ref={ref}
       type="button"
       role="tab"
       aria-selected={active}
       aria-controls="order-entry-form"
       data-side={side}
       data-state={active ? 'active' : 'inactive'}
+      // Roving tabindex: one Tab stop for the whole tablist; arrows move
+      // the selection (see BuySellTabs.onKeyDown).
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       disabled={disabled}
       className={cn(
@@ -51,12 +58,41 @@ function Option({ side, label, active, disabled, onClick }: OptionProps) {
       {label}
     </button>
   )
-}
+})
 
 export function BuySellTabs({ value, onChange, disabled }: BuySellTabsProps) {
+  const buyRef = React.useRef<HTMLButtonElement>(null)
+  const sellRef = React.useRef<HTMLButtonElement>(null)
+
+  // ARIA tabs keyboard contract (#80): Left/Right move the selection
+  // (selection follows focus — only two tabs), Home/End jump to the
+  // first/last tab.
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (disabled) return
+    let next: OrderSide
+    switch (event.key) {
+      case 'ArrowLeft':
+      case 'ArrowRight':
+        next = value === 'buy' ? 'sell' : 'buy'
+        break
+      case 'Home':
+        next = 'buy'
+        break
+      case 'End':
+        next = 'sell'
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    if (next !== value) onChange(next)
+    ;(next === 'buy' ? buyRef : sellRef).current?.focus()
+  }
+
   return (
-    <div role="tablist" aria-label="Order side" className="flex gap-px">
+    <div role="tablist" aria-label="Order side" className="flex gap-px" onKeyDown={onKeyDown}>
       <Option
+        ref={buyRef}
         side="buy"
         label="[ BUY ]"
         active={value === 'buy'}
@@ -64,6 +100,7 @@ export function BuySellTabs({ value, onChange, disabled }: BuySellTabsProps) {
         onClick={() => onChange('buy')}
       />
       <Option
+        ref={sellRef}
         side="sell"
         label="[ SELL ]"
         active={value === 'sell'}

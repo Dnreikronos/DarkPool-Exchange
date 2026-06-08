@@ -29,7 +29,11 @@ const toastVariants = cva(
     'bg-brand-surface border border-brand-border text-brand-fg',
     'data-[state=open]:animate-slide-in-right',
     'data-[state=closed]:animate-fade-out',
-    'data-[swipe=end]:animate-fade-out'
+    'data-[swipe=end]:animate-fade-out',
+    // DESIGN.md motion contract: entrance/exit animations skip to their
+    // final state under prefers-reduced-motion (#80).
+    'motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none',
+    'motion-reduce:data-[swipe=end]:animate-none'
   ),
   {
     variants: {

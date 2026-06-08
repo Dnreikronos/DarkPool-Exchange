@@ -138,6 +138,7 @@ export function DepositForm({ initialToken = 'USDC', onConfirmed, titleId }: Dep
           {!validation.ok && validation.reason !== 'empty' && amount !== '' ? (
             <p
               id="deposit-error"
+              role="alert"
               className="font-mono text-label-md uppercase tracking-label text-brand-fg"
             >
               {validation.message}

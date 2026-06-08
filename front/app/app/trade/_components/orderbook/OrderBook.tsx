@@ -152,11 +152,12 @@ export function OrderBookContent({
 }
 
 function ColumnHeader() {
+  // Visual column guide, not an ARIA table — an orphan role="row" (no
+  // table/rowgroup ancestor) is an axe violation (#80). The text stays
+  // readable (no aria-hidden): non-clickable depth rows are bare numbers,
+  // so this line is the only column context assistive tech gets.
   return (
-    <div
-      role="row"
-      className="grid grid-cols-3 gap-2 border-b border-brand-border px-4 py-2 font-mono text-label-md uppercase text-brand-muted"
-    >
+    <div className="grid grid-cols-3 gap-2 border-b border-brand-border px-4 py-2 font-mono text-label-md uppercase text-brand-muted">
       <span className="text-left">Price</span>
       <span className="text-right">Size</span>
       <span className="text-right">Total</span>

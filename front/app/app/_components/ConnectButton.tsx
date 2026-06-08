@@ -24,6 +24,10 @@ export function ConnectButton() {
       {({ account, openAccountModal, openConnectModal, mounted }) => {
         const ready = mounted
         const connected = ready && Boolean(account)
+        // While the hydration gate hides the wrapper (aria-hidden), the
+        // inner button must not be focusable — a focusable element inside
+        // aria-hidden is an axe `aria-hidden-focus` violation (#80).
+        const gateTabIndex = ready ? undefined : -1
         return (
           <div
             aria-hidden={!ready}
@@ -34,6 +38,7 @@ export function ConnectButton() {
                 variant="ghost"
                 onClick={openAccountModal}
                 aria-label={`Wallet ${account.address}`}
+                tabIndex={gateTabIndex}
                 className={HEADER_BUTTON_CLASS}
               >
                 <WalletIcon className="mr-3 text-brand-fg" />
@@ -44,6 +49,7 @@ export function ConnectButton() {
                 variant="ghost"
                 onClick={openConnectModal}
                 aria-haspopup="dialog"
+                tabIndex={gateTabIndex}
                 className={HEADER_BUTTON_CLASS}
               >
                 <WalletIcon className="mr-3 text-brand-muted" />

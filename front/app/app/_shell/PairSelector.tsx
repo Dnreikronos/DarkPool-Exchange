@@ -8,6 +8,15 @@ export function PairSelector() {
     <details
       className="relative"
       onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      // Native <details> toggles with Enter/Space but never closes on
+      // Escape — standard disclosure keyboard contract (#80). Focus
+      // returns to the summary so the keyboard user isn't stranded.
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !event.currentTarget.open) return
+        event.preventDefault()
+        event.currentTarget.open = false
+        event.currentTarget.querySelector('summary')?.focus()
+      }}
     >
       <summary
         aria-label="Trading pair selector"
@@ -31,7 +40,9 @@ export function PairSelector() {
         >
           ETH / USDC
         </div>
-        <div className="mt-2 font-mono text-label-md uppercase text-brand-muted/70">
+        {/* Full-strength muted: brand-muted is already ~3:1 on the canvas —
+            a /70 alpha pushes ambient metadata below any readable floor (#80). */}
+        <div className="mt-2 font-mono text-label-md uppercase text-brand-muted">
           MULTI-PAIR · POST-MVP
         </div>
       </div>
