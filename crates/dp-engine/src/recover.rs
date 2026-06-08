@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::engine::Engine;
 use crate::error::EngineError;
-use crate::snapshot::decode_envelope;
+use crate::snapshot::{decode_envelope, SnapshotError};
 use crate::state::{try_build_settlement_row, AuctionExecutedRecord, PairConfig, PendingBatch};
 
 /// Result of the snapshot recovery probe. Drives the recover() control
@@ -34,7 +34,8 @@ enum SnapshotRecoveryOutcome {
 /// Apply a decoded snapshot and populate `placed_orders` from the restored
 /// book. Logs whether this was a first-attempt or fallback recovery, and
 /// warns when the envelope's self-reported seq disagrees with the store key
-/// (the envelope value is authoritative because it is checksum-covered).
+/// (the envelope value is authoritative: the seq is bound into the AEAD
+/// associated data, so a tampered seq fails the tag rather than being trusted).
 fn apply_and_log_snapshot(
     engine: &Engine,
     placed_orders: &mut HashMap<Uuid, Order>,
@@ -61,7 +62,7 @@ fn apply_and_log_snapshot(
             envelope_seq = decoded_seq,
             store_key,
             "snapshot envelope seq disagrees with store key — \
-             trusting envelope (checksum-covered)"
+             trusting envelope (seq is AEAD-tag-authenticated)"
         );
     }
 }
@@ -94,6 +95,7 @@ fn try_restore_from_snapshots(
         return SnapshotRecoveryOutcome::AllCorrupt;
     };
     let mut attempts = 0usize;
+    let mut decrypt_failures = 0usize;
     for &seq in seqs.iter().rev() {
         let bytes = match snap_store.read_at(seq) {
             Ok(Some(b)) => b,
@@ -117,6 +119,14 @@ fn try_restore_from_snapshots(
                 return SnapshotRecoveryOutcome::Restored(decoded_seq);
             }
             Err(e) => {
+                // An AEAD-open failure is indistinguishable from on-disk
+                // corruption at this layer — that's inherent to AEAD. But if
+                // *every* envelope fails this exact way, the likeliest cause is
+                // the wrong snapshot key, not real corruption; count it so the
+                // post-loop summary can surface that hint.
+                if matches!(e, SnapshotError::Decrypt) {
+                    decrypt_failures += 1;
+                }
                 tracing::warn!(error = ?e, seq, "snapshot envelope corrupt; trying older");
                 // `decode_envelope` is pure and runs before
                 // `apply_snapshot_state`, so the engine's state was never
@@ -124,6 +134,20 @@ fn try_restore_from_snapshots(
                 // is also untouched on this branch for the same reason.
             }
         }
+    }
+    // Every envelope failed to decode. When all failures were AEAD-open
+    // failures — no BadMagic / Truncated / version / length mismatch mixed in —
+    // the envelopes are well-formed but unreadable under this key, the classic
+    // signature of a wrong or freshly-rotated snapshot key. Surface a targeted
+    // hint so the operator checks the key before assuming the snapshots are
+    // lost; the caller still applies its usual safety net regardless.
+    if attempts > 0 && decrypt_failures == attempts {
+        tracing::error!(
+            envelopes = attempts,
+            "every snapshot envelope failed AEAD authentication — as consistent \
+             with a WRONG snapshot key (check DARKPOOL_SNAPSHOT_KEY_URI or a recent \
+             key rotation) as with on-disk corruption"
+        );
     }
     SnapshotRecoveryOutcome::AllCorrupt
 }
