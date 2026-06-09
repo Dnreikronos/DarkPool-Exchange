@@ -217,13 +217,13 @@ impl Engine {
     /// Install the AEAD cipher used to seal/open snapshot envelopes at rest.
     /// Must be set whenever a [`SnapshotStore`] is wired — the snapshotter
     /// fails closed (writes nothing) without it, and recovery cannot decode
-    /// existing envelopes. See [`Inner::snapshot_cipher`].
+    /// existing envelopes. See `Inner::snapshot_cipher`.
     pub fn set_snapshot_cipher(&self, cipher: Option<Arc<SnapshotCipher>>) {
         *self.inner.snapshot_cipher.write() = cipher;
     }
 
     /// Clone of the active snapshot [`SnapshotCipher`], if one is installed.
-    /// Consulted by [`crate::snapshot::take_snapshot`] before writing and by
+    /// Consulted by `crate::snapshot::take_snapshot` before writing and by
     /// the recover path before decoding an envelope.
     pub fn snapshot_cipher_clone(&self) -> Option<Arc<SnapshotCipher>> {
         self.inner.snapshot_cipher.read().clone()
