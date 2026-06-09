@@ -1941,8 +1941,13 @@ mod snapshot_recover {
 
         // Valid envelope, sealed under the key-7 cipher wire_engine installs.
         let seq = engine.store_last_seq();
-        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
-            .expect("take snapshot");
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
 
         // Compact the event log past seq 1 so a full replay is impossible.
         engine.compact_events_before(seq).expect("compact");
@@ -1978,8 +1983,13 @@ mod snapshot_recover {
         let truth = public_state_fingerprint(&engine);
 
         let seq = engine.store_last_seq();
-        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
-            .expect("take snapshot");
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
 
         let restored = wire_engine(store.clone());
         restored.set_snapshot_store(Some(snap_store.clone()));
@@ -2013,8 +2023,13 @@ mod snapshot_recover {
         drive_scenario(&engine).await;
 
         let seq = engine.store_last_seq();
-        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
-            .expect("take snapshot");
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
         engine.compact_events_before(seq).expect("compact");
 
         // Restore with the snapshot store wired but NO cipher installed.
