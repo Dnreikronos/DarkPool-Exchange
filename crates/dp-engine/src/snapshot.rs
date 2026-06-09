@@ -157,7 +157,9 @@ pub(crate) fn decode_envelope(
     // AAD is the stored magic||version||seq prefix verbatim — any flip there
     // (e.g. a relabeled seq) fails the tag below rather than being trusted.
     let aad = &bytes[0..AAD_LEN];
-    let blob = cipher.open(payload, aad).map_err(|_| SnapshotError::Decrypt)?;
+    let blob = cipher
+        .open(payload, aad)
+        .map_err(|_| SnapshotError::Decrypt)?;
     let state: SerializableState = bincode::deserialize(&blob)?;
     Ok((seq, state))
 }

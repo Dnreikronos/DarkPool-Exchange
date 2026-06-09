@@ -82,7 +82,13 @@ impl SnapshotCipher {
         let nonce = XNonce::from(nonce_bytes);
         let ciphertext = self
             .cipher
-            .encrypt(&nonce, Payload { msg: plaintext, aad })
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|e| CryptoError::DecryptionFailed(format!("snapshot seal: {e}")))?;
         let mut out = Vec::with_capacity(SNAPSHOT_NONCE_LEN + ciphertext.len());
         out.extend_from_slice(&nonce_bytes);
@@ -106,7 +112,13 @@ impl SnapshotCipher {
             .expect("split_at(SNAPSHOT_NONCE_LEN) yields exactly that many bytes");
         let nonce = XNonce::from(nonce_arr);
         self.cipher
-            .decrypt(&nonce, Payload { msg: ciphertext, aad })
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
             .map_err(|e| CryptoError::DecryptionFailed(format!("snapshot open: {e}")))
     }
 }
