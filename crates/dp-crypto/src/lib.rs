@@ -19,6 +19,9 @@ pub enum CryptoError {
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 
+    #[error("encryption failed: {0}")]
+    EncryptionFailed(String),
+
     #[error("invalid key file: {0}")]
     InvalidKeyFile(String),
 

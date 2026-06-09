@@ -89,7 +89,7 @@ impl SnapshotCipher {
                     aad,
                 },
             )
-            .map_err(|e| CryptoError::DecryptionFailed(format!("snapshot seal: {e}")))?;
+            .map_err(|e| CryptoError::EncryptionFailed(format!("snapshot seal: {e}")))?;
         let mut out = Vec::with_capacity(SNAPSHOT_NONCE_LEN + ciphertext.len());
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ciphertext);
@@ -243,5 +243,17 @@ mod tests {
         assert_eq!(a.open(&sealed, b"aad").unwrap(), b"payload");
         // An independent ephemeral key cannot open it.
         assert!(b.open(&sealed, b"aad").is_err());
+    }
+
+    #[test]
+    fn seal_failure_reads_as_encryption_not_decryption() {
+        // A real `seal()` failure needs a multi-hundred-GB plaintext (the only
+        // way XChaCha20-Poly1305 encrypt errors), so it can't be triggered in a
+        // unit test. Lock in the variant's operator-facing wording instead: a
+        // seal failure must read as *encryption* failed, not *decryption* —
+        // guarding against a regression that swaps the mapping back.
+        let enc = CryptoError::EncryptionFailed("snapshot seal: boom".into());
+        assert_eq!(enc.to_string(), "encryption failed: snapshot seal: boom");
+        assert!(!enc.to_string().contains("decryption"));
     }
 }
