@@ -16,6 +16,7 @@ use dp_api::rest::{self, OpsState};
 use dp_api::tls;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
+    SnapshotCipher,
 };
 use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
 use dp_event::{
@@ -108,6 +109,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
     engine.set_snapshot_store(snapshot_store.clone());
+
+    // Snapshot-at-rest encryption (#203). A snapshot store without a cipher
+    // would persist cleartext order data (trader / price / size), so fail
+    // closed for durable backends and use a process-lifetime key for the
+    // non-durable in-memory store.
+    if snapshot_store.is_some() {
+        let cipher = if let Some(uri) = cfg.snapshot_key_uri_str() {
+            let c = SnapshotCipher::from_key_uri(uri)?;
+            info!(uri = %sanitize_uri_for_log(uri), "snapshot cipher: key loaded");
+            c
+        } else if cfg.event_db_url().is_some() || cfg.snapshot_dir_path().is_some() {
+            return Err(
+                "snapshots are enabled with a durable store but DARKPOOL_SNAPSHOT_KEY_URI \
+                 is unset — refusing to write plaintext order data at rest. Set a snapshot \
+                 key (e.g. file:/path/to/key.hex) or disable snapshots \
+                 (DARKPOOL_SNAPSHOT_ENABLED=false)."
+                    .into(),
+            );
+        } else {
+            warn!(
+                "snapshot store is in-memory and DARKPOOL_SNAPSHOT_KEY_URI is unset — using \
+                 an ephemeral per-process snapshot key. In-memory snapshots are not durable \
+                 across restarts; configure a durable store + key URI for real recovery."
+            );
+            SnapshotCipher::generate_ephemeral()
+        };
+        engine.set_snapshot_cipher(Some(Arc::new(cipher)));
+    }
 
     // Always construct a MultiKeyDecrypter and wire it to the engine
     // so admin-time rotation does not require restarting the process.

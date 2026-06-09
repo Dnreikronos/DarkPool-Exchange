@@ -162,6 +162,19 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_SNAPSHOT_RETAIN_COUNT", default_value = "3")]
     pub snapshot_retain_count: usize,
 
+    /// Key URI for snapshot-at-rest encryption (#203). Same schemes as the
+    /// operator key (`file:` / `age:` / `awskms:`), resolving to a 32-byte
+    /// symmetric key. This is a *dedicated* key, separate from the operator
+    /// ECIES identity, so its compromise cannot decrypt live orders and
+    /// rotating the operator key never strands snapshot recovery.
+    ///
+    /// Required when snapshots use a durable store (file / postgres): the boot
+    /// path refuses to start rather than write plaintext order data. The
+    /// non-durable in-memory store uses a per-process ephemeral key when this
+    /// is empty.
+    #[arg(long, env = "DARKPOOL_SNAPSHOT_KEY_URI", default_value = "")]
+    pub snapshot_key_uri: String,
+
     #[arg(long, env = "DARKPOOL_OPERATOR_KEY", default_value = "")]
     pub operator_key: String,
 
@@ -275,6 +288,10 @@ impl Config {
 
     pub fn snapshot_dir_path(&self) -> Option<&str> {
         opt(&self.snapshot_dir)
+    }
+
+    pub fn snapshot_key_uri_str(&self) -> Option<&str> {
+        opt(&self.snapshot_key_uri)
     }
 
     pub fn operator_key_path(&self) -> Option<&str> {

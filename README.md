@@ -193,6 +193,9 @@ cargo run   --release --bin darkpool-server
 --operator-key /etc/darkpool/op.key  # ECIES private key (single-key mode)
 --operator-key-uris file:/etc/dp/active.hex@active,age:/etc/dp/old.age@sunset
                                  # multi-key rotation mode (issue #28)
+--snapshot-key-uri file:/etc/dp/snapshot.hex
+                                 # dedicated key encrypting state snapshots at rest (issue #203);
+                                 # required when --snapshot-dir or a postgres store is used
 --signer-key-uri file:/etc/dp/eth.hex   # independent Ethereum signer URI
 --aggregator-bin /usr/local/bin/dp-aggregate  # proof aggregator subprocess (omit → noop)
 --eth-rpc https://...            # settlement RPC (with --signer-key-uri + --contract-addr → on-chain)
@@ -205,6 +208,9 @@ cargo run   --release --bin darkpool-server
 - [Operator key rotation](docs/operations/key-rotation.md) — runbook for
   generating, publishing, registering, draining, and deleting an
   ECIES key without restarting the operator.
+- [Snapshot encryption at rest](docs/adr/0006-snapshot-encryption-at-rest.md)
+  — why state snapshots are AEAD-sealed under a dedicated key, and how to
+  provision `--snapshot-key-uri`.
 
 ## Project structure
 
