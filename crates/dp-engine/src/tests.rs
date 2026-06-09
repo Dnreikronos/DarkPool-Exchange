@@ -1400,6 +1400,7 @@ mod snapshot_recover {
     use std::time::Duration;
 
     use alloy_primitives::Address;
+    use dp_crypto::SnapshotCipher;
     use dp_event::{MemSnapshotStore, MemStore, SnapshotStore};
     use dp_types::Side;
     use rust_decimal::Decimal;
@@ -1913,6 +1914,119 @@ mod snapshot_recover {
             .recover()
             .await
             .expect_err("must refuse boot on corrupt-snap + empty-log");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_snapshot_key_with_compacted_log_refuses_boot() {
+        // The headline operational failure: a valid snapshot sealed under
+        // key A, recovered under key B (a wrong DARKPOOL_SNAPSHOT_KEY_URI, or
+        // a key rotated without re-sealing). Unlike the other corrupt_* tests
+        // — which plant BadMagic / Truncated garbage — the envelope here is
+        // structurally perfect (right magic, version, length) but fails the
+        // AEAD tag, so `decode_envelope` returns `SnapshotError::Decrypt`.
+        // This is the only test that drives the all-Decrypt path through
+        // `try_restore_from_snapshots`, exercising the `decrypt_failures`
+        // counter and the wrong-key hint. With the event log compacted past
+        // seq 1, full replay can't reproduce history, so recover() must
+        // refuse to boot rather than silently come up with partial state.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        // Valid envelope, sealed under the key-7 cipher wire_engine installs.
+        let seq = engine.store_last_seq();
+        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
+            .expect("take snapshot");
+
+        // Compact the event log past seq 1 so a full replay is impossible.
+        engine.compact_events_before(seq).expect("compact");
+
+        // Restore under a DIFFERENT key: the envelope decodes structurally
+        // but fails the AEAD open → Decrypt → AllCorrupt → refuse boot.
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.set_snapshot_cipher(Some(Arc::new(
+            SnapshotCipher::from_bytes(&[0x99u8; 32]).unwrap(),
+        )));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("wrong snapshot key + compacted log must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_snapshot_key_with_intact_log_falls_back_to_full_replay() {
+        // The graceful half of the wrong-key safety net: same seal/open key
+        // mismatch, but the event log is intact from seq 1. The unreadable
+        // snapshot must be discarded and a full replay must reproduce the
+        // live engine's observable state.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+        let truth = public_state_fingerprint(&engine);
+
+        let seq = engine.store_last_seq();
+        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
+            .expect("take snapshot");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.set_snapshot_cipher(Some(Arc::new(
+            SnapshotCipher::from_bytes(&[0x99u8; 32]).unwrap(),
+        )));
+        restored
+            .recover()
+            .await
+            .expect("wrong key + intact log must fall back to full replay");
+        assert_eq!(
+            public_state_fingerprint(&restored),
+            truth,
+            "full replay under the wrong snapshot key must reproduce live state",
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_present_but_no_cipher_refuses_boot_on_compacted_log() {
+        // Defensive fail-safe (the `None`-cipher branch in
+        // `try_restore_from_snapshots`): envelopes are present on the store
+        // but no SnapshotCipher is configured, so they cannot be read.
+        // recover() must treat that as AllCorrupt — *not* NoneAvailable — so
+        // the compacted-log safety net still fires and the engine refuses to
+        // boot instead of full-replaying partial state. dp-api boots
+        // fail-closed before reaching this, but it's a fail-safe worth pinning.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        let seq = engine.store_last_seq();
+        take_snapshot(&engine, snap_store.as_ref(), &SnapshotConfig::default(), seq)
+            .expect("take snapshot");
+        engine.compact_events_before(seq).expect("compact");
+
+        // Restore with the snapshot store wired but NO cipher installed.
+        let restored = Engine::new(store.clone(), Duration::from_millis(50));
+        restored.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
+        restored.set_submitter(Arc::new(StubSubmitter::new()));
+        restored.set_finalize_every(1);
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("envelopes present + no cipher + compacted log must refuse boot");
         assert!(
             matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
             "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
