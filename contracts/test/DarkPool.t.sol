@@ -920,6 +920,26 @@ contract DarkPoolTest is Test {
         pool.settleAuction(sessionId, bytes32(uint256(3)), matches);
     }
 
+    /// The IVC settle path caps matches well below MAX_BATCH_SIZE: the on-chain
+    /// Poseidon recompute makes a 256-match settle exceed the block gas limit, so
+    /// the operator must be stopped from broadcasting an unmineable settle tx. One
+    /// past the cap reverts; the size guard fires before the binding or any
+    /// _settleMatch, so the matches need no funding.
+    function test_settleAuction_tooManyMatches_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(123);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](pool.MAX_IVC_SETTLE_MATCHES() + 1);
+        vm.prank(operator);
+        vm.expectRevert("invalid ivc batch size");
+        pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
+    }
+
     // --- Escrow reserve / unbonding (#165) ---
 
     function test_reserve_movesFreeToReserved() public {

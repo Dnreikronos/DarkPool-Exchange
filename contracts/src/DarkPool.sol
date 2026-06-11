@@ -16,6 +16,18 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
 
     uint256 public constant PROTOCOL_FEE_BPS = 5;
     uint256 public constant MAX_BATCH_SIZE = 256;
+    /// @notice Per-call match cap for the IVC settlement path (`settleAuction`),
+    ///         far below `MAX_BATCH_SIZE`. The #209 binding recomputes the
+    ///         Poseidon settlement chain on-chain — ~210k gas/match (three
+    ///         permutations), against the Groth16 path's O(1) public-input bind.
+    ///         Measured `settleAuction` gas runs ≈10M at 32 matches, ≈19M at 64,
+    ///         ≈38M at 128, ≈76M at 256, so the shared 256 cap is unmineable on
+    ///         this path. 32 keeps a full settle near a third of a 30M block with
+    ///         headroom for the cold-account access of distinct traders (the
+    ///         chain itself is trader-independent and dominates the cost).
+    ///         Revisit against the production block gas limit and real auction
+    ///         sizes when the real decider replaces the stub (#210).
+    uint256 public constant MAX_IVC_SETTLE_MATCHES = 32;
     uint256 private constant BPS_DENOMINATOR = 10_000;
 
     /// @notice Bridges the on-chain amount domain (wei, `decimal * 1e18` as
@@ -423,7 +435,11 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         // submitSession calls both try to settle the same auctionId.
         bytes32 bound = auctionToSession[auctionId];
         require(bound == bytes32(0) || bound == sessionId, "auction bound to other session");
-        require(matches.length > 0 && matches.length <= MAX_BATCH_SIZE, "invalid batch size");
+        // Tighter than the Groth16 `MAX_BATCH_SIZE`: the on-chain Poseidon
+        // recompute below makes a 256-match settle exceed the block gas limit
+        // (see `MAX_IVC_SETTLE_MATCHES`). Fail fast here rather than let the
+        // operator broadcast a settle tx that can never be mined.
+        require(matches.length > 0 && matches.length <= MAX_IVC_SETTLE_MATCHES, "invalid ivc batch size");
         // Bind the settled matches to the proof: recompute the Poseidon chain
         // over `matches[]` and require it equals the proved `zN[3]`.
         require(_settlementChain(matches) == sessionSettlementAcc[sessionId], "settlement binding");
@@ -447,7 +463,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     function _settlementChain(IDarkPool.Match[] calldata matches) internal pure returns (uint256) {
         // Build the Poseidon constants once for the whole chain rather than
         // reconstructing them on every fold — that reconstruction is the
-        // dominant per-match cost and a batch carries up to MAX_BATCH_SIZE.
+        // dominant per-match cost and a batch carries up to MAX_IVC_SETTLE_MATCHES.
         (uint256[3][65] memory ark, uint256[3][3] memory mds) = PoseidonBN254.loadConstants();
         uint256 acc = 0;
         for (uint256 i = 0; i < matches.length; i++) {
