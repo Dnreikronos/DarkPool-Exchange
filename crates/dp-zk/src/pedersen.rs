@@ -76,6 +76,41 @@ pub fn hash_root_native(elements: &[Fr]) -> Fr {
     sponge.squeeze_field_elements::<Fr>(1)[0]
 }
 
+/// One settled match, as the field elements the settlement chain hashes (#153).
+/// All four are already in the circuit's domain: `bid_addr`/`ask_addr` are the
+/// settlement addresses read as `uint256(address)` (`Fr::from_be_bytes_mod_order`
+/// of the 20 address bytes), and `price`/`size` are 1e8 fixed-point integers
+/// (see [`crate::encoding::decimal_to_scalar`]).
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementRow {
+    pub bid_addr: Fr,
+    pub ask_addr: Fr,
+    pub price: Fr,
+    pub size: Fr,
+}
+
+/// Fold the settlement hash-chain the on-chain `settleAuction` must reproduce
+/// from `matches[]` to bind settlement to the proof (#153). Starting from
+/// `acc0`, each row advances the chain by
+/// `acc = poseidon(acc, bid_addr, ask_addr, price, size)`.
+///
+/// This is the single source of truth for that chain: the in-circuit gadget
+/// (`step_circuit::settlement_acc`), this native helper, and the Solidity
+/// `PoseidonBN254.hashSettlementChain` must all agree byte-for-byte. `rows`
+/// must contain exactly the active matches, in the order they were proved —
+/// the chain is order-sensitive by design, so any reorder or substitution
+/// yields a different accumulator.
+pub fn settlement_chain(acc0: Fr, rows: &[SettlementRow]) -> Fr {
+    let cfg = poseidon_config();
+    let mut acc = acc0;
+    for r in rows {
+        let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+        sponge.absorb(&vec![acc, r.bid_addr, r.ask_addr, r.price, r.size]);
+        acc = sponge.squeeze_field_elements::<Fr>(1)[0];
+    }
+    acc
+}
+
 /// Compute trader-id-from-key as `poseidon(commitment_key_bytes_as_scalar)`.
 /// Treats input bytes big-endian, modular reduces into Fr.
 pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError> {
