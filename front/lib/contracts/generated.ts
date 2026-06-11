@@ -22,6 +22,13 @@ export const darkPoolAbi = [
   {
     type: 'function',
     inputs: [],
+    name: 'MAX_IVC_SETTLE_MATCHES',
+    outputs: [{ name: '', internalType: 'uint256', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    inputs: [],
     name: 'PROTOCOL_FEE_BPS',
     outputs: [{ name: '', internalType: 'uint256', type: 'uint256' }],
     stateMutability: 'view',
