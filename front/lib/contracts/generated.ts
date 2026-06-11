@@ -229,8 +229,15 @@ export const darkPoolAbi = [
   {
     type: 'function',
     inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
-    name: 'sessionMatchesHash',
-    outputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    name: 'sessionSettled',
+    outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    name: 'sessionSettlementAcc',
+    outputs: [{ name: '', internalType: 'uint256', type: 'uint256' }],
     stateMutability: 'view',
   },
   {
@@ -349,11 +356,10 @@ export const darkPoolAbi = [
     inputs: [
       { name: 'sessionId', internalType: 'bytes32', type: 'bytes32' },
       { name: 'proof', internalType: 'bytes', type: 'bytes' },
-      { name: 'z0', internalType: 'uint256[3]', type: 'uint256[3]' },
-      { name: 'zN', internalType: 'uint256[3]', type: 'uint256[3]' },
+      { name: 'z0', internalType: 'uint256[5]', type: 'uint256[5]' },
+      { name: 'zN', internalType: 'uint256[5]', type: 'uint256[5]' },
       { name: 'nSteps', internalType: 'uint64', type: 'uint64' },
       { name: 'policyHash', internalType: 'bytes32', type: 'bytes32' },
-      { name: 'matchesHash', internalType: 'bytes32', type: 'bytes32' },
     ],
     name: 'submitSession',
     outputs: [],
@@ -823,8 +829,8 @@ export const verifierProxyAbi = [
     type: 'function',
     inputs: [
       { name: 'proof', internalType: 'bytes', type: 'bytes' },
-      { name: 'z0', internalType: 'uint256[3]', type: 'uint256[3]' },
-      { name: 'zN', internalType: 'uint256[3]', type: 'uint256[3]' },
+      { name: 'z0', internalType: 'uint256[5]', type: 'uint256[5]' },
+      { name: 'zN', internalType: 'uint256[5]', type: 'uint256[5]' },
       { name: 'nSteps', internalType: 'uint64', type: 'uint64' },
     ],
     name: 'verifyIvcProof',
