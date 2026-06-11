@@ -745,7 +745,7 @@ contract DarkPoolTest is Test {
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64); // dummy proof
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
 
         // Fund + reserve traders so _settleMatch debits locked escrow. Amounts
         // are in the on-chain wei domain (decimal * 1e18) so they scale down
@@ -772,11 +772,8 @@ contract DarkPoolTest is Test {
         // The proof binds the settled matches via zN[3] = the settlement
         // hash-chain over (bidTrader, askTrader, price_1e8, size_1e8). An honest
         // operator's zN[3] equals what settleAuction recomputes from matches[].
-        uint256 settlementAcc = PoseidonBN254.poseidon5(
-            0, uint256(uint160(trader1)), uint256(uint160(trader2)), price / 1e10, size / 1e10
-        );
-        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), uint256(0), uint256(0)];
-        uint256[5] memory zN = [uint256(999), uint256(60), uint256(123), settlementAcc, uint256(0)];
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
 
         vm.prank(operator);
         pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
@@ -799,7 +796,7 @@ contract DarkPoolTest is Test {
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64);
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
         bytes32 auctionId = bytes32(uint256(2));
 
         uint256 price = 100e18;
@@ -817,11 +814,8 @@ contract DarkPoolTest is Test {
         });
 
         // zN[3] binds exactly the proved matches.
-        uint256 settlementAcc = PoseidonBN254.poseidon5(
-            0, uint256(uint160(trader1)), uint256(uint160(trader2)), price / 1e10, size / 1e10
-        );
-        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), uint256(0), uint256(0)];
-        uint256[5] memory zN = [uint256(999), uint256(60), uint256(123), settlementAcc, uint256(0)];
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
 
         vm.prank(operator);
         pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
@@ -846,11 +840,11 @@ contract DarkPoolTest is Test {
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64);
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
         bytes32 auctionId = bytes32(uint256(2));
 
-        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), uint256(0), uint256(0)];
-        uint256[5] memory zN = [uint256(999), uint256(60), uint256(123), uint256(1), uint256(0)];
+        // zN[3] is a dummy here; the precision check reverts before the binding.
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(1);
         vm.prank(operator);
         pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
 
@@ -884,7 +878,7 @@ contract DarkPoolTest is Test {
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64);
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
 
         uint256 price = 100e18;
         uint256 size = 10e18;
@@ -907,11 +901,8 @@ contract DarkPoolTest is Test {
             size: size
         });
 
-        uint256 settlementAcc = PoseidonBN254.poseidon5(
-            0, uint256(uint160(trader1)), uint256(uint160(trader2)), price / 1e10, size / 1e10
-        );
-        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), uint256(0), uint256(0)];
-        uint256[5] memory zN = [uint256(999), uint256(60), uint256(123), settlementAcc, uint256(0)];
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
 
         vm.prank(operator);
         pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
@@ -1244,6 +1235,32 @@ contract DarkPoolTest is Test {
     function _depositAndReserve(address trader, address token, uint256 amount) internal {
         _deposit(trader, token, amount);
         _reserve(trader, token, amount);
+    }
+
+    // HyperNova session fixtures. The IVC proof is a stub, so z0/zN are fixed
+    // dummies except zN[3] — the settlement accumulator settleAuction recomputes
+    // from matches[]. Deriving these in one place keeps the session tests from
+    // drifting on the policy hash, the 1e10 wei->circuit scale, or the 5-element
+    // state layout.
+    uint256 internal constant TEST_POLICY_HASH = 123;
+
+    function _settlementAcc(address bidTrader, address askTrader, uint256 price, uint256 size)
+        internal
+        pure
+        returns (uint256)
+    {
+        return PoseidonBN254.poseidon5(
+            0, uint256(uint160(bidTrader)), uint256(uint160(askTrader)), price / 1e10, size / 1e10
+        );
+    }
+
+    function _ivcStates(uint256 settlementAcc)
+        internal
+        pure
+        returns (uint256[5] memory z0, uint256[5] memory zN)
+    {
+        z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, uint256(0), uint256(0)];
+        zN = [uint256(999), uint256(60), TEST_POLICY_HASH, settlementAcc, uint256(0)];
     }
 
     function _zeroInputs() internal pure returns (uint256[6] memory inputs) {
