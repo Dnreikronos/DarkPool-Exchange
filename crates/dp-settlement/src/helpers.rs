@@ -5,10 +5,27 @@ use uuid::Uuid;
 use crate::abi::SolMatch;
 use crate::{SettlementError, SettlementMatch};
 
+/// Wei per unit of the circuit's 1e8 fixed-point domain (`1e18 / 1e8`). The
+/// #209 on-chain settlement binding folds price/size after dividing by this and
+/// reverts ("match precision") on any wei amount it does not evenly divide.
+const WEI_TO_CIRCUIT_SCALE: u64 = 10_000_000_000;
+
 /// Convert an off-chain [`SettlementMatch`] into the on-chain `Match` struct.
 /// Amounts are scaled to wei via [`decimal_to_wei`]; the on-chain settlement
 /// binding (#209) re-derives the circuit-domain values from these.
+///
+/// Rejects price/size carrying finer than 1e8 precision. The circuit proves —
+/// and `settleAuction` recomputes the binding — over 1e8 fixed-point values, so
+/// a sub-1e8 amount could never have been proved and would revert on-chain.
+/// Failing here surfaces a clear error before submit rather than an opaque
+/// revert that strands the auction. (Quantizing amounts at the source is #211.)
 pub fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, SettlementError> {
+    let price = decimal_to_wei(m.price)?;
+    let size = decimal_to_wei(m.size)?;
+    let scale = U256::from(WEI_TO_CIRCUIT_SCALE);
+    if price % scale != U256::ZERO || size % scale != U256::ZERO {
+        return Err(SettlementError::SubCircuitPrecision);
+    }
     Ok(SolMatch {
         bidOrderId: uuid_to_bytes32(m.bid_order_id),
         askOrderId: uuid_to_bytes32(m.ask_order_id),
@@ -16,8 +33,8 @@ pub fn settlement_match_to_sol(m: &SettlementMatch) -> Result<SolMatch, Settleme
         askTrader: m.ask_trader,
         baseToken: m.base_token,
         quoteToken: m.quote_token,
-        price: decimal_to_wei(m.price)?,
-        size: decimal_to_wei(m.size)?,
+        price,
+        size,
     })
 }
 
@@ -125,5 +142,42 @@ mod tests {
                 "wei must equal the 1e8 circuit value times WEI_TO_CIRCUIT_SCALE"
             );
         }
+    }
+
+    fn sample_match(price: Decimal, size: Decimal) -> SettlementMatch {
+        use alloy_primitives::Address;
+        SettlementMatch {
+            bid_order_id: Uuid::nil(),
+            ask_order_id: Uuid::nil(),
+            bid_trader: Address::ZERO,
+            ask_trader: Address::ZERO,
+            base_token: Address::ZERO,
+            quote_token: Address::ZERO,
+            price,
+            size,
+        }
+    }
+
+    /// The #209 on-chain binding rejects price/size finer than 1e8 precision
+    /// (wei not divisible by WEI_TO_CIRCUIT_SCALE). The off-chain converter must
+    /// reject the same, so the operator fails fast instead of stranding the
+    /// auction on an on-chain "match precision" revert.
+    #[test]
+    fn settlement_match_to_sol_rejects_sub_1e8_precision() {
+        // 100.000000001 has 9 dp → its wei value carries sub-1e8 precision.
+        let m = sample_match(Decimal::new(100_000_000_001, 9), Decimal::from(10));
+        assert!(matches!(
+            settlement_match_to_sol(&m),
+            Err(SettlementError::SubCircuitPrecision)
+        ));
+    }
+
+    /// 8 dp is exactly the circuit's fixed-point domain, so it converts cleanly.
+    #[test]
+    fn settlement_match_to_sol_accepts_max_circuit_precision() {
+        let m = sample_match(Decimal::new(12_345_678, 8), Decimal::from(10));
+        let sol = settlement_match_to_sol(&m).unwrap();
+        let bridge = U256::from(10u64).pow(U256::from(10u64));
+        assert_eq!(sol.price, U256::from(12_345_678u64) * bridge);
     }
 }

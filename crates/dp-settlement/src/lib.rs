@@ -64,6 +64,10 @@ pub enum SettlementError {
     NegativeAmount,
     #[error("precision loss converting to wei")]
     PrecisionLoss,
+    #[error(
+        "settlement amount carries finer than 1e8 precision, which the on-chain binding rejects"
+    )]
+    SubCircuitPrecision,
     #[error("invalid bytes32: high 16 bytes are non-zero")]
     InvalidBytes32,
     #[error("parse error: {0}")]
