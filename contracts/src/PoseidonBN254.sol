@@ -71,14 +71,31 @@ library PoseidonBN254 {
         return (s0, s1, s2);
     }
 
-    /// `poseidon([a, b, c, d, e])`: absorb five field elements at rate 2 (three
-    /// permutations: blocks `[a,b]`, `[c,d]`, `[e]`) and squeeze one element.
-    /// All inputs MUST already be reduced mod F (callers pass addresses and
-    /// 1e8-scaled amounts, all < F).
-    function poseidon5(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e) internal pure returns (uint256) {
-        uint256[3][65] memory ark = PoseidonConstants.ark();
-        uint256[3][3] memory mds = PoseidonConstants.mds();
+    /// Build the round constants once. Reconstructing `ark` (195 words) and
+    /// `mds` dominates the cost of a hash, so a caller that hashes repeatedly —
+    /// e.g. the settlement chain folding every match in a batch — loads them
+    /// once here and threads them into the `poseidon5` overload below instead of
+    /// paying a fresh reconstruction per element.
+    function loadConstants() internal pure returns (uint256[3][65] memory ark, uint256[3][3] memory mds) {
+        ark = PoseidonConstants.ark();
+        mds = PoseidonConstants.mds();
+    }
 
+    /// `poseidon([a, b, c, d, e])` against caller-supplied constants: absorb
+    /// five field elements at rate 2 (three permutations: blocks `[a,b]`,
+    /// `[c,d]`, `[e]`) and squeeze one element. All inputs MUST already be
+    /// reduced mod F (callers pass addresses and 1e8-scaled amounts, all < F).
+    /// `ark`/`mds` come from [`loadConstants`]; memory arrays pass by reference
+    /// across these internal calls, so threading them in copies nothing.
+    function poseidon5(
+        uint256[3][65] memory ark,
+        uint256[3][3] memory mds,
+        uint256 a,
+        uint256 b,
+        uint256 c,
+        uint256 d,
+        uint256 e
+    ) internal pure returns (uint256) {
         // state = [capacity, rate0, rate1]
         uint256 s0 = 0;
         uint256 s1 = 0;
@@ -100,5 +117,13 @@ library PoseidonBN254 {
 
         // squeeze the first rate element
         return s1;
+    }
+
+    /// One-shot `poseidon([a, b, c, d, e])` that loads the constants for a
+    /// single hash. Convenient for callers that hash once; hot loops should
+    /// call [`loadConstants`] and the overload above to amortize the load.
+    function poseidon5(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e) internal pure returns (uint256) {
+        (uint256[3][65] memory ark, uint256[3][3] memory mds) = loadConstants();
+        return poseidon5(ark, mds, a, b, c, d, e);
     }
 }

@@ -445,11 +445,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///      sub-1e8 precision (not divisible by WEI_TO_CIRCUIT_SCALE) could not
     ///      have been proved, so it is rejected before it reaches the chain.
     function _settlementChain(IDarkPool.Match[] calldata matches) internal pure returns (uint256) {
+        // Build the Poseidon constants once for the whole chain rather than
+        // reconstructing them on every fold — that reconstruction is the
+        // dominant per-match cost and a batch carries up to MAX_BATCH_SIZE.
+        (uint256[3][65] memory ark, uint256[3][3] memory mds) = PoseidonBN254.loadConstants();
         uint256 acc = 0;
         for (uint256 i = 0; i < matches.length; i++) {
             IDarkPool.Match calldata m = matches[i];
             require(m.price % WEI_TO_CIRCUIT_SCALE == 0 && m.size % WEI_TO_CIRCUIT_SCALE == 0, "match precision");
             acc = PoseidonBN254.poseidon5(
+                ark,
+                mds,
                 acc,
                 uint256(uint160(m.bidTrader)),
                 uint256(uint160(m.askTrader)),
