@@ -82,6 +82,16 @@ contract DeployScript is Script {
                 "IVC_VERIFIER_ADDRESS required off the dev/test allowlist; the stub decider must never settle real funds"
             );
             require(realIvcVerifier.code.length > 0, "IVC_VERIFIER_ADDRESS has no code");
+            // Requiring an explicit address must not become a backdoor for
+            // wiring the very verifier this guard exists to keep off real
+            // chains: the all-accepting stub has code, so the length check alone
+            // lets it through. Reject it by runtime-bytecode hash. This catches
+            // the stub compiled from this repo; a real decider is a distinct
+            // contract with a distinct codehash.
+            require(
+                realIvcVerifier.codehash != keccak256(type(HyperNovaDeciderVerifier).runtimeCode),
+                "IVC_VERIFIER_ADDRESS must not be the all-accepting stub decider"
+            );
         }
 
         (

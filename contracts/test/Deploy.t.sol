@@ -7,6 +7,19 @@ import {DeployScript} from "../script/Deploy.s.sol";
 import {DarkPool} from "../src/DarkPool.sol";
 import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
 
+// Stand-in for a real Decider verifier in deploy tests: code-bearing and, unlike
+// HyperNovaDeciderVerifier, not all-accepting (distinct runtime bytecode, hence a
+// distinct codehash), so it passes the deploy's stub-rejection guard.
+contract NotTheStubDecider {
+    function verifyIvcProof(bytes calldata, uint256[5] calldata, uint256[5] calldata, uint64)
+        external
+        pure
+        returns (bool)
+    {
+        return false;
+    }
+}
+
 contract DeployTest is Test {
     using stdJson for string;
 
@@ -92,10 +105,17 @@ contract DeployTest is Test {
         );
         deploy.run();
 
-        // 5. All three supplied: the deploy succeeds, queues the ownership
-        // handoff (Ownable2Step, pending until acceptOwnership), and leaves the
-        // IVC path disarmed for the owner to enable after review.
+        // 4b. Even a code-bearing address is rejected if it is the all-accepting
+        // stub itself: requiring an explicit address must not become a backdoor
+        // for wiring the very verifier this guard keeps off real chains.
         vm.setEnv("IVC_VERIFIER_ADDRESS", vm.toString(address(new HyperNovaDeciderVerifier())));
+        vm.expectRevert(bytes("IVC_VERIFIER_ADDRESS must not be the all-accepting stub decider"));
+        deploy.run();
+
+        // 5. A real (non-stub) decider plus governor and owner: the deploy
+        // succeeds, queues the ownership handoff (Ownable2Step, pending until
+        // acceptOwnership), and leaves the IVC path disarmed for owner review.
+        vm.setEnv("IVC_VERIFIER_ADDRESS", vm.toString(address(new NotTheStubDecider())));
         deploy.run();
         DarkPool pool = DarkPool(_deployedPool());
         assertEq(pool.pendingOwner(), darkPoolOwner, "owner transfer not queued");
