@@ -9,6 +9,7 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 import {IDarkPool} from "./interfaces/IDarkPool.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
 import {IDeciderVerifier} from "./interfaces/IDeciderVerifier.sol";
+import {PoseidonBN254} from "./PoseidonBN254.sol";
 
 contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -16,6 +17,16 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     uint256 public constant PROTOCOL_FEE_BPS = 5;
     uint256 public constant MAX_BATCH_SIZE = 256;
     uint256 private constant BPS_DENOMINATOR = 10_000;
+
+    /// @notice Bridges the on-chain amount domain (wei, `decimal * 1e18` as
+    ///         produced by the operator's `decimal_to_wei`) to the circuit's 1e8
+    ///         fixed-point domain (`decimal_to_scalar`). `settleAuction` divides
+    ///         `Match.price`/`size` by this before folding them into the #209
+    ///         settlement hash-chain, so the on-chain recompute hashes exactly
+    ///         the values the circuit proved. MUST move in lockstep with the
+    ///         off-chain decimal handling (#211): if per-token decimal scaling
+    ///         changes, this bridge changes with it.
+    uint256 private constant WEI_TO_CIRCUIT_SCALE = 1e10;
 
     IVerifier public immutable verifier;
 
@@ -60,13 +71,15 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     IDeciderVerifier public ivcVerifier;
     mapping(bytes32 => bool) public sessionSubmitted;
     mapping(bytes32 => bytes32) public auctionToSession;
-    /// @notice Off-chain commitment to `keccak256(abi.encode(auctionId, matches))`
-    ///         supplied at submitSession time. settleAuction re-derives this
-    ///         and rejects any matches array that doesn't hash to the committed
-    ///         value — prevents the operator from substituting matches between
-    ///         submitSession and settleAuction. Does NOT bind the matches to
-    ///         the IVC proof (see SECURITY TODO above settleAuction).
-    mapping(bytes32 => bytes32) public sessionMatchesHash;
+    /// @notice The proof's settlement hash-chain `z_n[3]`, recorded at
+    ///         submitSession time (#209). `settleAuction` recomputes the
+    ///         identical Poseidon chain over the submitted `matches[]` and
+    ///         rejects any array that doesn't fold to this value — binding the
+    ///         settled matches to the proof rather than to an operator-supplied
+    ///         commitment. Cryptographic enforcement is gated on a real decider
+    ///         verifier replacing the stub (#210); until then `z_n` is
+    ///         operator-controlled.
+    mapping(bytes32 => uint256) public sessionSettlementAcc;
 
     address public feeRecipient;
     uint256 public minSize;
@@ -347,37 +360,41 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         ivcVerifier = IDeciderVerifier(ivcVerifier_);
     }
 
-    /// @notice Commit to an IVC-proved session.
-    /// @param matchesHash keccak256(abi.encode(auctionId, matches)) — the
-    ///        operator's on-chain commitment to the exact matches array that
-    ///        will be passed to settleAuction. Re-checked there.
+    /// @notice Commit to an IVC-proved session. The matches are bound to the
+    ///         proof by its settlement hash-chain `zN[3]` (#209), which
+    ///         settleAuction recomputes from `matches[]` — no separate
+    ///         operator-supplied matches commitment is taken.
+    /// @param z0 IVC initial state (5 elements).
+    /// @param zN IVC final state (5 elements); `zN[3]` is the settlement
+    ///        accumulator the proof carries over the matched tuples.
     function submitSession(
         bytes32 sessionId,
         bytes calldata proof,
-        uint256[3] calldata z0,
-        uint256[3] calldata zN,
+        uint256[5] calldata z0,
+        uint256[5] calldata zN,
         uint64 nSteps,
-        bytes32 policyHash,
-        bytes32 matchesHash
+        bytes32 policyHash
     ) external onlyOperator whenNotPaused {
         require(!sessionSubmitted[sessionId], "session already submitted");
         require(address(ivcVerifier) != address(0), "ivc verifier not set");
         require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
         sessionSubmitted[sessionId] = true;
-        sessionMatchesHash[sessionId] = matchesHash;
+        sessionSettlementAcc[sessionId] = zN[3];
         emit SessionSubmitted(sessionId, nSteps, policyHash);
     }
 
-    /// @dev SECURITY TODO (Phase C): `matches` are still not cryptographically
-    ///      bound to the IVC proof itself — `sessionMatchesHash` is an
-    ///      operator-supplied commitment, not derived from `zN`. `z_n[0]`
-    ///      accumulates a Poseidon chain over Pedersen commitments (private
-    ///      witness), not over plaintext match tuples — on-chain verification
-    ///      cannot reconstruct the commitment root without trader secrets.
-    ///      Until the step circuit exposes a Poseidon hash of plaintext match
-    ///      data in a public output slot and this function verifies it
-    ///      against `z_n`, the matchesHash check prevents post-session
-    ///      substitution but does not prove the matches were actually proved.
+    /// @notice Settle an IVC-proved auction by replaying its matches. The
+    ///         settled `matches[]` are bound to the proof (#209): this recomputes
+    ///         the Poseidon settlement hash-chain
+    ///         `acc = poseidon(acc, bidTrader, askTrader, price_1e8, size_1e8)`
+    ///         over the array in order and requires it equals the session's
+    ///         committed `zN[3]`. Any substituted, reordered, or repriced match
+    ///         changes the accumulator and reverts, so a passing proof can only
+    ///         settle the exact matches it proved.
+    /// @dev    Enforcement is complete only once the stub decider is replaced
+    ///         (#210): the stub ignores `zN`, leaving it operator-controlled.
+    ///         The recompute and `zN[3]` plumbing are in place so that swap
+    ///         activates the binding with no further contract change.
     function settleAuction(
         bytes32 sessionId,
         bytes32 auctionId,
@@ -392,19 +409,39 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         bytes32 bound = auctionToSession[auctionId];
         require(bound == bytes32(0) || bound == sessionId, "auction bound to other session");
         require(matches.length > 0 && matches.length <= MAX_BATCH_SIZE, "invalid batch size");
-        // Verify the matches array matches the commitment from submitSession.
-        // Re-derives keccak256(abi.encode(auctionId, matches)) and rejects any
-        // substitution attempt.
-        require(
-            keccak256(abi.encode(auctionId, matches)) == sessionMatchesHash[sessionId],
-            "matches hash mismatch"
-        );
+        // Bind the settled matches to the proof: recompute the Poseidon chain
+        // over `matches[]` and require it equals the proved `zN[3]`.
+        require(_settlementChain(matches) == sessionSettlementAcc[sessionId], "settlement binding");
         auctionToSession[auctionId] = sessionId;
         settled[auctionId] = true;
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);
         }
         emit AuctionSettled(sessionId, auctionId);
+    }
+
+    /// @dev Recompute the #209 settlement hash-chain over `matches[]` in array
+    ///      order — the on-chain mirror of `dp_zk::settlement_chain` and the
+    ///      in-circuit `settlement_acc`. Each match folds in as
+    ///      `poseidon(acc, uint256(bidTrader), uint256(askTrader), price_1e8,
+    ///      size_1e8)`. `price`/`size` are scaled down from the wei domain
+    ///      (`decimal * 1e18`) to the circuit's 1e8 domain; a value carrying
+    ///      sub-1e8 precision (not divisible by WEI_TO_CIRCUIT_SCALE) could not
+    ///      have been proved, so it is rejected before it reaches the chain.
+    function _settlementChain(IDarkPool.Match[] calldata matches) internal pure returns (uint256) {
+        uint256 acc = 0;
+        for (uint256 i = 0; i < matches.length; i++) {
+            IDarkPool.Match calldata m = matches[i];
+            require(m.price % WEI_TO_CIRCUIT_SCALE == 0 && m.size % WEI_TO_CIRCUIT_SCALE == 0, "match precision");
+            acc = PoseidonBN254.poseidon5(
+                acc,
+                uint256(uint160(m.bidTrader)),
+                uint256(uint160(m.askTrader)),
+                m.price / WEI_TO_CIRCUIT_SCALE,
+                m.size / WEI_TO_CIRCUIT_SCALE
+            );
+        }
+        return acc;
     }
 
     /// @notice Publish a new operator ECIES pubkey.

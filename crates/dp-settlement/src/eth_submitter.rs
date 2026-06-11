@@ -219,7 +219,6 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                         params.z_n,
                         params.n_steps,
                         params.policy_hash,
-                        params.matches_hash,
                     )
                     .from(sender)
                     .nonce(nonce_a)
@@ -237,7 +236,8 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 // settleAuction: replay the matches array. The contract
-                // re-derives matches_hash and reverts on mismatch.
+                // recomputes the Poseidon settlement chain over it and reverts
+                // unless it equals the proof's z_n[3] (#209).
                 let settle_call = contract
                     .settleAuction(
                         uuid_to_bytes32(params.session_id),
