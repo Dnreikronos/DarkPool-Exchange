@@ -60,6 +60,28 @@ contract DeployScript is Script {
         );
         address darkPoolOwner = vm.envOr("DARKPOOL_OWNER", deployer);
 
+        // IVC verifier backend selection (#210). The HyperNova decider is still
+        // a stub that accepts every proof, so it must never be wired into this
+        // fund-custody contract on a real chain. Dev/test chains (local +
+        // Sepolia) auto-wire the stub and arm the IVC path for end-to-end
+        // testing; every other chain - including every L2/L1 mainnet - MUST
+        // supply a real, audited decider via IVC_VERIFIER_ADDRESS, validated
+        // HERE before vm.startBroadcast so a missing/invalid verifier aborts
+        // with nothing deployed (the same fail-fast contract as the env checks
+        // above) rather than reverting mid-broadcast.
+        bool stubChain = _stubAllowedOnChain(block.chainid);
+        address realIvcVerifier;
+        if (!stubChain) {
+            // address(0) sentinel: an unset OR explicitly-zero env var both mean
+            // "no real verifier provided", which is the reject case.
+            realIvcVerifier = vm.envOr("IVC_VERIFIER_ADDRESS", address(0));
+            require(
+                realIvcVerifier != address(0),
+                "IVC_VERIFIER_ADDRESS required off the dev/test allowlist; the stub decider must never settle real funds"
+            );
+            require(realIvcVerifier.code.length > 0, "IVC_VERIFIER_ADDRESS has no code");
+        }
+
         (
             uint256[2] memory alpha1,
             uint256[2][2] memory beta2,
@@ -97,17 +119,28 @@ contract DeployScript is Script {
             console.log("Allowlisted quote token:", quoteToken);
         }
 
-        require(
-            block.chainid != 1,
-            "stub IVC verifier cannot be deployed on mainnet; use a real Decider verifier"
-        );
-        HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
-        console.log("HyperNovaDeciderVerifier:", address(hypernova));
-        // Route IVC verification through the proxy so key rotation only
-        // requires proxy.setIvcVerifier(newImpl) — no DarkPool redeployment.
-        proxy.setIvcVerifier(address(hypernova));
+        // Wire the IVC verifier decided above. On dev/test chains deploy the
+        // stub now and arm the path; off-allowlist use the pre-validated real
+        // verifier and leave the path DISARMED until the owner reviews it.
+        address ivcImpl;
+        if (stubChain) {
+            HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
+            ivcImpl = address(hypernova);
+            console.log("HyperNovaDeciderVerifier (STUB - dev/test only):", ivcImpl);
+        } else {
+            ivcImpl = realIvcVerifier;
+            console.log("IVC verifier (real, from IVC_VERIFIER_ADDRESS):", ivcImpl);
+        }
+        // Route IVC verification through the proxy so key rotation only requires
+        // proxy.setIvcVerifier(newImpl) - no DarkPool redeployment.
+        proxy.setIvcVerifier(ivcImpl);
         pool.setIvcVerifier(address(proxy));
-        console.log("IVC verifier set on DarkPool via VerifierProxy (stub)");
+        if (stubChain) {
+            pool.setIvcEnabled(true);
+            console.log("IVC settlement path armed (dev/test stub)");
+        } else {
+            console.log("IVC path DISARMED - owner must call setIvcEnabled(true) after review");
+        }
 
         if (governor != deployer) {
             proxy.transferOwnership(governor);
@@ -125,14 +158,26 @@ contract DeployScript is Script {
             console.log("DarkPool ownership transfer initiated (awaiting acceptOwnership):", darkPoolOwner);
         }
 
+        // Records the concrete decider behind the proxy (stub on dev/test, the
+        // real verifier off-allowlist) under the unchanged hypernovaDeciderVerifier
+        // JSON key (no rename) so existing deployment-file consumers keep working.
         _writeDeployment(
             address(pool),
             address(proxy),
             address(verifier),
-            address(hypernova)
+            ivcImpl
         );
 
         vm.stopBroadcast();
+    }
+
+    /// @dev Chains where the all-accepting stub decider may be auto-wired and
+    ///      the IVC settlement path armed: local dev (Anvil 31337, legacy 1337)
+    ///      and the Sepolia testnet (11155111). Every other chain - including
+    ///      every L2/L1 mainnet - must instead supply a real decider via
+    ///      IVC_VERIFIER_ADDRESS (#210).
+    function _stubAllowedOnChain(uint256 chainId) internal pure returns (bool) {
+        return chainId == 31337 || chainId == 1337 || chainId == 11155111;
     }
 
     function _writeDeployment(
