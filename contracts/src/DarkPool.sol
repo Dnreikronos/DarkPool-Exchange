@@ -398,6 +398,16 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         require(!sessionSubmitted[sessionId], "session already submitted");
         require(address(ivcVerifier) != address(0), "ivc verifier not set");
         require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
+        // Defense in depth on the proof's public IO. Neither check stops an
+        // escrow drain on its own: a non-zero z0[3] only makes settleAuction's
+        // chain (which starts at 0) impossible to match, and the policy is bound
+        // in-circuit. They pin the session to its canonical form — rejecting a
+        // malformed z0 up front and binding the emitted policyHash to the proved
+        // zN[2] so the event is trustworthy. The stub decider ignores zN, so
+        // today these guard operator mistakes; the real decider (#210) is what
+        // makes zN attacker-infeasible.
+        require(z0[3] == 0, "z0 settlement acc not zero");
+        require(uint256(policyHash) == zN[2], "policy hash mismatch");
         sessionSubmitted[sessionId] = true;
         sessionSettlementAcc[sessionId] = zN[3];
         emit SessionSubmitted(sessionId, nSteps, policyHash);

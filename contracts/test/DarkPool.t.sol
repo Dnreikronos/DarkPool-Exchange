@@ -940,6 +940,34 @@ contract DarkPoolTest is Test {
         pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
     }
 
+    /// Defense in depth (#209): submitSession pins the proof's public IO to its
+    /// canonical form. A non-zero z0[3] (the settlement accumulator must start at
+    /// zero, where settleAuction's recompute begins) is rejected up front.
+    function test_submitSession_nonZeroZ0SettlementAcc_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        uint256[5] memory z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, uint256(7), uint256(0)];
+        uint256[5] memory zN = [uint256(999), uint256(60), TEST_POLICY_HASH, uint256(123), uint256(0)];
+
+        vm.prank(operator);
+        vm.expectRevert("z0 settlement acc not zero");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+    }
+
+    /// The emitted policyHash must equal the proved zN[2] (policy is invariant
+    /// across IVC steps), so a watcher can trust the SessionSubmitted event.
+    function test_submitSession_policyHashMismatch_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        // zN[2] == TEST_POLICY_HASH (123); pass a different policyHash arg.
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(123);
+        vm.prank(operator);
+        vm.expectRevert("policy hash mismatch");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(uint256(999)));
+    }
+
     // --- Escrow reserve / unbonding (#165) ---
 
     function test_reserve_movesFreeToReserved() public {
