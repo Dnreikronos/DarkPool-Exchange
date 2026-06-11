@@ -52,7 +52,7 @@ The HyperNova step circuit carries a 5-element public state across rounds:
 | 0 | `state_hash`     | Running `poseidon(prev, commitments_root, notionals_root, active_count)`. |
 | 1 | `round_nonce`    | Increments by 1 each folded round.                             |
 | 2 | `policy_hash`    | `poseidon(min_size, min_price, position_limit)`; invariant.    |
-| 3 | `settlement_acc` | Hash-chain over each active match's `(bid_addr, ask_addr, price, size)` — binds on-chain settlement to the proof (#153). |
+| 3 | `settlement_acc` | Hash-chain over each active match's `(bid_addr, ask_addr, price, size)`. `DarkPool.settleAuction` recomputes the identical Poseidon chain over `matches[]` and requires it equals `z_n[3]`, binding settlement to the proof (#209; `dp_zk::settlement_chain` + `PoseidonBN254.sol`). |
 | 4 | `admit_chain`    | Hash-chain over each round's admitted-set Merkle root — binds the input set to the proof (#157). |
 
 `z_0 = [0, 0, policy_hash, 0, 0]`. `verify_final` re-checks the whole

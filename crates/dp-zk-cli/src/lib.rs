@@ -187,6 +187,7 @@ pub fn run_prover_io<R: Read, W: Write>(
 
 pub mod cli;
 pub mod commit;
+pub mod export_poseidon;
 pub mod prove_single;
 pub mod setup_commitment;
 pub use cli::{run_prover, run_prover_cli};

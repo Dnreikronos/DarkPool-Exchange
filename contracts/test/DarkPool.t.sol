@@ -6,6 +6,7 @@ import {DarkPool} from "../src/DarkPool.sol";
 import {IDarkPool} from "../src/interfaces/IDarkPool.sol";
 import {IVerifier} from "../src/interfaces/IVerifier.sol";
 import {HyperNovaDeciderVerifier} from "../src/HyperNovaDeciderVerifier.sol";
+import {PoseidonBN254} from "../src/PoseidonBN254.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
@@ -743,19 +744,18 @@ contract DarkPoolTest is Test {
 
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64); // dummy proof
-        uint256[3] memory z0 = [uint256(0), uint256(0), uint256(123)];
-        uint256[3] memory zN = [uint256(999), uint256(60), uint256(123)];
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
 
-        // Fund + reserve traders so _settleMatch debits locked escrow
-        uint256 price = 100e8;
-        uint256 size = 10e8;
+        // Fund + reserve traders so _settleMatch debits locked escrow. Amounts
+        // are in the on-chain wei domain (decimal * 1e18) so they scale down
+        // cleanly to the circuit's 1e8 domain.
+        uint256 price = 100e18;
+        uint256 size = 10e18;
         uint256 notional = price * size / 1e18;
         _depositAndReserve(trader1, address(quoteToken), notional);
         _depositAndReserve(trader2, address(baseToken), size);
 
-        // Build matches + the operator's pre-commitment hash
         bytes32 auctionId = bytes32(uint256(2));
         IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
         matches[0] = IDarkPool.Match({
@@ -768,58 +768,204 @@ contract DarkPoolTest is Test {
             price: price,
             size: size
         });
-        bytes32 matchesHash = keccak256(abi.encode(auctionId, matches));
 
-        // submitSession
+        // The proof binds the settled matches via zN[3] = the settlement
+        // hash-chain over (bidTrader, askTrader, price_1e8, size_1e8). An honest
+        // operator's zN[3] equals what settleAuction recomputes from matches[].
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+
         vm.prank(operator);
-        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash, matchesHash);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
         assertTrue(pool.sessionSubmitted(sessionId));
-        assertEq(pool.sessionMatchesHash(sessionId), matchesHash);
+        assertEq(pool.sessionSettlementAcc(sessionId), settlementAcc);
 
-        // settleAuction with the committed match
+        // settleAuction with the proved match
         vm.prank(operator);
         pool.settleAuction(sessionId, auctionId, matches);
         assertTrue(pool.settled(auctionId));
     }
 
-    function test_settleAuction_matchesHashMismatch_reverts() public {
+    /// The #209 binding: the proof fixes zN[3] to the settlement chain over the
+    /// matches it proved. Settling any other matches array makes the on-chain
+    /// recompute diverge from zN[3], so settlement reverts.
+    function test_settleAuction_substitutedMatches_reverts() public {
         HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
         pool.setIvcVerifier(address(ivcVerifier));
 
         bytes32 sessionId = bytes32(uint256(1));
         bytes memory proof = new bytes(64);
-        uint256[3] memory z0 = [uint256(0), uint256(0), uint256(123)];
-        uint256[3] memory zN = [uint256(999), uint256(60), uint256(123)];
         uint64 nSteps = 60;
-        bytes32 policyHash = bytes32(uint256(123));
-
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
         bytes32 auctionId = bytes32(uint256(2));
 
-        // Operator commits to one set of matches at submitSession time...
-        IDarkPool.Match[] memory committedMatches = new IDarkPool.Match[](1);
-        committedMatches[0] = IDarkPool.Match({
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        IDarkPool.Match[] memory provedMatches = new IDarkPool.Match[](1);
+        provedMatches[0] = IDarkPool.Match({
             bidOrderId: bytes32(uint256(10)),
             askOrderId: bytes32(uint256(11)),
             bidTrader: trader1,
             askTrader: trader2,
             baseToken: address(baseToken),
             quoteToken: address(quoteToken),
-            price: 100e8,
-            size: 10e8
+            price: price,
+            size: size
         });
-        bytes32 matchesHash = keccak256(abi.encode(auctionId, committedMatches));
+
+        // zN[3] binds exactly the proved matches.
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
 
         vm.prank(operator);
-        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash, matchesHash);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
 
-        // ...then tries to settle a different match. Must revert.
+        // Settle a repriced match (still 1e10-divisible). Recomputed chain != zN[3].
         IDarkPool.Match[] memory substituted = new IDarkPool.Match[](1);
-        substituted[0] = committedMatches[0];
-        substituted[0].size = 999e8; // tamper
+        substituted[0] = provedMatches[0];
+        substituted[0].size = 20e18; // tamper
 
         vm.prank(operator);
-        vm.expectRevert("matches hash mismatch");
+        vm.expectRevert("settlement binding");
         pool.settleAuction(sessionId, auctionId, substituted);
+    }
+
+    /// A match carrying sub-1e8 precision (price/size not divisible by the
+    /// wei→circuit scale) could not have been proved, so the binding rejects it
+    /// before folding it into the chain.
+    function test_settleAuction_subCircuitPrecision_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        bytes memory proof = new bytes(64);
+        uint64 nSteps = 60;
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
+        bytes32 auctionId = bytes32(uint256(2));
+
+        // zN[3] is a dummy here; the precision check reverts before the binding.
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(1);
+        vm.prank(operator);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: 100e18 + 1, // not divisible by WEI_TO_CIRCUIT_SCALE (1e10)
+            size: 10e18
+        });
+
+        vm.prank(operator);
+        vm.expectRevert("match precision");
+        pool.settleAuction(sessionId, auctionId, matches);
+    }
+
+    /// #209 replay guard: a session proves one auction's matches, and the
+    /// settlement binding is over matches[] only — auctionId is absent from the
+    /// proof's hash-chain. Without a per-session settled flag the operator could
+    /// settle the SAME proved matches under a fresh auctionId, re-running
+    /// _settleMatch and double-spending reserved escrow. The second settle must
+    /// revert even when the escrow could fund it.
+    function test_settleAuction_sessionReplay_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        bytes memory proof = new bytes(64);
+        uint64 nSteps = 60;
+        bytes32 policyHash = bytes32(TEST_POLICY_HASH);
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        // Reserve enough escrow for TWO settlements so the replay would succeed
+        // financially if the guard were missing — isolating the per-session
+        // flag as the thing that stops it, not an escrow underflow.
+        _depositAndReserve(trader1, address(quoteToken), notional * 2);
+        _depositAndReserve(trader2, address(baseToken), size * 2);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+
+        vm.prank(operator);
+        pool.submitSession(sessionId, proof, z0, zN, nSteps, policyHash);
+
+        // First settlement succeeds and marks the session settled.
+        vm.prank(operator);
+        pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
+        assertTrue(pool.settled(bytes32(uint256(2))));
+        assertTrue(pool.sessionSettled(sessionId));
+
+        // Replaying the same proved matches under a fresh auctionId clears the
+        // matches-only binding but must hit the per-session guard.
+        vm.prank(operator);
+        vm.expectRevert("session already settled");
+        pool.settleAuction(sessionId, bytes32(uint256(3)), matches);
+    }
+
+    /// The IVC settle path caps matches well below MAX_BATCH_SIZE: the on-chain
+    /// Poseidon recompute makes a 256-match settle exceed the block gas limit, so
+    /// the operator must be stopped from broadcasting an unmineable settle tx. One
+    /// past the cap reverts; the size guard fires before the binding or any
+    /// _settleMatch, so the matches need no funding.
+    function test_settleAuction_tooManyMatches_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        bytes32 sessionId = bytes32(uint256(1));
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(123);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](pool.MAX_IVC_SETTLE_MATCHES() + 1);
+        vm.prank(operator);
+        vm.expectRevert("invalid ivc batch size");
+        pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
+    }
+
+    /// Defense in depth (#209): submitSession pins the proof's public IO to its
+    /// canonical form. A non-zero z0[3] (the settlement accumulator must start at
+    /// zero, where settleAuction's recompute begins) is rejected up front.
+    function test_submitSession_nonZeroZ0SettlementAcc_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        uint256[5] memory z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, uint256(7), uint256(0)];
+        uint256[5] memory zN = [uint256(999), uint256(60), TEST_POLICY_HASH, uint256(123), uint256(0)];
+
+        vm.prank(operator);
+        vm.expectRevert("z0 settlement acc not zero");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+    }
+
+    /// The emitted policyHash must equal the proved zN[2] (policy is invariant
+    /// across IVC steps), so a watcher can trust the SessionSubmitted event.
+    function test_submitSession_policyHashMismatch_reverts() public {
+        HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
+        pool.setIvcVerifier(address(ivcVerifier));
+
+        // zN[2] == TEST_POLICY_HASH (123); pass a different policyHash arg.
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(123);
+        vm.prank(operator);
+        vm.expectRevert("policy hash mismatch");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(uint256(999)));
     }
 
     // --- Escrow reserve / unbonding (#165) ---
@@ -1137,6 +1283,32 @@ contract DarkPoolTest is Test {
     function _depositAndReserve(address trader, address token, uint256 amount) internal {
         _deposit(trader, token, amount);
         _reserve(trader, token, amount);
+    }
+
+    // HyperNova session fixtures. The IVC proof is a stub, so z0/zN are fixed
+    // dummies except zN[3] — the settlement accumulator settleAuction recomputes
+    // from matches[]. Deriving these in one place keeps the session tests from
+    // drifting on the policy hash, the 1e10 wei->circuit scale, or the 5-element
+    // state layout.
+    uint256 internal constant TEST_POLICY_HASH = 123;
+
+    function _settlementAcc(address bidTrader, address askTrader, uint256 price, uint256 size)
+        internal
+        pure
+        returns (uint256)
+    {
+        return PoseidonBN254.poseidon5(
+            0, uint256(uint160(bidTrader)), uint256(uint160(askTrader)), price / 1e10, size / 1e10
+        );
+    }
+
+    function _ivcStates(uint256 settlementAcc)
+        internal
+        pure
+        returns (uint256[5] memory z0, uint256[5] memory zN)
+    {
+        z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, uint256(0), uint256(0)];
+        zN = [uint256(999), uint256(60), TEST_POLICY_HASH, settlementAcc, uint256(0)];
     }
 
     function _zeroInputs() internal pure returns (uint256[6] memory inputs) {

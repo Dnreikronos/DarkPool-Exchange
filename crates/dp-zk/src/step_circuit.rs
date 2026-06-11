@@ -941,28 +941,24 @@ mod tests {
         vec![Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
     }
 
-    /// Native mirror of the in-circuit settlement hash-chain (#153): folds
-    /// each active match's `(bid_addr, ask_addr, price_8, size_8)` tuple into a
-    /// running Poseidon chain starting from `acc0`. This is the value the
-    /// on-chain `settleSession` must reproduce from `matches[]`.
+    /// Native mirror of the in-circuit settlement hash-chain (#153) over the
+    /// active rows of `ext`. Delegates to the shared
+    /// [`crate::pedersen::settlement_chain`] so the gadget, this test, and the
+    /// on-chain `PoseidonBN254.hashSettlementChain` all exercise one
+    /// implementation — the value the contract reproduces from `matches[]`.
     fn settlement_chain(ext: &AuctionExternalInputs, acc0: Fr) -> Fr {
-        let cfg = poseidon_config();
-        let mut acc = acc0;
-        for m in &ext.matches {
-            if m.is_active != Fr::one() {
-                continue;
-            }
-            let mut s = PoseidonSponge::<Fr>::new(&cfg);
-            s.absorb(&vec![
-                acc,
-                m.bid_trader_addr,
-                m.ask_trader_addr,
-                m.match_price,
-                m.match_size,
-            ]);
-            acc = s.squeeze_field_elements::<Fr>(1)[0];
-        }
-        acc
+        let rows: Vec<crate::pedersen::SettlementRow> = ext
+            .matches
+            .iter()
+            .filter(|m| m.is_active == Fr::one())
+            .map(|m| crate::pedersen::SettlementRow {
+                bid_addr: m.bid_trader_addr,
+                ask_addr: m.ask_trader_addr,
+                price: m.match_price,
+                size: m.match_size,
+            })
+            .collect();
+        crate::pedersen::settlement_chain(acc0, &rows)
     }
 
     #[test]

@@ -35,6 +35,19 @@
   },
   {
     "type": "function",
+    "name": "MAX_IVC_SETTLE_MATCHES",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "PROTOCOL_FEE_BPS",
     "inputs": [],
     "outputs": [
@@ -434,7 +447,7 @@
   },
   {
     "type": "function",
-    "name": "sessionMatchesHash",
+    "name": "sessionSettled",
     "inputs": [
       {
         "name": "",
@@ -445,8 +458,27 @@
     "outputs": [
       {
         "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sessionSettlementAcc",
+    "inputs": [
+      {
+        "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -730,13 +762,13 @@
       },
       {
         "name": "z0",
-        "type": "uint256[3]",
-        "internalType": "uint256[3]"
+        "type": "uint256[5]",
+        "internalType": "uint256[5]"
       },
       {
         "name": "zN",
-        "type": "uint256[3]",
-        "internalType": "uint256[3]"
+        "type": "uint256[5]",
+        "internalType": "uint256[5]"
       },
       {
         "name": "nSteps",
@@ -745,11 +777,6 @@
       },
       {
         "name": "policyHash",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "matchesHash",
         "type": "bytes32",
         "internalType": "bytes32"
       }

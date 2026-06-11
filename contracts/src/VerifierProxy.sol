@@ -59,8 +59,8 @@ contract VerifierProxy is IVerifier, Ownable2Step {
 
     function verifyIvcProof(
         bytes calldata proof,
-        uint256[3] calldata z0,
-        uint256[3] calldata zN,
+        uint256[5] calldata z0,
+        uint256[5] calldata zN,
         uint64 nSteps
     ) external view returns (bool) {
         require(address(ivcVerifier) != address(0), "ivc verifier not set");

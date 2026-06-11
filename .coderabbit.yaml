@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration. See https://docs.coderabbit.ai/reference/yaml-template
+reviews:
+  # Keep the inline review, but stop CodeRabbit from writing its
+  # "Summary by CodeRabbit" block into the PR description.
+  high_level_summary: false
