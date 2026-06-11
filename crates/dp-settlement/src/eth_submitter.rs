@@ -189,7 +189,8 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
                 let contract = DarkPool::new(self.contract, &self.provider);
 
-                // submitSession: commits the IVC proof + matches hash.
+                // submitSession: commits the IVC proof and its final state; the
+                // matches are bound by settleAuction recomputing zN[3] from them.
                 let nonce_a = self
                     .provider
                     .get_transaction_count(sender)
