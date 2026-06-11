@@ -66,6 +66,11 @@ contract DarkPoolTest is Test {
         // not on the allowlist are rejected by deposit().
         pool.setTokenAllowed(address(baseToken), true);
         pool.setTokenAllowed(address(quoteToken), true);
+
+        // Arm the IVC settlement path (#210) so the HyperNova session tests can
+        // exercise submitSession/settleAuction. It defaults off; the dedicated
+        // gate tests below disarm it (or use a fresh pool) to cover that.
+        pool.setIvcEnabled(true);
     }
 
     // --- Deposit ---
@@ -784,6 +789,78 @@ contract DarkPoolTest is Test {
         vm.prank(operator);
         pool.settleAuction(sessionId, auctionId, matches);
         assertTrue(pool.settled(auctionId));
+    }
+
+    /// #210: the IVC settlement path is disarmed on a freshly constructed pool,
+    /// so wiring the all-accepting stub decider cannot auto-settle escrow.
+    function test_ivc_disabledByDefault() public {
+        DarkPool fresh = new DarkPool(address(verifier), feeRecipient, initialPubkey);
+        assertFalse(fresh.ivcEnabled());
+    }
+
+    /// Only the owner can arm/disarm the IVC path, and doing so emits the event.
+    function test_setIvcEnabled_onlyOwner_and_emits() public {
+        DarkPool fresh = new DarkPool(address(verifier), feeRecipient, initialPubkey);
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        fresh.setIvcEnabled(true);
+
+        vm.expectEmit(false, false, false, true);
+        emit DarkPool.IvcEnabledSet(true);
+        fresh.setIvcEnabled(true);
+        assertTrue(fresh.ivcEnabled());
+
+        fresh.setIvcEnabled(false);
+        assertFalse(fresh.ivcEnabled());
+    }
+
+    /// submitSession reverts while the IVC path is disarmed, even with a verifier
+    /// wired and a valid operator — the gate is independent of both.
+    function test_submitSession_revertsWhenIvcDisabled() public {
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        pool.setIvcEnabled(false);
+
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(0);
+        vm.prank(operator);
+        vm.expectRevert("ivc settlement disabled");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+    }
+
+    /// Disarming after a session is submitted also freezes settlement: the whole
+    /// IVC path, not just its entry point, is gated.
+    function test_settleAuction_revertsWhenIvcDisabled() public {
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        bytes32 sessionId = bytes32(uint256(1));
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+
+        // Owner disarms the path after submission; settlement must now revert.
+        pool.setIvcEnabled(false);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+        vm.prank(operator);
+        vm.expectRevert("ivc settlement disabled");
+        pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
     }
 
     /// The #209 binding: the proof fixes zN[3] to the settlement chain over the
