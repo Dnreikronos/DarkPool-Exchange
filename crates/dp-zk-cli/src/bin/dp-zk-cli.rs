@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use dp_zk_cli::commit::{run_commit, CommitArgs};
+use dp_zk_cli::export_poseidon::{run_export_poseidon, ExportPoseidonArgs};
 use dp_zk_cli::prove_single::{run_prove_single, ProveSingleArgs};
 use dp_zk_cli::setup_commitment::{run_setup_commitment, SetupCommitmentArgs};
 use dp_zk_cli::ProverArgs;
@@ -32,6 +33,9 @@ enum Commands {
     SetupCommitmentCircuit(SetupCommitmentArgs),
     /// Legacy batch prover (stdin JSON → stdout proof bytes).
     ProveBatch(ProverArgs),
+    /// Export BN254 Poseidon constants + reference vectors for the on-chain
+    /// settlement-binding library (#209). `--sol` emits PoseidonConstants.sol.
+    ExportPoseidon(ExportPoseidonArgs),
 }
 
 fn main() -> ExitCode {
@@ -41,5 +45,6 @@ fn main() -> ExitCode {
         Commands::ProveSingleOrder(args) => run_prove_single(args),
         Commands::SetupCommitmentCircuit(args) => run_setup_commitment(args),
         Commands::ProveBatch(args) => dp_zk_cli::run_prover(args.batch_size, args.proving_key),
+        Commands::ExportPoseidon(args) => run_export_poseidon(args),
     }
 }

@@ -2560,6 +2560,7 @@ name = "dp-zk-cli"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
+ "ark-crypto-primitives",
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
