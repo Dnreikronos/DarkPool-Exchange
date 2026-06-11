@@ -101,6 +101,16 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///         double-spending reserved escrow.
     mapping(bytes32 => bool) public sessionSettled;
 
+    /// @notice IVC settlement arm switch. `submitSession` and `settleAuction`
+    ///         revert while this is false, so wiring the all-accepting stub
+    ///         decider no longer auto-arms fund settlement on the IVC path
+    ///         (#210). Defaults to false at construction; the owner flips it on
+    ///         only once a real, audited Decider verifier has replaced the stub.
+    ///         Defense-in-depth behind the deploy-time chain allowlist: a stub
+    ///         wired post-deploy via `setIvcVerifier`, or a deploy-script
+    ///         regression, still cannot settle reserved escrow while this is off.
+    bool public ivcEnabled;
+
     address public feeRecipient;
     uint256 public minSize;
     uint256 public minPrice;
@@ -122,9 +132,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
 
     event SessionSubmitted(bytes32 indexed sessionId, uint64 nSteps, bytes32 policyHash);
     event AuctionSettled(bytes32 indexed sessionId, bytes32 indexed auctionId);
+    event IvcEnabledSet(bool enabled);
 
     modifier onlyOperator() {
         require(operators[msg.sender], "not operator");
+        _;
+    }
+
+    /// @dev Gates the IVC settlement path (submitSession + settleAuction) on the
+    ///      owner having explicitly armed it via setIvcEnabled. See `ivcEnabled`.
+    modifier whenIvcEnabled() {
+        require(ivcEnabled, "ivc settlement disabled");
         _;
     }
 
@@ -380,6 +398,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         ivcVerifier = IDeciderVerifier(ivcVerifier_);
     }
 
+    /// @notice Arm or disarm the IVC settlement path. Off until the owner turns
+    ///         it on, which should happen only after a real Decider verifier
+    ///         (the trusted-setup output, not the all-accepting stub) is wired
+    ///         via setIvcVerifier. Kept independent of the verifier pointer on
+    ///         purpose: settlement needs both a verifier set AND the path armed,
+    ///         so neither a stray setIvcVerifier nor a stale arm settles alone.
+    function setIvcEnabled(bool enabled) external onlyOwner {
+        ivcEnabled = enabled;
+        emit IvcEnabledSet(enabled);
+    }
+
     /// @notice Commit to an IVC-proved session. The matches are bound to the
     ///         proof by its settlement hash-chain `zN[3]` (#209), which
     ///         settleAuction recomputes from `matches[]` — no separate
@@ -394,7 +423,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint256[5] calldata zN,
         uint64 nSteps,
         bytes32 policyHash
-    ) external onlyOperator whenNotPaused {
+    ) external onlyOperator whenNotPaused whenIvcEnabled {
         require(!sessionSubmitted[sessionId], "session already submitted");
         require(address(ivcVerifier) != address(0), "ivc verifier not set");
         require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
@@ -429,7 +458,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         bytes32 sessionId,
         bytes32 auctionId,
         IDarkPool.Match[] calldata matches
-    ) external onlyOperator whenNotPaused {
+    ) external onlyOperator whenNotPaused whenIvcEnabled {
         require(sessionSubmitted[sessionId], "session not submitted");
         require(!settled[auctionId], "auction already settled");
         // A session proves exactly one auction's matches. Because the binding

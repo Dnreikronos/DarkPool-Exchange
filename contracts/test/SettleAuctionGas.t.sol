@@ -58,6 +58,7 @@ contract SettleAuctionGasTest is Test {
         pool.setTokenAllowed(address(baseToken), true);
         pool.setTokenAllowed(address(quoteToken), true);
         pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        pool.setIvcEnabled(true); // #210: arm the IVC path for the gas test
     }
 
     function _bidTrader(uint256 i) internal pure returns (address) {
