@@ -80,6 +80,14 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///         verifier replacing the stub (#210); until then `z_n` is
     ///         operator-controlled.
     mapping(bytes32 => uint256) public sessionSettlementAcc;
+    /// @notice Set once a session has settled an auction. The #209 settlement
+    ///         binding is over `matches[]` only — auctionId is not part of the
+    ///         proof's hash-chain (`zN[3]`) — so this per-session flag is what
+    ///         stops one proved session from settling more than one auctionId.
+    ///         Without it the operator could replay the same proved matches
+    ///         under a fresh auctionId, re-running `_settleMatch` and
+    ///         double-spending reserved escrow.
+    mapping(bytes32 => bool) public sessionSettled;
 
     address public feeRecipient;
     uint256 public minSize;
@@ -402,6 +410,13 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ) external onlyOperator whenNotPaused {
         require(sessionSubmitted[sessionId], "session not submitted");
         require(!settled[auctionId], "auction already settled");
+        // A session proves exactly one auction's matches. Because the binding
+        // below is over `matches[]` only (auctionId is absent from the proof's
+        // hash-chain), the same proved session would otherwise settle multiple
+        // distinct auctionIds with the same matches — replaying `_settleMatch`
+        // and double-spending reserved escrow. Bind each session to a single
+        // settlement.
+        require(!sessionSettled[sessionId], "session already settled");
         // Defense in depth: once an auction is bound to a session, only that
         // session can settle it. `settled[auctionId]` already blocks
         // re-settlement; this guards a cross-session race where two distinct
@@ -414,6 +429,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         require(_settlementChain(matches) == sessionSettlementAcc[sessionId], "settlement binding");
         auctionToSession[auctionId] = sessionId;
         settled[auctionId] = true;
+        sessionSettled[sessionId] = true;
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);
         }
