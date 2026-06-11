@@ -107,8 +107,14 @@ impl Default for PairConfig {
 pub enum ProofPayload {
     IvcFinal {
         proof_bytes: Vec<u8>,
-        z_0: [[u8; 32]; 3],
-        z_n: [[u8; 32]; 3],
+        // 5 elements:
+        // [state_hash, round_nonce, policy_hash, settlement_acc, admit_chain].
+        // settlement_acc (#153) binds the settled matches; admit_chain (#157)
+        // binds the per-round admitted-set roots so a watcher can confirm the
+        // operator matched only publicly admitted orders. Both are carried here
+        // at full fidelity. Plumbing them on-chain + the recompute is Phase 4.
+        z_0: [[u8; 32]; 5],
+        z_n: [[u8; 32]; 5],
         n_steps: u64,
         policy_hash: [u8; 32],
     },

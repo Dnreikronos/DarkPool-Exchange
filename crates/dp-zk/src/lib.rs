@@ -19,6 +19,7 @@ pub mod commitment_circuit;
 pub mod encoding;
 #[cfg(feature = "ivc")]
 pub mod folding;
+pub mod merkle;
 #[cfg(feature = "ivc")]
 pub mod params;
 pub mod pedersen;
@@ -32,7 +33,11 @@ pub use folding::{
     compress_and_finalize, fold_step, generate_params, init_accumulator, verify_final, FinalProof,
     FoldingAccumulator, HyperNovaPublicParams,
 };
-pub use pedersen::{commit_native, OrderCommitmentInput};
+pub use merkle::{
+    admitted_chain_step, admitted_set_proof, admitted_set_root, root_from_proof, MerkleProof,
+    MERKLE_DEPTH, MERKLE_LEAVES,
+};
+pub use pedersen::{commit_native, settlement_chain, OrderCommitmentInput, SettlementRow};
 #[cfg(feature = "ivc")]
 pub use witness::BatchWitness;
 pub use witness::{MatchWitness, OrderLegWitness, Policy, DEFAULT_POLICY};
@@ -58,4 +63,5 @@ pub enum ZkError {
 }
 
 /// Bumped any time the IVC circuit constraints change.
-pub const CIRCUIT_VERSION: &str = "v3-hypernova";
+/// v4: input-completeness membership + admitted-set chain in `z[4]` (#157).
+pub const CIRCUIT_VERSION: &str = "v4-hypernova";

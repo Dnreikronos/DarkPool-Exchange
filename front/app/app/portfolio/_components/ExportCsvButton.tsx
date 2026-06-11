@@ -40,7 +40,7 @@ export function ExportCsvButton({ fills }: ExportCsvButtonProps): JSX.Element {
       type="button"
       onClick={handleClick}
       disabled={disabled}
-      className="border border-brand-border px-3 py-1 font-mono text-label-md uppercase tracking-labelWide text-brand-muted transition-colors hover:border-brand-muted hover:text-brand-fg disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent"
+      className="whitespace-nowrap border border-brand-border px-3 py-1 font-mono text-label-md uppercase tracking-labelWide text-brand-muted transition-colors hover:border-brand-muted hover:text-brand-fg disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-brand-accent"
       aria-label="Export fill history as CSV"
     >
       [ EXPORT CSV ]

@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use alloy_primitives::Address;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use dp_crypto::{CryptoError, DecryptedOrder, Decrypter};
+use dp_crypto::{CryptoError, DecryptedOrder, Decrypter, SnapshotCipher};
 use dp_engine::{Engine, SnapshotConfig};
 use dp_event::{Event, MemSnapshotStore, MemStore, SnapshotStore, Store};
 use dp_types::Side;
@@ -56,6 +56,11 @@ impl Decrypter for JsonDecrypter {
 fn build_engine(store: Arc<dyn Store>) -> Engine {
     let engine = Engine::new(store, Duration::from_secs(60));
     engine.set_decrypter(Arc::new(JsonDecrypter));
+    // Fixed key so the snapshot writer and the `from_snapshot` restorer arm
+    // share it and the sealed envelope round-trips (#203).
+    engine.set_snapshot_cipher(Some(Arc::new(
+        SnapshotCipher::from_bytes(&[7u8; 32]).unwrap(),
+    )));
     engine.register_pair_without_event(
         "BTC-USD".into(),
         dp_engine::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),

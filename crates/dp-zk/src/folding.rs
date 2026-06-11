@@ -42,7 +42,7 @@ pub struct HyperNovaPublicParams {
 /// Mutable accumulator holding the live HyperNova IVC state.
 pub struct FoldingAccumulator {
     pub(crate) hn: HN,
-    pub z_0: [Fr; 3],
+    pub z_0: [Fr; 5],
     pub n_steps: u64,
 }
 
@@ -51,8 +51,8 @@ pub struct FoldingAccumulator {
 pub struct FinalProof {
     /// Serialized `HN::IVCProof` bytes.
     pub proof_bytes: Vec<u8>,
-    pub z_0: [Fr; 3],
-    pub z_n: [Fr; 3],
+    pub z_0: [Fr; 5],
+    pub z_n: [Fr; 5],
     pub n_steps: u64,
     /// Convenience copy of `z_n[2]` (policy_hash, invariant across rounds).
     pub policy_hash: Fr,
@@ -77,7 +77,7 @@ pub fn generate_params<R: RngCore + CryptoRng>(
 pub fn init_accumulator(
     params: &HyperNovaPublicParams,
     batch_size: usize,
-    z_0: [Fr; 3],
+    z_0: [Fr; 5],
 ) -> Result<FoldingAccumulator, ZkError> {
     let circuit = AuctionStepCircuit { batch_size };
     let params_tuple = (params.prover.clone(), params.verifier.clone());
@@ -106,7 +106,7 @@ pub fn fold_step<R: RngCore + CryptoRng>(
 /// Finalize the IVC chain into a serialized proof.
 pub fn compress_and_finalize(acc: &FoldingAccumulator) -> Result<FinalProof, ZkError> {
     let ivc_proof = acc.hn.ivc_proof();
-    let z_n: [Fr; 3] = ivc_proof.z_i.as_slice().try_into().map_err(|_| {
+    let z_n: [Fr; 5] = ivc_proof.z_i.as_slice().try_into().map_err(|_| {
         ZkError::Ivc(format!(
             "z_i has wrong length (got {})",
             ivc_proof.z_i.len()
@@ -137,7 +137,34 @@ pub fn verify_final(params: &HyperNovaPublicParams, proof: &FinalProof) -> Resul
     )
     .map_err(|e| ZkError::Serialize(format!("deserialize ivc_proof: {e}")))?;
 
+    // The authenticated public IO carried inside the proof. `HN::verify` binds
+    // the proof to exactly these `z_0` / `z_i` values (via the running-instance
+    // hash `H(i, z_0, z_i, U_i)`), so capture them before `verify` moves the
+    // proof. The `FinalProof` convenience copies — which flow on-chain through
+    // `ProofPayload::IvcFinal` — must equal them, otherwise a caller could
+    // rewrite the binding metadata (`z_n[3]` settlement chain, `z_n[4]`
+    // admitted-set chain, `policy_hash`) while still presenting a valid
+    // `proof_bytes`. The full-slice equality below covers every state element.
+    let authentic_z_0 = ivc_proof.z_0.clone();
+    let authentic_z_n = ivc_proof.z_i.clone();
+
     HN::verify(params.verifier.clone(), ivc_proof)
         .map_err(|e| ZkError::Ivc(format!("verify: {e}")))?;
+
+    if authentic_z_0.as_slice() != proof.z_0.as_slice() {
+        return Err(ZkError::Ivc(
+            "z_0 mismatch: FinalProof.z_0 does not match the verified proof".into(),
+        ));
+    }
+    if authentic_z_n.as_slice() != proof.z_n.as_slice() {
+        return Err(ZkError::Ivc(
+            "z_n mismatch: FinalProof.z_n does not match the verified proof".into(),
+        ));
+    }
+    if proof.policy_hash != proof.z_n[2] {
+        return Err(ZkError::Ivc(
+            "policy_hash mismatch: FinalProof.policy_hash does not equal z_n[2]".into(),
+        ));
+    }
     Ok(())
 }

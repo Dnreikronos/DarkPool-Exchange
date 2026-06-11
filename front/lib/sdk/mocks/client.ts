@@ -25,7 +25,6 @@ import {
   AuctionEventSchema,
   CancelOrderResponseSchema,
   GetAuctionHistoryResponseSchema,
-  GetOrderBookResponseSchema,
   GetOrderResponseSchema,
   PlaceOrderResponseSchema,
 } from '../proto/darkpool/v1/darkpool_pb.js'
@@ -36,8 +35,6 @@ import type {
   CancelOrderResponse,
   GetAuctionHistoryRequest,
   GetAuctionHistoryResponse,
-  GetOrderBookRequest,
-  GetOrderBookResponse,
   GetOrderRequest,
   GetOrderResponse,
   PlaceOrderRequest,
@@ -45,6 +42,8 @@ import type {
   StreamAuctionsRequest,
 } from '../proto/darkpool/v1/darkpool_pb.js'
 import { Side } from '../proto/darkpool/v1/darkpool_pb.js'
+// Order book is mock-only since #178 — hand-written types, not generated.
+import type { OrderBook, OrderBookRequest } from '../orderbook.js'
 
 // ─── PlaceOrder payload bridge ────────────────────────────────────────────
 //
@@ -143,15 +142,15 @@ export class StoreMockClient implements DarkPoolClient {
     return createMessage(GetOrderResponseSchema, { order })
   }
 
-  async getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
+  async getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
     const book = this.store.getState().orderbook
-    // Echo the requested pair when the client asked for one (mirroring the
-    // REST handler's behavior). Empty `pair` → fall back to the store pair.
-    return createMessage(GetOrderBookResponseSchema, {
+    // Echo the requested pair when the client asked for one. Empty `pair` →
+    // fall back to the store pair.
+    return {
       pair: req.pair || book.pair || this.pair,
       bids: book.bids,
       asks: book.asks,
-    })
+    }
   }
 
   async getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {

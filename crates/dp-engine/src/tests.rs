@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use alloy_primitives::Address;
 use dp_aggregator::ProofAggregator;
-use dp_crypto::DecryptedOrder;
+use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::Submitter;
 use dp_types::{EventType, Side};
@@ -11,15 +11,23 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::test_helpers::{
-    count_events, last_proof_for_batch, place_plaintext_order, BlockingAggregator,
-    FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
+    count_events, last_proof_for_batch, place_plaintext_order, place_plaintext_order_as,
+    BlockingAggregator, FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
 };
 use crate::Engine;
+
+/// Fixed snapshot cipher for tests that exercise the snapshot store. Writer
+/// and restorer engines must share this key so a sealed envelope round-trips
+/// on recover. Production loads a key via `DARKPOOL_SNAPSHOT_KEY_URI`.
+fn test_snapshot_cipher() -> Arc<SnapshotCipher> {
+    Arc::new(SnapshotCipher::from_bytes(&[7u8; 32]).unwrap())
+}
 
 fn make_engine() -> (Engine, Arc<MemStore>) {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store.clone(), Duration::from_millis(50));
     engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
+    engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
     // IVC path: finalize after every fold step so tests with a single
     // matching tick produce a submitted batch immediately.
     engine.set_finalize_every(1);
@@ -169,6 +177,52 @@ async fn run_auction_tick_produces_notification() {
     assert_eq!(notifs[0].match_count, 1);
 }
 
+/// #168: a single trader cannot cross their own bid and ask, even when the
+/// two orders carry different `commitment_key`s. Exercises the full
+/// place → book → auction path, not just the auction unit, to prove the
+/// verified `trader` address is what reaches matching.
+#[tokio::test]
+async fn run_auction_tick_blocks_self_cross_by_trader() {
+    let (engine, store) = make_engine();
+    let trader = Address::repeat_byte(7);
+
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(100),
+        dec(5),
+        "buy-key",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Sell,
+        dec(100),
+        dec(5),
+        "sell-key",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    let notifs = engine.run_auction_tick().await;
+    assert!(
+        notifs.is_empty(),
+        "same-trader bid/ask must not self-cross, got {notifs:?}"
+    );
+    assert_eq!(
+        count_events(store.as_ref(), EventType::OrderMatched),
+        0,
+        "no match should be recorded for a self-cross"
+    );
+}
+
 #[tokio::test]
 async fn subscribe_receives_notifications() {
     let (engine, _) = make_engine();
@@ -311,6 +365,7 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
 
     let expected = crate::engine::recompute_persisted_commitment(
         order.id,
+        d.trader.as_slice(),
         &d.commitment_key,
         d.side as u8,
         d.price,
@@ -1069,23 +1124,29 @@ async fn full_pipeline_encrypted_order_to_settlement() {
     engine.set_aggregator(aggregator.clone());
     engine.set_submitter(submitter);
 
-    let encrypt_order = |side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
-        let order = DecryptedOrder {
-            trader: Address::ZERO,
-            pair: "ETH-USD".into(),
-            side,
-            price,
-            size: dec(1),
-            commitment_key: key.into(),
-            ttl: 60_000_000_000,
+    // Distinct traders per leg: self-trade prevention keys on `trader`
+    // (#168), so a shared address would make the bid/ask self-cross and the
+    // tick would produce no match.
+    let encrypt_order =
+        |trader: Address, side: Side, price: Decimal, key: &str| -> (Vec<u8>, Vec<u8>) {
+            let order = DecryptedOrder {
+                trader,
+                pair: "ETH-USD".into(),
+                side,
+                price,
+                size: dec(1),
+                commitment_key: key.into(),
+                ttl: 60_000_000_000,
+            };
+            let plaintext = serde_json::to_vec(&order).unwrap();
+            let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
+            (vec![0u8; 32], ciphertext)
         };
-        let plaintext = serde_json::to_vec(&order).unwrap();
-        let ciphertext = ecies::encrypt(&pk_bytes, &plaintext).unwrap();
-        (vec![0u8; 32], ciphertext)
-    };
 
-    let (bid_commit, bid_ct) = encrypt_order(Side::Buy, dec(2000), "bid-key");
-    let (ask_commit, ask_ct) = encrypt_order(Side::Sell, dec(1900), "ask-key");
+    let (bid_commit, bid_ct) =
+        encrypt_order(Address::repeat_byte(1), Side::Buy, dec(2000), "bid-key");
+    let (ask_commit, ask_ct) =
+        encrypt_order(Address::repeat_byte(2), Side::Sell, dec(1900), "ask-key");
 
     let bid_order = engine
         .place_encrypted_order(bid_commit, vec![], bid_ct, None)
@@ -1166,6 +1227,167 @@ fn take_snapshot_for_bench_delegates_to_take_snapshot() {
     assert!(!snap_store.list_seqs().unwrap().is_empty());
 }
 
+// Issue #162: `place_encrypted_order` validates the pair status in one lock
+// scope and then persists in a *later* one, so a `delist_pair`/`suspend_pair`
+// that commits in the gap could strand an order on an inactive pair. The fix
+// re-checks the status inside the same lock that does the append + insert
+// (`persist_order_placed`). The race window has no `.await` in it, so it can
+// only be hit by a second OS thread; these tests pin the in-lock guard
+// directly instead of relying on a flaky thread interleaving.
+mod delist_toctou {
+    use super::*;
+    use crate::state::{PairConfig, PairStatus};
+    use chrono::Utc;
+    use dp_types::{DarkPoolError, Order};
+
+    fn dummy_order(pair: &str) -> Order {
+        let now = Utc::now();
+        Order {
+            id: Uuid::new_v4(),
+            trader: Address::ZERO,
+            pair: pair.to_string(),
+            side: Side::Buy,
+            price: dec(100),
+            size: dec(1),
+            remaining_size: dec(1),
+            commitment_key: "ck".to_string(),
+            encrypted_payload: vec![1, 2, 3],
+            submitted_at: now,
+            expires_at: now + chrono::Duration::seconds(600),
+            seq: 0,
+        }
+    }
+
+    // Simulates the lost race: the order passed its earlier `Active` check,
+    // but by the time `persist_order_placed` takes the lock the pair has been
+    // delisted. The in-lock re-check must reject and insert nothing.
+    #[tokio::test]
+    async fn persist_rejects_when_pair_delisted_in_the_gap() {
+        let (engine, store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+        engine.delist_pair("BTC-USD").unwrap();
+
+        let err = engine
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+            ),
+            "delisted pair must be rejected at insert, got: {err}"
+        );
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "no order may enter the book"
+        );
+        assert_eq!(
+            count_events(store.as_ref(), EventType::OrderPlaced),
+            0,
+            "no OrderPlaced event may be written for a rejected order"
+        );
+    }
+
+    // Same guard, suspended rather than delisted.
+    #[tokio::test]
+    async fn persist_rejects_when_pair_suspended_in_the_gap() {
+        let (engine, _store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+        engine.suspend_pair("BTC-USD").unwrap();
+
+        let err = engine
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+        ));
+        assert_eq!(engine.active_order_count(), 0);
+    }
+
+    // The unregistered branch of the same match arm: a pair that vanishes
+    // entirely (defensive — the registry never removes keys today, but the
+    // guard must still reject rather than insert under `None`).
+    #[tokio::test]
+    async fn persist_rejects_when_pair_unregistered() {
+        let (engine, _store) = make_engine();
+        let err = engine
+            .persist_order_placed(
+                dummy_order("DOGE/USDC"),
+                vec![0u8; 32],
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotRegistered(_))
+        ));
+        assert_eq!(engine.active_order_count(), 0);
+    }
+
+    // The full public path must still reject when the pair is already
+    // inactive at call time — the in-lock re-check must not have broken the
+    // happy-path acceptance for an Active pair, nor weakened rejection.
+    #[tokio::test]
+    async fn place_accepts_active_and_rejects_inactive_end_to_end() {
+        let (engine, _store) = make_engine();
+        engine.register_pair_without_event("BTC-USD".into(), PairConfig::default());
+
+        // Active: accepted, lands in the book.
+        place_plaintext_order(
+            &engine,
+            "BTC-USD",
+            Side::Buy,
+            dec(100),
+            dec(1),
+            "ck",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        assert_eq!(engine.active_order_count(), 1);
+        assert_eq!(engine.pair_status("BTC-USD"), Some(PairStatus::Active));
+
+        // Delist, then a fresh placement is rejected and the book is unchanged.
+        engine.delist_pair("BTC-USD").unwrap();
+        let err = place_plaintext_order(
+            &engine,
+            "BTC-USD",
+            Side::Buy,
+            dec(100),
+            dec(1),
+            "ck2",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::EngineError::Validation(DarkPoolError::PairNotAccepting(_))
+        ));
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "delist cancelled the resting order; none added"
+        );
+    }
+}
+
 mod snapshot_recover {
     //! Verifies that `recover()` produces the same projection state when
     //! starting from a snapshot+tail as it does when replaying every
@@ -1178,16 +1400,24 @@ mod snapshot_recover {
     use std::time::Duration;
 
     use alloy_primitives::Address;
+    use dp_crypto::SnapshotCipher;
     use dp_event::{MemSnapshotStore, MemStore, SnapshotStore};
     use dp_types::Side;
     use rust_decimal::Decimal;
 
+    use super::test_snapshot_cipher;
     use crate::snapshot::{take_snapshot, SnapshotConfig};
-    use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
+    use crate::test_helpers::{
+        place_plaintext_order, place_plaintext_order_as, StubAggregator, StubSubmitter,
+    };
     use crate::Engine;
 
     fn dec(n: i64) -> Decimal {
         Decimal::new(n, 0)
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
     }
 
     fn wire_engine(store: Arc<MemStore>) -> Engine {
@@ -1197,9 +1427,74 @@ mod snapshot_recover {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
         // IVC path: finalize after every fold so each tick produces a batch.
         engine.set_finalize_every(1);
         engine
+    }
+
+    /// Privacy-at-rest canary (#203): a snapshot envelope must not contain the
+    /// cleartext order fields that live in the serialized book. Mirrors
+    /// `event_store_contains_no_plaintext`, but inspects the snapshot path —
+    /// which had zero plaintext coverage before this fix.
+    #[tokio::test]
+    async fn snapshot_contains_no_plaintext() {
+        const COMMIT_MARKER: &str = "SUPER-SECRET-COMMITMENT-KEY";
+        // Distinctive trader bytes — long enough that a coincidental match in
+        // ciphertext is astronomically unlikely.
+        let trader = Address::repeat_byte(0xAB);
+
+        let engine = wire_engine(Arc::new(MemStore::new()));
+        engine
+            .register_pair_with_event(
+                "BTC-USD",
+                crate::state::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),
+            )
+            .expect("register pair");
+        place_plaintext_order_as(
+            &engine,
+            trader,
+            "BTC-USD",
+            Side::Buy,
+            dec(1234),
+            dec(7),
+            COMMIT_MARKER,
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("place order");
+
+        let snap_store = MemSnapshotStore::new();
+        let seq = take_snapshot(&engine, &snap_store, &SnapshotConfig::default(), 0)
+            .expect("snapshot must be written");
+        let envelope = snap_store
+            .read_at(seq)
+            .expect("read_at")
+            .expect("envelope present");
+
+        // Sanity: the markers really are in the *unencrypted* serialized state,
+        // so a passing canary below means the encryption is what hides them —
+        // not a mistyped marker that would never have matched anyway.
+        let (state, _) = engine.capture_snapshot_state(0);
+        let plain = bincode::serialize(&state).expect("serialize state");
+        assert!(
+            contains(&plain, COMMIT_MARKER.as_bytes()),
+            "marker must appear in the unencrypted serialized state"
+        );
+        assert!(
+            contains(&plain, &[0xABu8; 20]),
+            "trader bytes must appear in the unencrypted serialized state"
+        );
+
+        // The sealed envelope must reveal neither.
+        assert!(
+            !contains(&envelope, COMMIT_MARKER.as_bytes()),
+            "commitment_key leaked into the snapshot envelope"
+        );
+        assert!(
+            !contains(&envelope, &[0xABu8; 20]),
+            "trader address bytes leaked into the snapshot envelope"
+        );
     }
 
     async fn drive_scenario(engine: &Engine) {
@@ -1624,6 +1919,134 @@ mod snapshot_recover {
             "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
         );
     }
+
+    #[tokio::test]
+    async fn wrong_snapshot_key_with_compacted_log_refuses_boot() {
+        // The headline operational failure: a valid snapshot sealed under
+        // key A, recovered under key B (a wrong DARKPOOL_SNAPSHOT_KEY_URI, or
+        // a key rotated without re-sealing). Unlike the other corrupt_* tests
+        // — which plant BadMagic / Truncated garbage — the envelope here is
+        // structurally perfect (right magic, version, length) but fails the
+        // AEAD tag, so `decode_envelope` returns `SnapshotError::Decrypt`.
+        // This is the only test that drives the all-Decrypt path through
+        // `try_restore_from_snapshots`, exercising the `decrypt_failures`
+        // counter and the wrong-key hint. With the event log compacted past
+        // seq 1, full replay can't reproduce history, so recover() must
+        // refuse to boot rather than silently come up with partial state.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        // Valid envelope, sealed under the key-7 cipher wire_engine installs.
+        let seq = engine.store_last_seq();
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
+
+        // Compact the event log past seq 1 so a full replay is impossible.
+        engine.compact_events_before(seq).expect("compact");
+
+        // Restore under a DIFFERENT key: the envelope decodes structurally
+        // but fails the AEAD open → Decrypt → AllCorrupt → refuse boot.
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.set_snapshot_cipher(Some(Arc::new(
+            SnapshotCipher::from_bytes(&[0x99u8; 32]).unwrap(),
+        )));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("wrong snapshot key + compacted log must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_snapshot_key_with_intact_log_falls_back_to_full_replay() {
+        // The graceful half of the wrong-key safety net: same seal/open key
+        // mismatch, but the event log is intact from seq 1. The unreadable
+        // snapshot must be discarded and a full replay must reproduce the
+        // live engine's observable state.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+        let truth = public_state_fingerprint(&engine);
+
+        let seq = engine.store_last_seq();
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
+
+        let restored = wire_engine(store.clone());
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        restored.set_snapshot_cipher(Some(Arc::new(
+            SnapshotCipher::from_bytes(&[0x99u8; 32]).unwrap(),
+        )));
+        restored
+            .recover()
+            .await
+            .expect("wrong key + intact log must fall back to full replay");
+        assert_eq!(
+            public_state_fingerprint(&restored),
+            truth,
+            "full replay under the wrong snapshot key must reproduce live state",
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_present_but_no_cipher_refuses_boot_on_compacted_log() {
+        // Defensive fail-safe (the `None`-cipher branch in
+        // `try_restore_from_snapshots`): envelopes are present on the store
+        // but no SnapshotCipher is configured, so they cannot be read.
+        // recover() must treat that as AllCorrupt — *not* NoneAvailable — so
+        // the compacted-log safety net still fires and the engine refuses to
+        // boot instead of full-replaying partial state. dp-api boots
+        // fail-closed before reaching this, but it's a fail-safe worth pinning.
+        let store = Arc::new(MemStore::new());
+        let snap_store: Arc<dyn SnapshotStore> = Arc::new(MemSnapshotStore::new());
+        let engine = wire_engine(store.clone());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        drive_scenario(&engine).await;
+
+        let seq = engine.store_last_seq();
+        take_snapshot(
+            &engine,
+            snap_store.as_ref(),
+            &SnapshotConfig::default(),
+            seq,
+        )
+        .expect("take snapshot");
+        engine.compact_events_before(seq).expect("compact");
+
+        // Restore with the snapshot store wired but NO cipher installed.
+        let restored = Engine::new(store.clone(), Duration::from_millis(50));
+        restored.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
+        restored.set_submitter(Arc::new(StubSubmitter::new()));
+        restored.set_finalize_every(1);
+        restored.set_snapshot_store(Some(snap_store.clone()));
+        let err = restored
+            .recover()
+            .await
+            .expect_err("envelopes present + no cipher + compacted log must refuse boot");
+        assert!(
+            matches!(err, crate::EngineError::SnapshotsCorruptAndLogTruncated),
+            "expected SnapshotsCorruptAndLogTruncated, got {err:?}",
+        );
+    }
 }
 
 /// Property-based crash-recovery tests. Randomises the shape of the
@@ -1649,6 +2072,7 @@ mod snapshot_recover_prop {
     use proptest::prelude::*;
     use rust_decimal::Decimal;
 
+    use super::test_snapshot_cipher;
     use crate::snapshot::{take_snapshot, SnapshotConfig};
     use crate::test_helpers::{place_plaintext_order, StubAggregator, StubSubmitter};
     use crate::Engine;
@@ -1667,6 +2091,7 @@ mod snapshot_recover_prop {
         let engine = Engine::new(store, Duration::from_millis(50));
         engine.set_aggregator(Arc::new(StubAggregator::new(vec![0u8; 32])));
         engine.set_submitter(Arc::new(StubSubmitter::new()));
+        engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
         // IVC path: finalize after every fold so each tick produces a batch.
         engine.set_finalize_every(1);
         engine

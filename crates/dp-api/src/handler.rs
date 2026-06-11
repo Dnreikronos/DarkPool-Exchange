@@ -7,19 +7,33 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
+use crate::auth::AuthenticatedIdentity;
 use crate::conv::{
-    aggregate_levels, notification_to_event, notification_to_summary, order_to_proto,
-    pair_config_to_proto, parse_uuid,
+    notification_to_event, notification_to_summary, order_to_proto, pair_config_to_proto,
+    parse_uuid,
 };
 use crate::error::engine_error_to_status;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
     AuctionEvent, CancelOrderRequest, CancelOrderResponse, GetAuctionHistoryRequest,
-    GetAuctionHistoryResponse, GetOrderBookRequest, GetOrderBookResponse, GetOrderRequest,
-    GetOrderResponse, ListPairsRequest, ListPairsResponse, PlaceOrderRequest, PlaceOrderResponse,
+    GetAuctionHistoryResponse, GetOrderRequest, GetOrderResponse, ListOrdersRequest,
+    ListOrdersResponse, ListPairsRequest, ListPairsResponse, PlaceOrderRequest, PlaceOrderResponse,
     StreamAuctionsRequest,
 };
 use crate::validation::{validate_pair_for_history, validate_pair_known, validate_place_order};
+
+/// Extract the wallet address of the authenticated caller, if any. A
+/// SIWE-authenticated trader yields `Some(address)`; an operator API-key
+/// caller (or no identity) yields `None`. The per-trader read surfaces
+/// (`GetOrder`, `ListOrders`) treat a `None` caller as owning nothing.
+fn caller_address<T>(req: &Request<T>) -> Option<alloy_primitives::Address> {
+    req.extensions()
+        .get::<AuthenticatedIdentity>()
+        .and_then(|id| match id {
+            AuthenticatedIdentity::Wallet(addr) => Some(*addr),
+            AuthenticatedIdentity::ApiKey => None,
+        })
+}
 
 /// Map one BroadcastStream item to an outgoing auction event:
 /// - Ok matches the pair filter → forward as event.
@@ -64,13 +78,7 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<PlaceOrderRequest>,
     ) -> Result<Response<PlaceOrderResponse>, Status> {
-        let caller = req
-            .extensions()
-            .get::<crate::auth::AuthenticatedIdentity>()
-            .and_then(|id| match id {
-                crate::auth::AuthenticatedIdentity::Wallet(addr) => Some(*addr),
-                crate::auth::AuthenticatedIdentity::ApiKey => None,
-            });
+        let caller = caller_address(&req);
         let req = req.into_inner();
         validate_place_order(&req)?;
         let order = self
@@ -87,8 +95,27 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<CancelOrderRequest>,
     ) -> Result<Response<CancelOrderResponse>, Status> {
+        let caller = caller_address(&req);
         let req = req.into_inner();
         let id = parse_uuid(&req.order_id)?;
+        // Caller-scoped, mirroring `get_order`: only the order's owner may
+        // cancel it. A missing order and another trader's order are
+        // deliberately indistinguishable (both `not_found`) so a key-holder
+        // cannot use CancelOrder to cancel — or even probe for — orders they
+        // don't own. `o.trader` is immutable once placed, so the gap between
+        // this ownership check and the cancel below can't be raced into an
+        // authz bypass (a concurrent match/cancel just yields `not_found`).
+        if self
+            .engine
+            .get_order(id)
+            .filter(|o| caller == Some(o.trader))
+            .is_none()
+        {
+            return Err(Status::not_found(format!(
+                "order {} not found",
+                req.order_id
+            )));
+        }
         let reason = if req.reason.is_empty() {
             None
         } else {
@@ -104,9 +131,18 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<GetOrderRequest>,
     ) -> Result<Response<GetOrderResponse>, Status> {
+        let caller = caller_address(&req);
         let req = req.into_inner();
         let id = parse_uuid(&req.order_id)?;
-        match self.engine.get_order(id) {
+        // Caller-scoped: an order is visible only to its owner. A missing
+        // order and an order owned by someone else are deliberately
+        // indistinguishable (both `not_found`) so a key-holder cannot probe
+        // for the existence of other traders' resting orders.
+        let visible = self
+            .engine
+            .get_order(id)
+            .filter(|o| caller == Some(o.trader));
+        match visible {
             Some(o) => Ok(Response::new(GetOrderResponse {
                 order: Some(order_to_proto(&o)),
             })),
@@ -117,21 +153,30 @@ impl DarkPoolService for ApiHandler {
         }
     }
 
-    async fn get_order_book(
+    async fn list_orders(
         &self,
-        req: Request<GetOrderBookRequest>,
-    ) -> Result<Response<GetOrderBookResponse>, Status> {
+        req: Request<ListOrdersRequest>,
+    ) -> Result<Response<ListOrdersResponse>, Status> {
+        // "My orders": the caller's own resting orders, never anyone
+        // else's. Without a wallet identity (e.g. an operator API key) the
+        // caller owns nothing → empty list, not the cross-trader book.
+        let Some(trader) = caller_address(&req) else {
+            return Ok(Response::new(ListOrdersResponse { orders: Vec::new() }));
+        };
         let req = req.into_inner();
-        // Empty / whitespace-only `pair` is caught by `Pair::parse` inside
-        // `validate_pair_known` (returns `PairRequired` → invalid_argument
-        // with `MSG_PAIR_REQUIRED`); no separate guard needed here.
-        let canonical = validate_pair_known(&self.engine, &req.pair)?;
-        let (bids, asks) = self.engine.get_order_book(canonical.as_str());
-        Ok(Response::new(GetOrderBookResponse {
-            pair: canonical.into_string(),
-            bids: aggregate_levels(bids),
-            asks: aggregate_levels(asks),
-        }))
+        let pair_filter = if req.pair.is_empty() {
+            None
+        } else {
+            Some(validate_pair_known(&self.engine, &req.pair)?)
+        };
+        let orders = self
+            .engine
+            .orders_by_trader(trader)
+            .into_iter()
+            .filter(|o| pair_filter.as_ref().is_none_or(|p| o.pair == p.as_str()))
+            .map(|o| order_to_proto(&o))
+            .collect();
+        Ok(Response::new(ListOrdersResponse { orders }))
     }
 
     async fn get_auction_history(

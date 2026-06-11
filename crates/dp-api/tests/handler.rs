@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::Address;
+use dp_api::auth::AuthenticatedIdentity;
 use dp_api::handler::ApiHandler;
 use dp_api::pb::dark_pool_service_server::DarkPoolService;
 use dp_api::pb::{
-    self, CancelOrderRequest, GetAuctionHistoryRequest, GetOrderBookRequest, GetOrderRequest,
+    self, CancelOrderRequest, GetAuctionHistoryRequest, GetOrderRequest, ListOrdersRequest,
     PlaceOrderRequest, StreamAuctionsRequest,
 };
 use dp_api::validation::{
@@ -23,6 +24,21 @@ use tonic::{Code, Request};
 use uuid::Uuid;
 
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Distinct `trader` address per call. Self-trade prevention keys on `trader`
+/// (#168), so a crossing bid/ask placed under one address would be skipped as
+/// a self-cross. The `0xEE` prefix keeps these clear of `Address::ZERO` and
+/// the small hand-written addresses used elsewhere; the same scheme is
+/// mirrored in the `dp-auction` and `dp-engine` test helpers. Tests wanting a
+/// shared owner use `place_test_order_as`.
+fn next_trader() -> Address {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 20];
+    bytes[0] = 0xEE;
+    bytes[12..].copy_from_slice(&n.to_be_bytes());
+    Address::from(bytes)
+}
 
 fn new_handler() -> ApiHandler {
     let store = Arc::new(MemStore::new());
@@ -69,7 +85,7 @@ async fn place_test_order(
 ) -> String {
     let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
     let d = DecryptedOrder {
-        trader: Address::ZERO,
+        trader: next_trader(),
         pair: pair.to_string(),
         side,
         price: price.parse().unwrap(),
@@ -83,6 +99,44 @@ async fn place_test_order(
         .expect("place_order")
         .into_inner();
     resp.order.unwrap().id
+}
+
+/// Place an order owned by a specific trader. No caller identity is set on
+/// the place request (caller `None` skips the trader/caller binding check),
+/// so the order lands in the book with `trader == owner`.
+async fn place_test_order_as(
+    h: &ApiHandler,
+    owner: Address,
+    pair: &str,
+    side: Side,
+    price: &str,
+    size: &str,
+) -> String {
+    let n = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let d = DecryptedOrder {
+        trader: owner,
+        pair: pair.to_string(),
+        side,
+        price: price.parse().unwrap(),
+        size: size.parse().unwrap(),
+        commitment_key: format!("test-key-{}", n),
+        ttl: 600_000_000_000,
+    };
+    let resp = h
+        .place_order(Request::new(build_req(&d)))
+        .await
+        .expect("place_order")
+        .into_inner();
+    resp.order.unwrap().id
+}
+
+/// Wrap a request with a SIWE-style wallet identity so caller-scoped
+/// handlers (`get_order`, `list_orders`) see the authenticated trader.
+fn wallet_req<T>(inner: T, wallet: Address) -> Request<T> {
+    let mut req = Request::new(inner);
+    req.extensions_mut()
+        .insert(AuthenticatedIdentity::Wallet(wallet));
+    req
 }
 
 // ---------- PlaceOrder ----------
@@ -196,11 +250,17 @@ async fn place_order_proof_too_large() {
 #[tokio::test]
 async fn cancel_order_success() {
     let h = new_handler();
-    let id = place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
-    h.cancel_order(Request::new(CancelOrderRequest {
-        order_id: id,
-        reason: "testing".into(),
-    }))
+    // Cancel is caller-scoped: the order's owner and the request's wallet
+    // identity must be the same address.
+    let owner = Address::repeat_byte(3);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    h.cancel_order(wallet_req(
+        CancelOrderRequest {
+            order_id: id,
+            reason: "testing".into(),
+        },
+        owner,
+    ))
     .await
     .unwrap();
 }
@@ -233,14 +293,65 @@ async fn cancel_order_not_found() {
     assert_eq!(err.code(), Code::NotFound);
 }
 
+/// A key-holder must not cancel another trader's order. Like `get_order`,
+/// the response is `not_found` (not `permission_denied`) so existence isn't
+/// leaked — and crucially the order survives the rejected cancel.
+#[tokio::test]
+async fn cancel_order_hides_other_traders_order() {
+    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    let attacker = Address::with_last_byte(0x22);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let err = h
+        .cancel_order(wallet_req(
+            CancelOrderRequest {
+                order_id: id.clone(),
+                reason: String::new(),
+            },
+            attacker,
+        ))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::NotFound);
+    // The order is still live and visible to its real owner.
+    let resp = h
+        .get_order(wallet_req(GetOrderRequest { order_id: id }, owner))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(resp.order.is_some());
+}
+
+/// Without a wallet identity (e.g. an operator API-key caller) no order is
+/// cancellable — every CancelOrder is `not_found`, never a cross-trader
+/// cancel.
+#[tokio::test]
+async fn cancel_order_without_wallet_identity_is_not_found() {
+    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let err = h
+        .cancel_order(Request::new(CancelOrderRequest {
+            order_id: id,
+            reason: String::new(),
+        }))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::NotFound);
+}
+
 // ---------- GetOrder ----------
 
 #[tokio::test]
 async fn get_order_success() {
     let h = new_handler();
-    let id = place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
+    // GetOrder is caller-scoped: owner and wallet identity must match.
+    let owner = Address::repeat_byte(3);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
     let resp = h
-        .get_order(Request::new(GetOrderRequest { order_id: id }))
+        .get_order(wallet_req(GetOrderRequest { order_id: id }, owner))
         .await
         .unwrap()
         .into_inner();
@@ -266,63 +377,110 @@ async fn get_order_invalid_uuid() {
 async fn get_order_not_found() {
     let h = new_handler();
     let err = h
-        .get_order(Request::new(GetOrderRequest {
-            order_id: Uuid::new_v4().to_string(),
-        }))
+        .get_order(wallet_req(
+            GetOrderRequest {
+                order_id: Uuid::new_v4().to_string(),
+            },
+            Address::ZERO,
+        ))
         .await
         .err()
         .unwrap();
     assert_eq!(err.code(), Code::NotFound);
 }
 
-// ---------- GetOrderBook ----------
-
+/// A key-holder must not read another trader's order. The response is
+/// `not_found` (not `permission_denied`) so existence isn't leaked.
 #[tokio::test]
-async fn get_order_book_success() {
+async fn get_order_hides_other_traders_order() {
     let h = new_handler();
-    place_test_order(&h, "ETH/USDC", Side::Buy, "1800", "5").await;
-    place_test_order(&h, "ETH/USDC", Side::Buy, "1790", "3").await;
-    place_test_order(&h, "ETH/USDC", Side::Sell, "1850", "2").await;
-    let resp = h
-        .get_order_book(Request::new(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pair, "ETH/USDC");
-    assert_eq!(resp.bids.len(), 2);
-    assert_eq!(resp.asks.len(), 1);
-}
-
-#[tokio::test]
-async fn get_order_book_empty_pair() {
-    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    let attacker = Address::with_last_byte(0x22);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
     let err = h
-        .get_order_book(Request::new(GetOrderBookRequest { pair: "".into() }))
+        .get_order(wallet_req(GetOrderRequest { order_id: id }, attacker))
         .await
         .err()
         .unwrap();
-    assert_eq!(err.code(), Code::InvalidArgument);
+    assert_eq!(err.code(), Code::NotFound);
 }
 
+/// Without a wallet identity (e.g. an operator API-key caller) no trader
+/// order is visible — every lookup is `not_found`.
 #[tokio::test]
-async fn get_order_book_aggregation() {
+async fn get_order_without_wallet_identity_is_not_found() {
     let h = new_handler();
-    place_test_order(&h, "ETH/USDC", Side::Buy, "100", "5").await;
-    place_test_order(&h, "ETH/USDC", Side::Buy, "100", "3").await;
-    place_test_order(&h, "ETH/USDC", Side::Buy, "200", "10").await;
+    let owner = Address::with_last_byte(0x11);
+    let id = place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let err = h
+        .get_order(Request::new(GetOrderRequest { order_id: id }))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::NotFound);
+}
+
+// ---------- ListOrders (caller-scoped "my orders") ----------
+
+/// The list contains the caller's own orders and never another trader's.
+#[tokio::test]
+async fn list_orders_returns_only_callers_orders() {
+    let h = new_handler();
+    let me = Address::with_last_byte(0x11);
+    let other = Address::with_last_byte(0x22);
+    place_test_order_as(&h, me, "ETH/USDC", Side::Buy, "1800", "5").await;
+    place_test_order_as(&h, me, "ETH/USDC", Side::Sell, "1850", "2").await;
+    place_test_order_as(&h, other, "ETH/USDC", Side::Buy, "1790", "3").await;
     let resp = h
-        .get_order_book(Request::new(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
+        .list_orders(wallet_req(
+            ListOrdersRequest {
+                pair: String::new(),
+            },
+            me,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.orders.len(), 2);
+}
+
+/// Without a wallet identity the caller owns nothing — empty list, never
+/// the cross-trader book.
+#[tokio::test]
+async fn list_orders_without_wallet_identity_is_empty() {
+    let h = new_handler();
+    let owner = Address::with_last_byte(0x11);
+    place_test_order_as(&h, owner, "ETH/USDC", Side::Buy, "1800", "5").await;
+    let resp = h
+        .list_orders(Request::new(ListOrdersRequest {
+            pair: String::new(),
         }))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.bids.len(), 2);
-    let lvl = resp.bids.iter().find(|l| l.price == "100").expect("100");
-    assert_eq!(lvl.total_size, "8");
-    assert_eq!(lvl.order_count, 2);
+    assert!(resp.orders.is_empty());
+}
+
+#[tokio::test]
+async fn list_orders_filters_by_pair() {
+    let h = new_handler();
+    let me = Address::with_last_byte(0x11);
+    h.engine
+        .register_pair_without_event("BTC/USDC".into(), dp_engine::PairConfig::default());
+    place_test_order_as(&h, me, "ETH/USDC", Side::Buy, "1800", "5").await;
+    place_test_order_as(&h, me, "BTC/USDC", Side::Buy, "60000", "1").await;
+    let resp = h
+        .list_orders(wallet_req(
+            ListOrdersRequest {
+                pair: "ETH/USDC".into(),
+            },
+            me,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.orders.len(), 1);
+    assert_eq!(resp.orders[0].pair, "ETH/USDC");
 }
 
 // ---------- GetAuctionHistory ----------

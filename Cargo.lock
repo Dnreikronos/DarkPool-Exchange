@@ -2070,6 +2070,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -2319,6 +2320,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "humantime",
+ "ipnet",
  "jsonwebtoken",
  "k256",
  "metrics",
@@ -2341,6 +2343,7 @@ dependencies = [
  "sha2",
  "sha3",
  "siwe",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -2379,10 +2382,12 @@ dependencies = [
  "chrono",
  "dp-event",
  "dp-types",
+ "metrics",
  "parking_lot",
  "rust_decimal",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
 ]
 
@@ -2392,6 +2397,7 @@ version = "0.1.0"
 dependencies = [
  "age",
  "alloy-primitives",
+ "chacha20poly1305",
  "dp-types",
  "ecies",
  "hex",
@@ -2554,6 +2560,7 @@ name = "dp-zk-cli"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
+ "ark-crypto-primitives",
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",

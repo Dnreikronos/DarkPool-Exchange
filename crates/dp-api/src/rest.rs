@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{MatchedPath, Path, Query, State};
+use axum::extract::{Extension, MatchedPath, Path, Query, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -23,16 +23,16 @@ use tower_http::request_id::{
 use tower_http::trace::TraceLayer;
 
 use crate::admin::{AdminApiHandler, AdminKeyError, KeyAdminHandler};
-use crate::auth::{auth_axum_mw, AuthCore};
+use crate::auth::{auth_axum_mw, AuthCore, AuthenticatedIdentity};
 use crate::handler::ApiHandler;
 use crate::pb::dark_pool_admin_service_server::DarkPoolAdminService;
 use crate::pb::dark_pool_service_server::DarkPoolService;
 use crate::pb::{
-    self, CancelOrderRequest, DelistPairRequest, GetAuctionHistoryRequest, GetOrderBookRequest,
-    GetOrderRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
+    self, CancelOrderRequest, DelistPairRequest, GetAuctionHistoryRequest, GetOrderRequest,
+    ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
-use crate::ratelimit::{ratelimit_axum_mw, RateLimitCore};
+use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
 use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
@@ -60,12 +60,11 @@ pub fn router(handler: SharedHandler) -> Router {
     let place_order =
         post(rest_place_order).layer(RequestBodyLimitLayer::new(PLACE_ORDER_BODY_LIMIT));
     Router::new()
-        .route("/v1/orders", place_order)
+        .route("/v1/orders", place_order.get(rest_list_orders))
         .route(
             "/v1/orders/:order_id",
             delete(rest_cancel_order).get(rest_get_order),
         )
-        .route("/v1/orderbook", get(rest_get_orderbook))
         .route("/v1/auctions", get(rest_get_auction_history))
         .route("/v1/auctions/stream", get(rest_stream_auctions))
         .route("/v1/pairs", get(rest_list_pairs))
@@ -112,6 +111,13 @@ pub fn router_with_middleware(
 /// Mount public + admin routes on the same listener. Public routes use
 /// the trader API keys (`AuthCore`); admin routes use the separate
 /// operator key set (`admin_auth`). The rate limiter is shared.
+///
+/// `admin_auth` must be non-empty unless the operator has explicitly
+/// opted into unauthenticated admin: an empty [`AuthCore`] authenticates
+/// every request, so a future non-`main` entrypoint that builds this
+/// router must first run
+/// [`crate::config::Config::validate_admin_auth`] (as `main` does) or
+/// the admin endpoints fail open.
 pub fn router_with_admin(
     handler: SharedHandler,
     admin_handler: SharedAdminHandler,
@@ -143,13 +149,29 @@ pub struct OpsState {
 /// the auth-gated public + admin routers; load-balancer probes and the
 /// Prometheus scrape do not present API keys, so these paths must sit
 /// outside the auth layer.
-pub fn ops_router(state: OpsState) -> Router {
+/// Liveness/readiness probes. Deliberately **not** rate-limited: a 429
+/// from `/healthz` or `/readyz` reads as a failed probe, so throttling
+/// them lets aggressive orchestrator polling or a shared-NAT egress IP
+/// flip a healthy instance to false-unhealthy (pod restarts, LB pull).
+pub fn ops_probe_router(state: OpsState) -> Router {
     Router::new()
         .route("/healthz", get(rest_healthz))
         .route("/readyz", get(rest_readyz))
+        .with_state(state)
+}
+
+/// Ops endpoints that *are* rate-limited: the Prometheus scrape and the
+/// operator pubkey lookup. Both are unauthenticated, so they share the
+/// IP-keyed limiter with the SIWE routes (issue #159).
+pub fn ops_throttled_router(state: OpsState) -> Router {
+    Router::new()
         .route("/metrics", get(rest_metrics))
         .route("/v1/operator/pubkey", get(rest_operator_pubkey))
         .with_state(state)
+}
+
+pub fn ops_router(state: OpsState) -> Router {
+    ops_probe_router(state.clone()).merge(ops_throttled_router(state))
 }
 
 pub fn auth_router(state: SiweState) -> Router {
@@ -180,11 +202,23 @@ pub fn router_with_ops(
         key_admin_handler,
         auth,
         admin_auth,
-        ratelimit,
+        ratelimit.clone(),
     )
-    .merge(ops_router(ops));
+    // The auth (SIWE) and ops sub-routers sit outside the auth layer, so
+    // they get their own IP-keyed rate limiter — without it they would be
+    // an unthrottled login-DoS surface (issue #159). Keying is by peer IP
+    // only; the `x-api-key` header is untrusted on these routes. Liveness
+    // and readiness probes are mounted *before* the limiter so a throttled
+    // probe IP can never report the instance as unhealthy.
+    .merge(ops_probe_router(ops.clone()))
+    .merge(
+        ops_throttled_router(ops)
+            .layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+    );
     if let Some(siwe) = siwe_state {
-        base = base.merge(auth_router(siwe));
+        base = base.merge(
+            auth_router(siwe).layer(from_fn_with_state(ratelimit.clone(), ratelimit_ip_axum_mw)),
+        );
     }
     // Layers are added bottom-up but execute top-down: the LAST `.layer(...)`
     // wraps everything before it and therefore runs first on the request
@@ -278,10 +312,31 @@ struct VerifyResponse {
     address: String,
 }
 
-async fn rest_auth_nonce(State(state): State<SiweState>) -> Result<Json<NonceResponse>, ApiError> {
+async fn rest_auth_nonce(
+    State(state): State<SiweState>,
+    client: Option<Extension<ClientKey>>,
+) -> Result<Json<NonceResponse>, ApiError> {
+    // `ratelimit_ip_axum_mw` records the caller's IP key. In production
+    // that middleware always sits in front of this route (see
+    // `router_with_ops`), so a missing extension means a misconfigured
+    // stack, not a normal request — fall back to the shared `"anonymous"`
+    // budget (which serializes every caller through one 128-nonce cap) but
+    // warn loudly so the misconfiguration surfaces instead of silently
+    // collapsing every peer onto one budget.
+    let key = match client {
+        Some(Extension(c)) => c.0,
+        None => {
+            tracing::warn!(
+                "nonce request without ClientKey extension; \
+                 ratelimit_ip_axum_mw is not in the stack — \
+                 falling back to the shared anonymous nonce budget"
+            );
+            "anonymous".to_string()
+        }
+    };
     let nonce = state
         .nonce_store
-        .generate()
+        .generate_for(&key)
         .ok_or_else(|| ApiError(tonic::Status::resource_exhausted("nonce store full")))?;
     Ok(Json(NonceResponse { nonce }))
 }
@@ -458,28 +513,8 @@ struct GetOrderRespJson {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PriceLevelJson {
-    price: String,
-    total_size: String,
-    order_count: i32,
-}
-
-impl From<pb::PriceLevel> for PriceLevelJson {
-    fn from(l: pb::PriceLevel) -> Self {
-        Self {
-            price: l.price,
-            total_size: l.total_size,
-            order_count: l.order_count,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OrderBookJson {
-    pair: String,
-    bids: Vec<PriceLevelJson>,
-    asks: Vec<PriceLevelJson>,
+struct ListOrdersRespJson {
+    orders: Vec<OrderInfoJson>,
 }
 
 #[derive(Serialize)]
@@ -586,7 +621,7 @@ struct CancelQuery {
 }
 
 #[derive(Deserialize)]
-struct OrderBookQuery {
+struct ListOrdersQuery {
     #[serde(default)]
     pair: String,
 }
@@ -662,16 +697,34 @@ impl IntoResponse for ApiError {
 
 // ---------- handlers ----------
 
+/// Carry the authenticated identity injected by `auth_axum_mw` (an axum
+/// request extension) into the tonic `Request` the gRPC handler reads. The
+/// REST layer builds a fresh tonic request, so without this the per-trader
+/// scoping in `place_order` / `cancel_order` / `get_order` / `list_orders`
+/// would never see the caller. Absent on routers mounted without the auth
+/// middleware.
+fn with_identity<T>(inner: T, identity: Option<Extension<AuthenticatedIdentity>>) -> Request<T> {
+    let mut req = Request::new(inner);
+    if let Some(Extension(id)) = identity {
+        req.extensions_mut().insert(id);
+    }
+    req
+}
+
 async fn rest_place_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Json(body): Json<PlaceOrderJson>,
 ) -> Result<Json<PlaceOrderRespJson>, ApiError> {
-    let req = PlaceOrderRequest {
-        commitment: body.commitment,
-        proof: body.proof,
-        encrypted_payload: body.encrypted_payload,
-    };
-    let resp = h.place_order(Request::new(req)).await?.into_inner();
+    let req = with_identity(
+        PlaceOrderRequest {
+            commitment: body.commitment,
+            proof: body.proof,
+            encrypted_payload: body.encrypted_payload,
+        },
+        identity,
+    );
+    let resp = h.place_order(req).await?.into_inner();
     Ok(Json(PlaceOrderRespJson {
         order: resp.order.map(Into::into),
     }))
@@ -679,38 +732,44 @@ async fn rest_place_order(
 
 async fn rest_cancel_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Path(order_id): Path<String>,
     Query(q): Query<CancelQuery>,
 ) -> Result<Json<CancelOrderRespJson>, ApiError> {
-    let req = CancelOrderRequest {
-        order_id,
-        reason: q.reason,
-    };
-    h.cancel_order(Request::new(req)).await?;
+    let req = with_identity(
+        CancelOrderRequest {
+            order_id,
+            reason: q.reason,
+        },
+        identity,
+    );
+    h.cancel_order(req).await?;
     Ok(Json(CancelOrderRespJson {}))
 }
 
 async fn rest_get_order(
     State(h): State<SharedHandler>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
     Path(order_id): Path<String>,
 ) -> Result<Json<GetOrderRespJson>, ApiError> {
-    let req = GetOrderRequest { order_id };
-    let resp = h.get_order(Request::new(req)).await?.into_inner();
+    let req = with_identity(GetOrderRequest { order_id }, identity);
+    let resp = h.get_order(req).await?.into_inner();
     Ok(Json(GetOrderRespJson {
         order: resp.order.map(Into::into),
     }))
 }
 
-async fn rest_get_orderbook(
+/// `GET /v1/orders` — the caller's own resting orders ("my orders").
+/// Scoped to the authenticated wallet; there is no public order book.
+async fn rest_list_orders(
     State(h): State<SharedHandler>,
-    Query(q): Query<OrderBookQuery>,
-) -> Result<Json<OrderBookJson>, ApiError> {
-    let req = GetOrderBookRequest { pair: q.pair };
-    let resp = h.get_order_book(Request::new(req)).await?.into_inner();
-    Ok(Json(OrderBookJson {
-        pair: resp.pair,
-        bids: resp.bids.into_iter().map(Into::into).collect(),
-        asks: resp.asks.into_iter().map(Into::into).collect(),
+    identity: Option<Extension<AuthenticatedIdentity>>,
+    Query(q): Query<ListOrdersQuery>,
+) -> Result<Json<ListOrdersRespJson>, ApiError> {
+    let req = with_identity(ListOrdersRequest { pair: q.pair }, identity);
+    let resp = h.list_orders(req).await?.into_inner();
+    Ok(Json(ListOrdersRespJson {
+        orders: resp.orders.into_iter().map(Into::into).collect(),
     }))
 }
 
@@ -1065,19 +1124,6 @@ mod tests {
         let err = ApiError(tonic::Status::already_exists("dup"));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[test]
-    fn price_level_json_conversion() {
-        let lvl = pb::PriceLevel {
-            price: "100.5".into(),
-            total_size: "10".into(),
-            order_count: 3,
-        };
-        let json: PriceLevelJson = lvl.into();
-        assert_eq!(json.price, "100.5");
-        assert_eq!(json.total_size, "10");
-        assert_eq!(json.order_count, 3);
     }
 
     #[test]

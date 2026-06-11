@@ -189,7 +189,8 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
                 let contract = DarkPool::new(self.contract, &self.provider);
 
-                // submitSession: commits the IVC proof + matches hash.
+                // submitSession: commits the IVC proof and its final state; the
+                // matches are bound by settleAuction recomputing zN[3] from them.
                 let nonce_a = self
                     .provider
                     .get_transaction_count(sender)
@@ -219,7 +220,6 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                         params.z_n,
                         params.n_steps,
                         params.policy_hash,
-                        params.matches_hash,
                     )
                     .from(sender)
                     .nonce(nonce_a)
@@ -237,7 +237,8 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 // settleAuction: replay the matches array. The contract
-                // re-derives matches_hash and reverts on mismatch.
+                // recomputes the Poseidon settlement chain over it and reverts
+                // unless it equals the proof's z_n[3] (#209).
                 let settle_call = contract
                     .settleAuction(
                         uuid_to_bytes32(params.session_id),

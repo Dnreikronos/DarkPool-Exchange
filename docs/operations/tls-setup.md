@@ -20,12 +20,22 @@ opt-in via a separate client-CA bundle.
 | `--tls-cert` / `DARKPOOL_TLS_CERT` | PEM cert (or chain). When set together with `--tls-key`, TLS is enabled on both listeners. |
 | `--tls-key`  / `DARKPOOL_TLS_KEY`  | PEM private key matching `--tls-cert`. |
 | `--tls-client-ca` / `DARKPOOL_TLS_CLIENT_CA` | PEM CA bundle that signs *client* certificates. Presence enables mTLS — clients without a cert chained to this bundle are rejected at the handshake. |
+| `--insecure` / `DARKPOOL_INSECURE` | Opt in to plaintext on a **non-loopback** bind. Required only when no TLS material is configured and at least one listener binds something other than a loopback address (e.g. the default `0.0.0.0`). Loopback-only plaintext never needs it. |
 
 Validation rules (enforced at boot — invalid combinations exit
 non-zero):
 
 - Both `--tls-cert` and `--tls-key` empty → **plaintext mode**, with a
   loud `warn!` so it is impossible to ship to prod silently.
+- Plaintext mode on a **non-loopback** bind (the default `--grpc-addr` /
+  `--http-addr` are `0.0.0.0`, which is externally reachable) → **fatal
+  error** unless `--insecure` / `DARKPOOL_INSECURE=true` is set.
+  Off-loopback plaintext leaks the API key, the SIWE bearer token, and
+  order ciphertext/metadata to any on-path observer, and undermines the
+  SIWE replay mitigations that assume TLS. Either configure TLS, bind
+  loopback only, or accept the risk explicitly with `--insecure` (the
+  usual case being a TLS-terminating reverse proxy / load balancer in
+  front — also set `--trusted-proxies` then).
 - Exactly one of `--tls-cert` / `--tls-key` set → fatal error.
 - `--tls-client-ca` set without `--tls-cert`/`--tls-key` → fatal
   error (otherwise mTLS would silently degrade to "no TLS at all").

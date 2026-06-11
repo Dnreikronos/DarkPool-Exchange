@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CancelOrderRequestSchema,
   GetAuctionHistoryRequestSchema,
-  GetOrderBookRequestSchema,
   GetOrderRequestSchema,
   PlaceOrderRequestSchema,
   Side,
@@ -141,14 +140,20 @@ describe('RestClient.getOrder', () => {
 })
 
 describe('RestClient.getOrderBook', () => {
-  it('GETs /v1/orderbook with the pair query param', async () => {
+  // #178 removed the public pre-settlement order book from the backend — a
+  // dark pool does not expose cross-trader depth, so there is no
+  // GET /v1/orderbook to call. The REST path is an explicit UNIMPLEMENTED
+  // throw and never touches the network; the panel runs on the mock store.
+  it('throws UNIMPLEMENTED without making a request', async () => {
     const { fetch, calls } = captureFetch(
       makeJsonResponse({ pair: 'ETH/USDC', bids: [], asks: [] })
     )
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
-    const resp = await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
-    expect(calls[0].url).toBe(`${BASE}/v1/orderbook?pair=ETH%2FUSDC`)
-    expect(resp.bids).toEqual([])
+    await expect(client.getOrderBook({ pair: 'ETH/USDC' })).rejects.toMatchObject({
+      name: 'DarkPoolError',
+      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+    })
+    expect(calls).toHaveLength(0)
   })
 })
 
@@ -186,22 +191,185 @@ describe('RestClient.getAuctionHistory', () => {
   })
 })
 
+function sseResponse(chunks: string[], init: ResponseInit = {}): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(encoder.encode(c))
+      controller.close()
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+    ...init,
+  })
+}
+
+const AUCTION_FRAME =
+  'event: auction\n' +
+  'data: {"auctionId":"a1","pair":"ETH/USDC","clearingPrice":"3000.5",' +
+  '"matchedVolume":"2.5","matchCount":3,"timestampUnix":"1717200000"}\n\n'
+
+async function drain(iter: AsyncIterable<unknown>): Promise<unknown[]> {
+  const out: unknown[] = []
+  for await (const x of iter) out.push(x)
+  return out
+}
+
 describe('RestClient.streamAuctions', () => {
-  it('throws UNIMPLEMENTED — SSE bridge is not wired yet', async () => {
-    const { fetch } = captureFetch(makeJsonResponse({}))
+  it('yields AuctionEvents parsed from SSE auction frames (decimals stay strings)', async () => {
+    const { fetch, calls } = captureFetch(sseResponse([AUCTION_FRAME]))
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
-    const iter = client.streamAuctions({ $typeName: 'darkpool.v1.StreamAuctionsRequest', pair: '' })
+    const events = (await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: 'ETH/USDC' }))
+    )) as Array<{
+      auctionId: string
+      clearingPrice: string
+      matchedVolume: string
+      matchCount: number
+      timestampUnix: bigint
+    }>
+    expect(events).toHaveLength(1)
+    expect(events[0].auctionId).toBe('a1')
+    expect(events[0].clearingPrice).toBe('3000.5')
+    expect(events[0].matchedVolume).toBe('2.5')
+    expect(events[0].matchCount).toBe(3)
+    expect(events[0].timestampUnix).toBe(1717200000n)
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions/stream?pair=ETH%2FUSDC`)
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers.accept).toBe('text/event-stream')
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits the query string when no pair is given', async () => {
+    const { fetch, calls } = captureFetch(sseResponse([AUCTION_FRAME]))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions/stream`)
+  })
+
+  it('ignores keep-alive comments and unknown event types', async () => {
+    const chunks = [': keep-alive\n\n', 'event: ping\ndata: nope\n\n', AUCTION_FRAME]
+    const { fetch } = captureFetch(sseResponse(chunks))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const events = await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }))
+    )
+    expect(events).toHaveLength(1)
+  })
+
+  it('reassembles a frame split across chunks', async () => {
+    const chunks = [
+      'event: auction\ndata: {"auctionId":"a1"',
+      ',"pair":"ETH/USDC","clearingPrice":"1","matchedVolume":"1","matchCount":0,"timestampUnix":"5"}\n\n',
+    ]
+    const { fetch } = captureFetch(sseResponse(chunks))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const events = (await drain(
+      client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }))
+    )) as Array<{ auctionId: string }>
+    expect(events).toHaveLength(1)
+    expect(events[0].auctionId).toBe('a1')
+  })
+
+  it('throws DATA_LOSS on a lagged error frame', async () => {
+    const { fetch } = captureFetch(sseResponse(['event: error\ndata: {"lagged":7}\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
     await expect(
-      (async () => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for await (const _event of iter) {
-          // unreachable
-        }
-      })()
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
     ).rejects.toMatchObject({
       name: 'DarkPoolError',
-      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+      code: DARK_POOL_ERROR_CODES.DATA_LOSS,
     })
+  })
+
+  it('maps a non-lag error frame to UNAVAILABLE, not DATA_LOSS', async () => {
+    // Only an explicit {"lagged":N} payload is broadcast lag; anything else
+    // (proxy error pages, malformed frames) is a broken stream, not data loss.
+    const { fetch } = captureFetch(sseResponse(['event: error\ndata: upstream exploded\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({
+      name: 'DarkPoolError',
+      code: DARK_POOL_ERROR_CODES.UNAVAILABLE,
+    })
+  })
+
+  it('maps an HTTP error response to a DarkPoolError', async () => {
+    const { fetch } = captureFetch(new Response('', { status: 401 }))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.UNAUTHENTICATED, httpStatus: 401 })
+  })
+
+  it('maps a fetch rejection to UNAVAILABLE', async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError('connection refused')
+    }) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.UNAVAILABLE })
+  })
+
+  it('terminates cleanly when the abort signal fires', async () => {
+    const controller = new AbortController()
+    const neverEnds = new ReadableStream<Uint8Array>({ start() {} })
+    const fetch = vi.fn(
+      async () => new Response(neverEnds, { status: 200 })
+    ) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    const iter = client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' }), {
+      signal: controller.signal,
+    })
+    let done = false
+    const drained = (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of iter) {
+        // unreachable
+      }
+      done = true
+    })()
+    await Promise.resolve()
+    controller.abort()
+    await drained
+    expect(done).toBe(true)
+  })
+
+  it('cancels the response body when the consumer breaks early', async () => {
+    let cancelled = false
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(AUCTION_FRAME))
+        // intentionally left open — only a break/cancel ends it
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const fetch = vi.fn(
+      async () => new Response(stream, { status: 200 })
+    ) as unknown as typeof globalThis.fetch
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    for await (const _ev of client.streamAuctions(
+      create(StreamAuctionsRequestSchema, { pair: '' })
+    )) {
+      void _ev
+      break
+    }
+    expect(cancelled).toBe(true)
+  })
+
+  it('throws INTERNAL on a malformed auction frame', async () => {
+    const { fetch } = captureFetch(sseResponse(['event: auction\ndata: {not json}\n\n']))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      drain(client.streamAuctions(create(StreamAuctionsRequestSchema, { pair: '' })))
+    ).rejects.toMatchObject({ code: DARK_POOL_ERROR_CODES.INTERNAL })
   })
 })
 
@@ -249,7 +417,9 @@ describe('RestClient error mapping', () => {
     )
     const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
     await expect(
-      client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+      client.getAuctionHistory(
+        create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 0 })
+      )
     ).rejects.toMatchObject({
       code: DARK_POOL_ERROR_CODES.UNAVAILABLE,
       retryable: true,
@@ -317,7 +487,7 @@ describe('MockClient', () => {
 
   it('getOrderBook returns an empty book for the configured pair', async () => {
     const mock = new MockClient()
-    const book = await mock.getOrderBook(create(GetOrderBookRequestSchema, { pair: '' }))
+    const book = await mock.getOrderBook({ pair: '' })
     expect(book.pair).toBe('ETH/USDC')
     expect(book.bids).toEqual([])
     expect(book.asks).toEqual([])
@@ -427,7 +597,7 @@ describe('createDarkPoolClient', () => {
       },
     })
 
-    await client.getOrderBook(create(GetOrderBookRequestSchema, { pair: 'ETH/USDC' }))
+    await client.getOrderBook({ pair: 'ETH/USDC' })
     await client.placeOrder(create(PlaceOrderRequestSchema))
     await client.getAuctionHistory(
       create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 0 })
@@ -506,6 +676,101 @@ describe('methodOverridesFromEnv', () => {
   })
 })
 
+// ─── Order book is mock-only since #178 ──────────────────────────────────
+//      The public pre-settlement order book was removed from the backend
+//      (no GET /v1/orderbook). NEXT_PUBLIC_USE_MOCKS_ORDERBOOK still parses,
+//      but flipping it false routes getOrderBook to the RestClient, whose
+//      path is now an explicit UNIMPLEMENTED throw — there is no live
+//      endpoint to flip to. This locks that contract so a regression
+//      surfaces here instead of as a runtime 404 in the browser.
+
+describe('Order book is mock-only — NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=false', () => {
+  it('routes getOrderBook to REST, which throws UNIMPLEMENTED without a request', async () => {
+    const overrides = methodOverridesFromEnv({
+      NEXT_PUBLIC_USE_MOCKS_ORDERBOOK: 'false',
+    })
+    expect(overrides).toEqual({ getOrderBook: false })
+
+    const { fetch, calls } = captureFetch(
+      makeJsonResponse({ pair: 'ETH/USDC', bids: [], asks: [] })
+    )
+    const mockCalls: DarkPoolMethod[] = []
+    const stubMock = makeRecordingClient((m) => mockCalls.push(m))
+
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: true,
+      mockClient: stubMock,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+      methodOverrides: overrides,
+    })
+
+    await expect(client.getOrderBook({ pair: 'ETH/USDC' })).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+    })
+    await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+
+    expect(calls).toHaveLength(0)
+    expect(mockCalls).toEqual(['getAuctionHistory'])
+  })
+})
+
+// ─── I2.5 wire test: NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false flips ──
+//      just `getAuctionHistory` to the live RestClient (siblings stay on
+//      the StoreMockClient). Mirrors the I2.4 orderbook flip so a
+//      regression in either the env parser or the routing client surfaces
+//      here instead of as a silent mocked tape in the browser.
+
+describe('Phase 2 flip — NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY=false', () => {
+  it('routes getAuctionHistory to REST while siblings stay on the StoreMockClient', async () => {
+    const overrides = methodOverridesFromEnv({
+      NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY: 'false',
+    })
+    expect(overrides).toEqual({ getAuctionHistory: false })
+
+    const { fetch, calls } = captureFetch(makeJsonResponse({ auctions: [] }))
+    const mockCalls: DarkPoolMethod[] = []
+    const stubMock = makeRecordingClient((m) => mockCalls.push(m))
+
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: true,
+      mockClient: stubMock,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+      methodOverrides: overrides,
+    })
+
+    await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+    await client.getOrderBook({ pair: 'ETH/USDC' })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`${BASE}/v1/auctions?pair=ETH%2FUSDC&limit=50`)
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['x-api-key']).toBe(KEY)
+    expect(mockCalls).toEqual(['getOrderBook'])
+  })
+
+  it('falls through to the empty-array response when the backend reports zero auctions', async () => {
+    const { fetch } = captureFetch(makeJsonResponse({ auctions: [] }))
+    const client = createDarkPoolClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      useMocks: false,
+      restClient: new RestClient({ baseUrl: BASE, apiKey: KEY, fetch }),
+    })
+    const resp = await client.getAuctionHistory(
+      create(GetAuctionHistoryRequestSchema, { pair: 'ETH/USDC', limit: 50 })
+    )
+    expect(resp.auctions).toEqual([])
+  })
+})
+
 // ─── DarkPoolError ────────────────────────────────────────────────────────
 
 describe('DarkPoolError', () => {
@@ -521,6 +786,123 @@ describe('DarkPoolError', () => {
   })
 })
 
+// ─── error header capture (#99 / C7) ──────────────────────────────────────
+
+describe('RestClient error header capture', () => {
+  it('captures retry-after on a 429 response', async () => {
+    const { fetch } = captureFetch(
+      new Response(
+        JSON.stringify({ code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED, message: 'slow down' }),
+        {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': '30',
+            'x-request-id': 'req-429',
+          },
+        }
+      )
+    )
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      client.getOrder(create(GetOrderRequestSchema, { orderId: 'x' }))
+    ).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.RESOURCE_EXHAUSTED,
+      retryAfter: '30',
+      requestId: 'req-429',
+    })
+  })
+
+  it('captures x-request-id on a 500 response', async () => {
+    const { fetch } = captureFetch(
+      new Response('', { status: 500, headers: { 'x-request-id': 'req-500' } })
+    )
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await expect(
+      client.getOrder(create(GetOrderRequestSchema, { orderId: 'x' }))
+    ).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.INTERNAL,
+      requestId: 'req-500',
+      retryAfter: null,
+    })
+  })
+})
+
 beforeEach(() => {
   // No-op; vi.restoreAllMocks() would clobber the spies created in each test.
+})
+
+// ─── RestClient: SIWE bearer token injection ───────────────────────────────
+
+describe('RestClient auth header', () => {
+  const orderBody = {
+    order: {
+      id: 'o1',
+      pair: 'ETH/USDC',
+      side: 'SIDE_BUY',
+      price: '1',
+      size: '1',
+      remainingSize: '1',
+      commitmentKey: 'c',
+      submittedAtUnix: '1700000000',
+      expiresAtUnix: '0',
+    },
+  }
+  const aRequest = () => create(PlaceOrderRequestSchema, { commitment: new Uint8Array([0x01]) })
+
+  it('sends Authorization: Bearer alongside x-api-key when getToken returns a token', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch, getToken: () => 'jwt-123' })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBe('Bearer jwt-123')
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits Authorization when getToken returns null (x-api-key only)', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch, getToken: () => null })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBeUndefined()
+    expect(headers['x-api-key']).toBe(KEY)
+  })
+
+  it('omits Authorization entirely when no getToken is configured', async () => {
+    const { fetch, calls } = captureFetch(makeJsonResponse(orderBody))
+    const client = new RestClient({ baseUrl: BASE, apiKey: KEY, fetch })
+    await client.placeOrder(aRequest())
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['authorization']).toBeUndefined()
+  })
+
+  it('calls onUnauthenticated once on a 401 before throwing UNAUTHENTICATED', async () => {
+    const onUnauthenticated = vi.fn()
+    const { fetch } = captureFetch(makeJsonResponse({ message: 'expired' }, { status: 401 }))
+    const client = new RestClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      fetch,
+      getToken: () => 'jwt',
+      onUnauthenticated,
+    })
+    await expect(client.placeOrder(aRequest())).rejects.toMatchObject({
+      code: DARK_POOL_ERROR_CODES.UNAUTHENTICATED,
+    })
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call onUnauthenticated on a non-401 error', async () => {
+    const onUnauthenticated = vi.fn()
+    const { fetch } = captureFetch(makeJsonResponse({ message: 'boom' }, { status: 500 }))
+    const client = new RestClient({
+      baseUrl: BASE,
+      apiKey: KEY,
+      fetch,
+      getToken: () => 'jwt',
+      onUnauthenticated,
+    })
+    await expect(client.placeOrder(aRequest())).rejects.toBeInstanceOf(DarkPoolError)
+    expect(onUnauthenticated).not.toHaveBeenCalled()
+  })
 })

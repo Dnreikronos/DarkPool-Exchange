@@ -1,6 +1,6 @@
 # ZK Dark Pool DEX
 ## Technical Architecture & Implementation Guide
-> Stack: Rust · Solidity · ZK Circuits (halo2 / arkworks)
+> Stack: Rust · Solidity · ZK Circuits (arkworks Groth16 + HyperNova IVC)
 
 ---
 
@@ -49,7 +49,7 @@ This mirrors how institutional dark pools work in traditional finance, where the
 
 An order passes through five discrete phases before funds change hands:
 
-1. **Commitment** — trader submits a Pedersen commitment to the order parameters and locks collateral in the escrow contract.
+1. **Commitment** — trader submits a Poseidon commitment to the order parameters and locks collateral in the escrow contract.
 2. **Proof generation** — trader runs a Rust circuit locally and produces a ZK proof that the order is valid (sufficient collateral, correct format, within limits).
 3. **Encrypted submission** — trader encrypts the full order to the operator's public key and submits the commitment, proof, and encrypted payload to the API gateway.
 4. **Batch auction** — the operator decrypts orders, collects them into time-bounded batches (default: every 5 seconds), computes a clearing price, and matches bids and asks that cross at or through that price.
@@ -61,7 +61,7 @@ An order passes through five discrete phases before funds change hands:
 - No temporal advantage within a batch — all orders in the same auction round are treated equally regardless of arrival time.
 - Partial fills are supported; residual quantity carries over to the next auction round.
 - Orders expire after a configurable TTL (default: 10 minutes).
-- Self-match prevention: orders from the same commitment key cannot match.
+- Self-match prevention: orders from the same trader cannot match.
 - Minimum order size enforced at the circuit level, not in the engine.
 - Clearing price is computed as the price that maximizes matched volume.
 
@@ -71,7 +71,7 @@ An order passes through five discrete phases before funds change hands:
 - Each batch is accompanied by an aggregated ZK proof verified by the on-chain verifier contract.
 - If the proof fails, the entire batch is rejected — no partial settlement.
 - Collateral is locked in the escrow contract at commitment time and released atomically at settlement.
-- A 0.05% protocol fee is deducted from the taker side at settlement.
+- A 0.05% protocol fee is deducted from the sell (ask) side at settlement.
 
 ### 2.4 Price Discovery
 
@@ -96,7 +96,7 @@ Price emerges from the protocol itself via the batch auction mechanism:
 
 | Layer | Language | Responsibility |
 |---|---|---|
-| ZK Circuit | Rust (halo2 / arkworks) | Generate & verify proofs of order validity |
+| ZK Circuit | Rust (arkworks Groth16) | Generate & verify proofs of order validity |
 | Matching Engine | Rust (tokio) | Batch auction logic, clearing price computation, event sourcing (`crates/dp-engine/`) |
 | Event Store | Rust (bincode + fsync) | Immutable event log (OrderPlaced, OrderMatched, BatchSubmitted, etc.) for state reconstruction and auditability (`crates/dp-event/`) |
 | Proof Aggregator | Rust (subprocess) | Combine individual proofs into a single batch proof. Spawned as a child process (`crates/dp-aggregator/`) |
@@ -153,6 +153,11 @@ The matching engine does not maintain mutable state. Instead, the order book is 
 | `OrderExpired` | Order TTL exceeded without fill |
 | `BatchSubmitted` | Matched pairs submitted on-chain for settlement |
 | `BatchConfirmed` | On-chain settlement tx confirmed |
+| `BatchSettled` | Settlement finalized on-chain (`BatchSettled` contract event observed by the watcher) |
+| `PairRegistered` | New trading pair registered via the admin API |
+| `PairSuspended` | Trading pair suspended — no new orders accepted |
+| `PairDelisted` | Trading pair delisted and its resting orders cancelled |
+| `BatchFolded` | HyperNova IVC fold step recorded (feature-gated) |
 
 **Recovery:** on startup, the engine replays the event log from the last compaction checkpoint to reconstruct the current order book state. A batch is only considered committed when the `BatchSubmitted` event is persisted.
 
@@ -164,7 +169,7 @@ The matching engine does not maintain mutable state. Instead, the order book is 
 crates/
 ├── dp-types/        # Shared domain types (Order, Fill, Side, EventType)
 ├── dp-crypto/       # ECIES decrypter + commitment computation
-├── dp-event/        # Append-only event store (MemStore + FileStore, bincode + fsync)
+├── dp-event/        # Append-only event store (MemStore + FileStore + PgStore, bincode + fsync)
 ├── dp-book/         # Order book projection + depth aggregation
 ├── dp-auction/      # Batch auction, clearing price, self-match prevention
 ├── dp-aggregator/   # Pluggable proof aggregator (noop + subprocess)
@@ -173,7 +178,7 @@ crates/
 └── dp-api/          # tonic gRPC + axum REST, validation, auth, rate-limit
                      #   includes the `darkpool-server` binary entrypoint
 front/               # Next.js demo UI (auction history, depth, clearing prices)
-contracts/           # Solidity: DarkPool.sol, Verifier.sol (planned)
-zkproof/             # halo2 / arkworks circuits + prover + aggregator (planned)
+contracts/           # Solidity: DarkPool.sol, VerifierProxy.sol, Groth16Verifier.sol, HyperNovaDeciderVerifier.sol
+crates/dp-zk/        # arkworks Groth16 circuits + prover (+ HyperNova IVC via Sonobe, feature-gated)
 Cargo.toml           # workspace root
 ```

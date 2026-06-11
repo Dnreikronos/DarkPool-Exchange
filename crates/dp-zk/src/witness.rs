@@ -12,7 +12,9 @@ use ark_bn254::Fr;
 /// One leg (bid or ask) of a matched pair.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrderLegWitness {
-    /// Hex-encoded 32-byte trader id (BE bytes of `poseidon(commitment_key_scalar)`).
+    /// Hex-encoded 32-byte trader id (BE bytes of `poseidon(trader_addr_scalar)`).
+    /// The identity is the trader's on-chain settlement address, so a proven
+    /// match binds to the exact account the contract debits/credits (#153).
     pub trader_id: String,
     /// Hex-encoded 32-byte commitment salt.
     pub salt: String,
@@ -28,10 +30,14 @@ pub struct OrderLegWitness {
     pub order_size: Decimal,
     /// 0 = bid (buy), 1 = ask (sell).
     pub side: u8,
-    /// Trader's commitment-key string. Bound into the circuit so the
-    /// prover proves `trader_id == poseidon(commitment_key_scalar)`.
+    /// Hex-encoded trader settlement address (the 20-byte on-chain address).
+    /// Bound into the circuit so the prover proves
+    /// `trader_id == poseidon(trader_addr_scalar)` — this is what ties the
+    /// proof to the address the contract settles. The per-order blinding key
+    /// lives on `Order.commitment_key` and only feeds the salt; it is not the
+    /// identity.
     #[serde(default)]
-    pub commitment_key: String,
+    pub trader_addr: String,
 }
 
 /// One matched pair.
@@ -119,10 +125,14 @@ impl OrderLegWitness {
             .map_err(|_| EncodingError::Overflow(Decimal::ZERO))?;
         signed_to_scalar(p)
     }
-    /// Map the commitment-key string to an Fr via `from_be_bytes_mod_order`.
-    /// Mirrors `pedersen::derive_trader_id`'s input projection.
-    pub fn commitment_key_scalar(&self) -> Fr {
-        crate::pedersen::bytes_to_scalar(self.commitment_key.as_bytes())
+    pub fn trader_addr_bytes(&self) -> Result<Vec<u8>, hex::FromHexError> {
+        hex::decode(self.trader_addr.trim_start_matches("0x"))
+    }
+    /// Map the trader's address bytes to an Fr via `from_be_bytes_mod_order`.
+    /// Mirrors `pedersen::derive_trader_id`'s input projection, so the circuit
+    /// derives the same `trader_id` the engine commits to.
+    pub fn trader_addr_scalar(&self) -> Result<Fr, hex::FromHexError> {
+        Ok(crate::pedersen::bytes_to_scalar(&self.trader_addr_bytes()?))
     }
 }
 
@@ -144,7 +154,7 @@ mod tests {
                     limit_price: Decimal::from(100),
                     order_size: Decimal::from(10),
                     side: 0,
-                    commitment_key: "bid_key".into(),
+                    trader_addr: "11".repeat(20),
                 },
                 ask: OrderLegWitness {
                     trader_id: "22".repeat(32),
@@ -154,7 +164,7 @@ mod tests {
                     limit_price: Decimal::from(99),
                     order_size: Decimal::from(10),
                     side: 1,
-                    commitment_key: "ask_key".into(),
+                    trader_addr: "22".repeat(20),
                 },
             }],
             policy: DEFAULT_POLICY.into_policy(),

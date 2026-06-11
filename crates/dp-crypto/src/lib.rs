@@ -3,6 +3,7 @@ mod decrypter;
 mod ecies_decrypter;
 mod key_source;
 mod multi_key_decrypter;
+mod snapshot_cipher;
 
 pub use decrypted_order::DecryptedOrder;
 pub use decrypter::{Decrypter, NoopDecrypter};
@@ -11,11 +12,15 @@ pub use key_source::{decrypter_from_uri, KeySource};
 pub use multi_key_decrypter::{
     validate_key_id, KeyEntry, KeyStatus, MultiKeyDecrypter, MAX_KEY_ID_LEN,
 };
+pub use snapshot_cipher::{SnapshotCipher, SNAPSHOT_NONCE_LEN};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
+
+    #[error("encryption failed: {0}")]
+    EncryptionFailed(String),
 
     #[error("invalid key file: {0}")]
     InvalidKeyFile(String),

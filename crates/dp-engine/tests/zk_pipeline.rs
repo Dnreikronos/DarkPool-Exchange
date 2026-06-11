@@ -32,9 +32,15 @@ fn cli_bin() -> PathBuf {
     workspace.join("target/debug/dp-zk-cli")
 }
 
-async fn place(engine: &Engine, side: Side, price: i64, key: &str) {
+async fn place(
+    engine: &Engine,
+    side: Side,
+    price: i64,
+    key: &str,
+    trader: alloy_primitives::Address,
+) {
     let d = dp_crypto::DecryptedOrder {
-        trader: alloy_primitives::Address::ZERO,
+        trader,
         pair: "BTC-USD".into(),
         side,
         price: Decimal::from(price),
@@ -65,8 +71,10 @@ async fn engine_subprocess_zk_pipeline() {
         .with_env("DARKPOOL_ZK_BATCH_SIZE", "2");
     engine.set_aggregator(Arc::new(agg));
 
-    place(&engine, Side::Buy, 105, "secret_bid").await;
-    place(&engine, Side::Sell, 95, "secret_ask").await;
+    let bid_addr = alloy_primitives::Address::from([0x11u8; 20]);
+    let ask_addr = alloy_primitives::Address::from([0x22u8; 20]);
+    place(&engine, Side::Buy, 105, "secret_bid", bid_addr).await;
+    place(&engine, Side::Sell, 95, "secret_ask", ask_addr).await;
 
     let notifications = engine.run_auction_tick().await;
     assert_eq!(notifications.len(), 1, "expected one auction");
@@ -88,8 +96,12 @@ async fn engine_subprocess_zk_pipeline() {
     // (Plaintext orders themselves use NoopDecrypter here so their JSON
     // body is in OrderPlaced::ciphertext — that's covered by the
     // dedicated XOR/event-store canary in `tests.rs`.)
-    let trader_id_bid = dp_zk::pedersen::derive_trader_id_bytes(b"secret_bid");
+    let trader_id_bid = dp_zk::pedersen::derive_trader_id_bytes(bid_addr.as_slice());
+    let trader_id_bid_hex = hex::encode(trader_id_bid);
     let raw = bincode::serialize(&events).unwrap();
-    let leaked = raw.windows(trader_id_bid.len()).any(|w| w == trader_id_bid);
+    let leaked = raw.windows(trader_id_bid.len()).any(|w| w == trader_id_bid)
+        || raw
+            .windows(trader_id_bid_hex.len())
+            .any(|w| w == trader_id_bid_hex.as_bytes());
     assert!(!leaked, "ZK trader_id leaked into event log");
 }

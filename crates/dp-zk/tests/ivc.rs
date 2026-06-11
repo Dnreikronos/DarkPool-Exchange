@@ -33,9 +33,10 @@ fn make_rng() -> ark_std::rand::rngs::StdRng {
     ark_std::rand::rngs::StdRng::seed_from_u64(42)
 }
 
-fn trader_id_hex(commitment_key: &str) -> String {
+fn trader_id_hex(addr_hex: &str) -> String {
     use ark_ff::{BigInteger, PrimeField};
-    let f = derive_trader_id(commitment_key.as_bytes()).unwrap();
+    let addr = hex::decode(addr_hex.trim_start_matches("0x")).unwrap();
+    let f = derive_trader_id(&addr).unwrap();
     let mut bytes = f.into_bigint().to_bytes_be();
     while bytes.len() < 32 {
         bytes.insert(0, 0);
@@ -44,28 +45,28 @@ fn trader_id_hex(commitment_key: &str) -> String {
 }
 
 fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
-    let bid_key = "bid_key".to_string();
-    let ask_key = "ask_key".to_string();
+    let bid_addr = "aa".repeat(20);
+    let ask_addr = "bb".repeat(20);
     let m = MatchWitness {
         bid: OrderLegWitness {
-            trader_id: trader_id_hex(&bid_key),
+            trader_id: trader_id_hex(&bid_addr),
             salt: "22".repeat(32),
             balance: Decimal::from(1_000_000),
             position: "0".into(),
             limit_price: Decimal::from(105),
             order_size: Decimal::from(10),
             side: 0,
-            commitment_key: bid_key,
+            trader_addr: bid_addr,
         },
         ask: OrderLegWitness {
-            trader_id: trader_id_hex(&ask_key),
+            trader_id: trader_id_hex(&ask_addr),
             salt: "44".repeat(32),
             balance: Decimal::from(1_000_000),
             position: "0".into(),
             limit_price: Decimal::from(95),
             order_size: Decimal::from(10),
             side: 1,
-            commitment_key: ask_key,
+            trader_addr: ask_addr,
         },
     };
     let w = BatchWitness {
@@ -83,14 +84,16 @@ fn sample_ext(batch_size: usize) -> AuctionExternalInputs {
         .expect("sample_ext: from_witness")
 }
 
-/// Compute `z_0 = [0, 0, policy_hash]` where
-/// `policy_hash = poseidon(min_size, min_price, position_limit)`.
-fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 3] {
+/// Compute `z_0 = [0, 0, policy_hash, 0, 0]` where
+/// `policy_hash = poseidon(min_size, min_price, position_limit)`; the two
+/// trailing slots are the empty settlement hash-chain (#153) and admitted-set
+/// chain (#157) accumulators.
+fn z_0_for(ext: &AuctionExternalInputs) -> [Fr; 5] {
     let cfg = poseidon_config();
     let mut s = PoseidonSponge::<Fr>::new(&cfg);
     s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
     let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-    [Fr::zero(), Fr::zero(), policy_hash]
+    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +143,20 @@ fn fold_single_step_verifies() {
     );
     // policy_hash must be invariant
     assert_eq!(proof.z_n[2], z_0[2], "policy_hash must remain invariant");
+    // settlement_acc must survive the end-to-end fold/finalize path: folding
+    // one active match advances the hash-chain off its zero seed.
+    assert_ne!(
+        proof.z_n[3],
+        Fr::zero(),
+        "settlement_acc must change after folding an active match"
+    );
+    // admit_chain (#157) folds the round's admitted-set root, so it too leaves
+    // the zero seed after a real round.
+    assert_ne!(
+        proof.z_n[4],
+        Fr::zero(),
+        "admit_chain must change after folding a round with an admitted set"
+    );
 }
 
 #[test]

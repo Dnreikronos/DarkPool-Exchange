@@ -7,10 +7,9 @@ import { useDarkPoolClient } from '@/lib/sdk/provider'
 import { DEFAULT_PAIR } from '@/lib/sdk/mocks/factories'
 import {
   GetAuctionHistoryRequestSchema,
-  GetOrderBookRequestSchema,
   type GetAuctionHistoryResponse,
-  type GetOrderBookResponse,
 } from '@/lib/sdk/proto/darkpool/v1/darkpool_pb'
+import type { OrderBook } from '@/lib/sdk/orderbook'
 
 /**
  * 1000 ms = cadence of the F1.2 mock store's perturb tick. Faster polling
@@ -26,13 +25,13 @@ export interface UseOrderBookOptions {
   refetchIntervalMs?: number
 }
 
-export function useOrderBook(opts: UseOrderBookOptions = {}): UseQueryResult<GetOrderBookResponse> {
+export function useOrderBook(opts: UseOrderBookOptions = {}): UseQueryResult<OrderBook> {
   const client = useDarkPoolClient()
   const pair = opts.pair ?? DEFAULT_PAIR
   const refetchInterval = opts.refetchIntervalMs ?? ORDERBOOK_POLL_MS
   return useQuery({
     queryKey: ['darkpool', 'orderbook', pair],
-    queryFn: () => client.getOrderBook(create(GetOrderBookRequestSchema, { pair })),
+    queryFn: () => client.getOrderBook({ pair }),
     refetchInterval,
     // Keep the prior snapshot visible during the in-flight refetch so the
     // table doesn't flash a loading state on every tick.

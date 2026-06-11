@@ -49,10 +49,14 @@ async fn subprocess_aggregator_returns_result() {
         size: Decimal::from(10),
     }];
 
-    let bid_key = "bid_key".to_string();
-    let ask_key = "ask_key".to_string();
-    let bid_trader = hex::encode(dp_zk::pedersen::derive_trader_id_bytes(bid_key.as_bytes()));
-    let ask_trader = hex::encode(dp_zk::pedersen::derive_trader_id_bytes(ask_key.as_bytes()));
+    let bid_addr = "aa".repeat(20);
+    let ask_addr = "bb".repeat(20);
+    let bid_trader = hex::encode(dp_zk::pedersen::derive_trader_id_bytes(
+        &hex::decode(&bid_addr).unwrap(),
+    ));
+    let ask_trader = hex::encode(dp_zk::pedersen::derive_trader_id_bytes(
+        &hex::decode(&ask_addr).unwrap(),
+    ));
     let witness = BatchWitness {
         batch_id,
         auction_id,
@@ -65,7 +69,7 @@ async fn subprocess_aggregator_returns_result() {
                 limit_price: Decimal::from(105),
                 order_size: Decimal::from(10),
                 side: 0,
-                commitment_key: bid_key,
+                trader_addr: bid_addr,
             },
             ask: OrderLegWitness {
                 trader_id: ask_trader,
@@ -75,7 +79,7 @@ async fn subprocess_aggregator_returns_result() {
                 limit_price: Decimal::from(95),
                 order_size: Decimal::from(10),
                 side: 1,
-                commitment_key: ask_key,
+                trader_addr: ask_addr,
             },
         }],
         policy: DEFAULT_POLICY.into_policy(),

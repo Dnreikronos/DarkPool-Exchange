@@ -15,7 +15,7 @@ use dp_api::config::TlsMode;
 use dp_api::handler::ApiHandler;
 use dp_api::pb::dark_pool_service_client::DarkPoolServiceClient;
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
-use dp_api::pb::GetOrderBookRequest;
+use dp_api::pb::ListPairsRequest;
 use dp_api::rest;
 use dp_api::tls;
 use dp_engine::Engine;
@@ -299,13 +299,11 @@ async fn grpc_serves_over_tls() {
     let mut client = grpc_client(server.addr, &bundle.ca_pem).await;
 
     let resp = client
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
-        .expect("orderbook over TLS")
+        .expect("list_pairs over TLS")
         .into_inner();
-    assert_eq!(resp.pair, "ETH/USDC");
+    assert!(resp.pairs.iter().any(|p| p.pair == "ETH/USDC"));
 
     server.shutdown().await;
 }
@@ -330,12 +328,7 @@ async fn grpc_rejects_plain_client_when_tls_on() {
             Err(_) => true, // connect refused
             Ok(ch) => {
                 let mut client = DarkPoolServiceClient::new(ch);
-                client
-                    .get_order_book(GetOrderBookRequest {
-                        pair: "ETH/USDC".into(),
-                    })
-                    .await
-                    .is_err()
+                client.list_pairs(ListPairsRequest {}).await.is_err()
             }
         }
     })
@@ -367,13 +360,11 @@ async fn grpc_mtls_accepts_authorized_client() {
     .await;
 
     let resp = client
-        .get_order_book(GetOrderBookRequest {
-            pair: "ETH/USDC".into(),
-        })
+        .list_pairs(ListPairsRequest {})
         .await
-        .expect("mTLS orderbook")
+        .expect("mTLS list_pairs")
         .into_inner();
-    assert_eq!(resp.pair, "ETH/USDC");
+    assert!(resp.pairs.iter().any(|p| p.pair == "ETH/USDC"));
 
     server.shutdown().await;
 }
@@ -407,12 +398,7 @@ async fn grpc_mtls_rejects_missing_client_cert() {
                 Err(_) => return true,
                 Ok(ch) => {
                     let mut c = DarkPoolServiceClient::new(ch);
-                    if c.get_order_book(GetOrderBookRequest {
-                        pair: "ETH/USDC".into(),
-                    })
-                    .await
-                    .is_err()
-                    {
+                    if c.list_pairs(ListPairsRequest {}).await.is_err() {
                         return true;
                     }
                 }
@@ -437,10 +423,7 @@ async fn rest_serves_over_tls() {
     };
     let server = start_rest(&mode).await;
     let client = reqwest_client(&bundle.ca_pem);
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
     wait_rest_ready(&client, &url).await;
     let resp = client.get(&url).send().await.expect("rest GET");
     assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
@@ -457,10 +440,7 @@ async fn rest_mtls_accepts_authorized_client() {
     };
     let server = start_rest(&mode).await;
     let client = reqwest_client_mtls(&bundle.ca_pem, &bundle.client.pem, &bundle.client.key_pem);
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
     wait_rest_ready(&client, &url).await;
     let resp = client.get(&url).send().await.expect("rest mTLS GET");
     assert_eq!(resp.status(), 200);
@@ -476,10 +456,7 @@ async fn rest_mtls_rejects_missing_client_cert() {
         client_ca: bundle.ca_path.clone(),
     };
     let server = start_rest(&mode).await;
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
 
     // First wait for the listener to be ready via the mTLS-authorized
     // client. This separates "server not bound yet" from "TLS rejected
@@ -518,10 +495,7 @@ async fn rest_reload_swaps_cert_material() {
     };
 
     let server = start_rest(&mode_a).await;
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
 
     let client_a = reqwest_client(&bundle_a.ca_pem);
     wait_rest_ready(&client_a, &url).await;
@@ -572,10 +546,7 @@ async fn rest_mtls_reload_swaps_cert_material() {
     };
 
     let server = start_rest(&mode_a).await;
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
 
     let client_a = reqwest_client_mtls(
         &bundle_a.ca_pem,
@@ -617,10 +588,7 @@ async fn rest_reload_to_plaintext_errors() {
         key: bundle.server_key_path.clone(),
     };
     let server = start_rest(&mode).await;
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
     let client = reqwest_client(&bundle.ca_pem);
     wait_rest_ready(&client, &url).await;
 
@@ -650,10 +618,7 @@ async fn rest_reload_failure_keeps_old_cert() {
         client_ca: bundle_a.ca_path.clone(),
     };
     let server = start_rest(&mode_a).await;
-    let url = format!(
-        "https://localhost:{}/v1/orderbook?pair=ETH/USDC",
-        server.addr.port()
-    );
+    let url = format!("https://localhost:{}/v1/pairs", server.addr.port());
 
     let client_a = reqwest_client_mtls(
         &bundle_a.ca_pem,

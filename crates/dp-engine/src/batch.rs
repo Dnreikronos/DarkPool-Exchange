@@ -7,8 +7,7 @@ use alloy_primitives::{B256, U256};
 use chrono::Utc;
 use dp_event::{Event, EventData};
 use dp_settlement::{
-    compute_matches_hash, BatchSink, SettlementError, SettlementMatch, SubmitBatchParams,
-    SubmitSessionParams,
+    BatchSink, SettlementError, SettlementMatch, SubmitBatchParams, SubmitSessionParams,
 };
 use dp_types::metrics::{M_BATCH_SUBMISSION_DURATION, M_SETTLEMENT_CONFIRMATIONS};
 use dp_types::EventType;
@@ -156,16 +155,29 @@ impl Engine {
                 n_steps,
                 policy_hash,
             } = payload;
-            let matches_hash = compute_matches_hash(auction_id, &settlement_matches)
-                .map_err(EngineError::Submit)?;
+            // Forward the full 5-element IVC state. `z_n[3]` is the settlement
+            // hash-chain the contract recomputes from `matches[]` to bind
+            // settlement to the proof (#209). No separate operator-supplied
+            // matches commitment is sent — the binding derives from the proof.
             let session_params = SubmitSessionParams {
                 session_id: batch_id,
                 proof: proof_bytes,
-                z_0: z_0.map(U256::from_be_bytes),
-                z_n: z_n.map(U256::from_be_bytes),
+                z_0: [
+                    U256::from_be_bytes(z_0[0]),
+                    U256::from_be_bytes(z_0[1]),
+                    U256::from_be_bytes(z_0[2]),
+                    U256::from_be_bytes(z_0[3]),
+                    U256::from_be_bytes(z_0[4]),
+                ],
+                z_n: [
+                    U256::from_be_bytes(z_n[0]),
+                    U256::from_be_bytes(z_n[1]),
+                    U256::from_be_bytes(z_n[2]),
+                    U256::from_be_bytes(z_n[3]),
+                    U256::from_be_bytes(z_n[4]),
+                ],
                 n_steps,
                 policy_hash: B256::from(policy_hash),
-                matches_hash,
                 auction_id,
                 matches: settlement_matches,
             };

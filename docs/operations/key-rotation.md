@@ -24,6 +24,15 @@ The flow has three actors:
 The procedure is deliberately split into five `curl`-grained steps so
 each transition is auditable in shell history.
 
+> 🔐 **Admin auth is required for every step below.** The `/v1/admin/*`
+> endpoints are gated by the operator-admin key set
+> (`DARKPOOL_OPERATOR_API_KEYS`). The server **refuses to boot** when
+> that set is empty, unless `DARKPOOL_ALLOW_UNAUTHENTICATED_ADMIN=true`
+> is set (local dev only) — otherwise the admin router would accept
+> every request unauthenticated, letting an attacker register their own
+> decryption key. The `x-api-key` in the `curl` commands must be one of
+> the configured operator keys.
+
 ---
 
 ## 1. Generate the new ECIES keypair

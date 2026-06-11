@@ -1,21 +1,47 @@
 'use client'
 
 import * as React from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { AuctionSummary } from '@/lib/sdk'
+import {
+  correlateSettlements,
+  settlementLink,
+  useSettlementEvents,
+  type SettlementLink,
+} from '@/lib/settlement'
 
 import { Countdown } from './Countdown'
 import { TapeDrawer } from './TapeDrawer'
 import { TapeRow } from './TapeRow'
-import { useAuctionHistory } from '../../_hooks/tape/useAuctionHistory'
+import { TapeEmpty } from './states'
+import { useAuctionFeed } from '../../_hooks/tape/useAuctionFeed'
 import { useNow } from '../../_hooks/tape/useNow'
 
 export interface TapeProps {
   limit?: number
+  /** Override polling cadence for Storybook / tests. */
+  refetchIntervalMs?: number
 }
 
-export function Tape({ limit }: TapeProps = {}): JSX.Element {
-  const auctions = useAuctionHistory({ limit })
+/**
+ * Root tape component.
+ *
+ * Ships its own `QueryClientProvider` mirroring `OrderBook`: the trading
+ * shell hasn't hoisted a shared client yet, so each panel scopes one.
+ * Consumers that already wrap children with a `QueryClientProvider`
+ * should render {@link TapeContent} directly to share the cache.
+ */
+export function Tape(props: TapeProps = {}): JSX.Element {
+  return (
+    <QueryClientProvider client={getScopedClient()}>
+      <TapeContent {...props} />
+    </QueryClientProvider>
+  )
+}
+
+export function TapeContent({ limit, refetchIntervalMs }: TapeProps = {}): JSX.Element {
+  const { auctions, status } = useAuctionFeed({ limit, refetchIntervalMs })
   const nowSeconds = useNow()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
 
@@ -24,14 +50,27 @@ export function Tape({ limit }: TapeProps = {}): JSX.Element {
     return auctions.find((a) => a.auctionId === selectedId) ?? null
   }, [auctions, selectedId])
 
+  // On-chain settlement linkage (#100): correlate the visible auctions
+  // against observed BatchSettled events so the drawer can show the tx.
+  const settlements = useSettlementEvents()
+  const selectedLink = React.useMemo<SettlementLink | null>(() => {
+    if (!selected) return null
+    const links = correlateSettlements(auctions, settlements)
+    return settlementLink(links.get(selected.auctionId))
+  }, [auctions, settlements, selected])
+
   const latestUnix: bigint | null = auctions.length > 0 ? auctions[0].timestampUnix : null
 
   return (
     <div className="flex h-full min-h-[200px] flex-col">
-      <Countdown latestAuctionUnixSeconds={latestUnix} nowUnixSeconds={nowSeconds} />
+      <Countdown
+        latestAuctionUnixSeconds={latestUnix}
+        nowUnixSeconds={nowSeconds}
+        status={status}
+      />
       <TableHeader />
       {auctions.length === 0 ? (
-        <EmptyState />
+        <TapeEmpty />
       ) : (
         <ol aria-live="polite" aria-atomic="false" className="flex-1 overflow-y-auto">
           {auctions.map((a) => (
@@ -44,7 +83,7 @@ export function Tape({ limit }: TapeProps = {}): JSX.Element {
           ))}
         </ol>
       )}
-      <TapeDrawer auction={selected} onClose={() => setSelectedId(null)} />
+      <TapeDrawer auction={selected} link={selectedLink} onClose={() => setSelectedId(null)} />
     </div>
   )
 }
@@ -60,10 +99,16 @@ function TableHeader(): JSX.Element {
   )
 }
 
-function EmptyState(): JSX.Element {
-  return (
-    <div className="flex flex-1 items-center justify-center font-mono text-label-md uppercase tracking-labelWide text-brand-muted">
-      [ NO AUCTIONS YET ]
-    </div>
-  )
+let scopedClient: QueryClient | null = null
+function getScopedClient(): QueryClient {
+  if (scopedClient) return scopedClient
+  scopedClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        refetchOnWindowFocus: false,
+      },
+    },
+  })
+  return scopedClient
 }

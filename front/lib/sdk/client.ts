@@ -16,9 +16,9 @@ import { create, fromJson, toJson } from '@bufbuild/protobuf'
 import type { DescMessage, MessageShape } from '@bufbuild/protobuf'
 
 import {
+  AuctionEventSchema,
   CancelOrderResponseSchema,
   GetAuctionHistoryResponseSchema,
-  GetOrderBookResponseSchema,
   GetOrderResponseSchema,
   OrderInfoSchema,
   PlaceOrderRequestSchema,
@@ -31,14 +31,15 @@ import type {
   CancelOrderResponse,
   GetAuctionHistoryRequest,
   GetAuctionHistoryResponse,
-  GetOrderBookRequest,
-  GetOrderBookResponse,
   GetOrderRequest,
   GetOrderResponse,
   PlaceOrderRequest,
   PlaceOrderResponse,
   StreamAuctionsRequest,
 } from './proto/darkpool/v1/darkpool_pb.js'
+// The order book is mock-only since #178 removed it from the wire — see
+// ./orderbook for the rationale. These types are hand-written, not generated.
+import type { OrderBook, OrderBookRequest } from './orderbook.js'
 
 // ─── Error model ──────────────────────────────────────────────────────────
 //
@@ -83,17 +84,28 @@ export class DarkPoolError extends Error {
   readonly codeName: DarkPoolErrorName
   readonly httpStatus: number | null
   readonly retryable: boolean
+  /** `x-request-id` response header, when the server sent one (C7). */
+  readonly requestId: string | null
+  /** `retry-after` response header (seconds or HTTP-date), when present. */
+  readonly retryAfter: string | null
 
   constructor(
     code: DarkPoolErrorCode,
     message: string,
-    opts: { httpStatus?: number | null; cause?: unknown } = {}
+    opts: {
+      httpStatus?: number | null
+      requestId?: string | null
+      retryAfter?: string | null
+      cause?: unknown
+    } = {}
   ) {
     super(message)
     this.name = 'DarkPoolError'
     this.code = code
     this.codeName = CODE_NAMES.get(code) ?? 'UNKNOWN'
     this.httpStatus = opts.httpStatus ?? null
+    this.requestId = opts.requestId ?? null
+    this.retryAfter = opts.retryAfter ?? null
     this.retryable = isRetryableCode(code)
     if (opts.cause !== undefined) {
       ;(this as { cause?: unknown }).cause = opts.cause
@@ -154,7 +166,7 @@ export interface DarkPoolClient {
   placeOrder(req: PlaceOrderRequest): Promise<PlaceOrderResponse>
   cancelOrder(req: CancelOrderRequest): Promise<CancelOrderResponse>
   getOrder(req: GetOrderRequest): Promise<GetOrderResponse>
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse>
+  getOrderBook(req: OrderBookRequest): Promise<OrderBook>
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse>
   streamAuctions(req: StreamAuctionsRequest, opts?: StreamOptions): AsyncIterable<AuctionEvent>
 }
@@ -177,17 +189,31 @@ export interface RestClientOptions {
   apiKey: string
   /** Defaults to globalThis.fetch. Injectable so tests and SSR can swap it. */
   fetch?: typeof fetch
+  /**
+   * Returns the current SIWE session token, read per-request. When it
+   * returns a non-null value the request carries `Authorization: Bearer
+   * <token>` (in addition to `x-api-key`, which the backend accepts as a
+   * fallback). Read lazily so the long-lived client always sees the live
+   * token across login/logout.
+   */
+  getToken?: () => string | null
+  /** Invoked on a 401 so the caller can clear the session and prompt re-auth. */
+  onUnauthenticated?: () => void
 }
 
 export class RestClient implements DarkPoolClient {
   private readonly baseUrl: string
   private readonly apiKey: string
   private readonly fetchImpl: typeof fetch
+  private readonly getToken?: () => string | null
+  private readonly onUnauthenticated?: () => void
 
   constructor(opts: RestClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '')
     this.apiKey = opts.apiKey
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis)
+    this.getToken = opts.getToken
+    this.onUnauthenticated = opts.onUnauthenticated
   }
 
   placeOrder(req: PlaceOrderRequest): Promise<PlaceOrderResponse> {
@@ -217,11 +243,19 @@ export class RestClient implements DarkPoolClient {
     )
   }
 
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
-    const search = new URLSearchParams()
-    if (req.pair) search.set('pair', req.pair)
-    const qs = search.toString()
-    return this.requestJson('GET', `/v1/orderbook${qs ? `?${qs}` : ''}`, GetOrderBookResponseSchema)
+  async getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
+    void req
+    // #178 removed the public pre-settlement order book from the backend
+    // (no GET /v1/orderbook). A dark pool deliberately hides cross-trader
+    // depth, so there is no real endpoint to call — the panel runs on the
+    // mock store. Keep this method on the interface (the UI calls it) but
+    // make the REST path an explicit, actionable failure.
+    throw new DarkPoolError(
+      DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
+      'The public order book was removed in #178 — a dark pool does not expose ' +
+        'pre-settlement depth. Set NEXT_PUBLIC_USE_MOCKS_ORDERBOOK=true to run the ' +
+        'panel on the mock store.'
+    )
   }
 
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {
@@ -236,21 +270,114 @@ export class RestClient implements DarkPoolClient {
     )
   }
 
-  // eslint-disable-next-line require-yield
   async *streamAuctions(
     req: StreamAuctionsRequest,
     opts?: StreamOptions
   ): AsyncIterable<AuctionEvent> {
-    void req
-    void opts
-    // SSE bridge ships in #83 (C3); WASM streaming consumer lands with
-    // #95 (I2.6). Until either is on main, set
-    // NEXT_PUBLIC_USE_MOCKS_STREAM_AUCTIONS=true to keep panels on mocks.
-    throw new DarkPoolError(
-      DARK_POOL_ERROR_CODES.UNIMPLEMENTED,
-      'StreamAuctions over REST is not wired yet — depends on the SSE bridge in #83. ' +
-        'Use NEXT_PUBLIC_USE_MOCKS_STREAM_AUCTIONS=true until then.'
-    )
+    const signal = opts?.signal
+    if (signal?.aborted) return
+
+    const search = new URLSearchParams()
+    if (req.pair) search.set('pair', req.pair)
+    const qs = search.toString()
+    const url = `${this.baseUrl}/v1/auctions/stream${qs ? `?${qs}` : ''}`
+
+    let response: Response
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: { accept: 'text/event-stream', 'x-api-key': this.apiKey },
+        signal,
+      })
+    } catch (cause) {
+      if (signal?.aborted) return
+      throw new DarkPoolError(
+        DARK_POOL_ERROR_CODES.UNAVAILABLE,
+        `Network error contacting ${url}: ${(cause as Error)?.message ?? cause}`,
+        { cause }
+      )
+    }
+
+    if (!response.ok) throw await parseErrorResponse(response)
+    if (!response.body) {
+      throw new DarkPoolError(
+        DARK_POOL_ERROR_CODES.UNAVAILABLE,
+        `Auction stream from ${url} returned no body`
+      )
+    }
+
+    const reader = response.body.getReader()
+    const onAbort = () => {
+      void reader.cancel()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      while (true) {
+        let chunk
+        try {
+          chunk = await reader.read()
+        } catch (cause) {
+          if (signal?.aborted) return
+          throw new DarkPoolError(
+            DARK_POOL_ERROR_CODES.UNAVAILABLE,
+            `Auction stream from ${url} dropped: ${(cause as Error)?.message ?? cause}`,
+            { cause }
+          )
+        }
+        if (chunk.done) return
+        buffer += decoder.decode(chunk.value, { stream: true })
+
+        let split = nextSseFrame(buffer)
+        while (split !== null) {
+          const frame = parseSseFrame(split.frame)
+          buffer = split.rest
+          if (frame !== null) {
+            if (frame.event === 'error') {
+              // Only an explicit {"lagged":N} payload is broadcast lag — the
+              // one error frame the server emits. Anything else (proxy error
+              // pages, malformed frames) is a broken stream, not data loss.
+              const lagged = readLagged(frame.data)
+              if (lagged !== null) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.DATA_LOSS,
+                  `Auction stream lagged: ${lagged} events dropped`
+                )
+              }
+              throw new DarkPoolError(
+                DARK_POOL_ERROR_CODES.UNAVAILABLE,
+                `Auction stream error frame: ${frame.data}`
+              )
+            }
+            if ((frame.event === 'auction' || frame.event === '') && frame.data !== '') {
+              let event: AuctionEvent
+              try {
+                const json = JSON.parse(frame.data) as unknown
+                event = fromJson(
+                  AuctionEventSchema,
+                  json as Parameters<typeof fromJson<typeof AuctionEventSchema>>[1]
+                )
+              } catch (cause) {
+                throw new DarkPoolError(
+                  DARK_POOL_ERROR_CODES.INTERNAL,
+                  `Auction frame parse failed: ${(cause as Error)?.message ?? cause}`,
+                  { cause }
+                )
+              }
+              yield event
+            }
+            // any other event type is ignored
+          }
+          split = nextSseFrame(buffer)
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+      void reader.cancel()
+      reader.releaseLock()
+    }
   }
 
   private async requestJson<S extends DescMessage>(
@@ -264,6 +391,8 @@ export class RestClient implements DarkPoolClient {
       accept: 'application/json',
       'x-api-key': this.apiKey,
     }
+    const token = this.getToken?.()
+    if (token) headers['authorization'] = `Bearer ${token}`
     if (jsonBody !== undefined) headers['content-type'] = 'application/json'
 
     let response: Response
@@ -281,11 +410,70 @@ export class RestClient implements DarkPoolClient {
       )
     }
 
-    if (!response.ok) throw await parseErrorResponse(response)
+    if (!response.ok) {
+      // Let the session layer clear an expired/invalid token and prompt re-auth.
+      if (response.status === 401) this.onUnauthenticated?.()
+      throw await parseErrorResponse(response)
+    }
 
     const text = await response.text()
     const json = text === '' ? {} : (JSON.parse(text) as unknown)
     return fromJson(responseSchema, json as Parameters<typeof fromJson<S>>[1])
+  }
+}
+
+// ─── SSE frame parsing (private to streamAuctions) ─────────────────────────
+
+interface SseFrame {
+  event: string
+  data: string
+}
+
+// Find the next event boundary (a blank line). Handles both LF and CRLF
+// servers; returns the frame text and the remaining buffer, or null if no
+// complete frame has arrived yet.
+function nextSseFrame(buffer: string): { frame: string; rest: string } | null {
+  const lf = buffer.indexOf('\n\n')
+  const crlf = buffer.indexOf('\r\n\r\n')
+  let idx = -1
+  let len = 0
+  if (lf !== -1 && (crlf === -1 || lf < crlf)) {
+    idx = lf
+    len = 2
+  } else if (crlf !== -1) {
+    idx = crlf
+    len = 4
+  }
+  if (idx === -1) return null
+  return { frame: buffer.slice(0, idx), rest: buffer.slice(idx + len) }
+}
+
+// Parse one frame into its `event` (last wins, '' if absent) and `data`
+// (multiple data: lines joined by \n, per the SSE spec). Comment (`:`) lines
+// and other fields (id, retry) are ignored.
+function parseSseFrame(frame: string): SseFrame | null {
+  let event = ''
+  const dataLines: string[] = []
+  for (let line of frame.split('\n')) {
+    if (line.endsWith('\r')) line = line.slice(0, -1)
+    if (line === '' || line.startsWith(':')) continue
+    const colon = line.indexOf(':')
+    const field = colon === -1 ? line : line.slice(0, colon)
+    let value = colon === -1 ? '' : line.slice(colon + 1)
+    if (value.startsWith(' ')) value = value.slice(1)
+    if (field === 'event') event = value
+    else if (field === 'data') dataLines.push(value)
+  }
+  if (event === '' && dataLines.length === 0) return null
+  return { event, data: dataLines.join('\n') }
+}
+
+function readLagged(data: string): number | null {
+  try {
+    const parsed = JSON.parse(data) as { lagged?: unknown }
+    return typeof parsed.lagged === 'number' ? parsed.lagged : null
+  } catch {
+    return null
   }
 }
 
@@ -302,7 +490,11 @@ async function parseErrorResponse(response: Response): Promise<DarkPoolError> {
     typeof body.message === 'string' && body.message.length > 0
       ? body.message
       : `HTTP ${response.status} from ${response.url}`
-  return new DarkPoolError(code, message, { httpStatus: response.status })
+  return new DarkPoolError(code, message, {
+    httpStatus: response.status,
+    requestId: response.headers.get('x-request-id'),
+    retryAfter: response.headers.get('retry-after'),
+  })
 }
 
 // ─── MockClient ───────────────────────────────────────────────────────────
@@ -354,12 +546,8 @@ export class MockClient implements DarkPoolClient {
     return create(GetOrderResponseSchema, { order })
   }
 
-  async getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
-    return create(GetOrderBookResponseSchema, {
-      pair: req.pair || this.pair,
-      bids: [],
-      asks: [],
-    })
+  async getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
+    return { pair: req.pair || this.pair, bids: [], asks: [] }
   }
 
   async getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {
@@ -403,6 +591,10 @@ export interface CreateDarkPoolClientOptions {
   /** Global default. Overridden per-method by `methodOverrides`. */
   useMocks: boolean
   fetch?: typeof fetch
+  /** SIWE session token getter, read per-request by the RestClient. */
+  getToken?: () => string | null
+  /** Invoked on a 401 (e.g. to clear the session and prompt re-auth). */
+  onUnauthenticated?: () => void
   /** Pre-built clients; useful for tests and SSR. */
   mockClient?: DarkPoolClient
   restClient?: DarkPoolClient
@@ -424,6 +616,8 @@ export function createDarkPoolClient(opts: CreateDarkPoolClientOptions): DarkPoo
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
       fetch: opts.fetch,
+      getToken: opts.getToken,
+      onUnauthenticated: opts.onUnauthenticated,
     })
 
   if (!hasOverrides) {
@@ -456,7 +650,7 @@ class RoutingClient implements DarkPoolClient {
   getOrder(req: GetOrderRequest): Promise<GetOrderResponse> {
     return this.pick('getOrder').getOrder(req)
   }
-  getOrderBook(req: GetOrderBookRequest): Promise<GetOrderBookResponse> {
+  getOrderBook(req: OrderBookRequest): Promise<OrderBook> {
     return this.pick('getOrderBook').getOrderBook(req)
   }
   getAuctionHistory(req: GetAuctionHistoryRequest): Promise<GetAuctionHistoryResponse> {

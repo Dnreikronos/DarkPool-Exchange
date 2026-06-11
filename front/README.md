@@ -54,6 +54,23 @@ edit the values. `.env.local` is git-ignored.
 | `NEXT_PUBLIC_USDC_ADDRESS`            | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
 | `NEXT_PUBLIC_WETH_ADDRESS`            | `NEXT_PUBLIC_USE_MOCKS=false`          | `0x` + 40 hex chars.                                             |
 
+### Per-RPC mock overrides
+
+Phase 2 swaps the mock client for `RestClient` one RPC at a time. Each
+override layers on top of `NEXT_PUBLIC_USE_MOCKS`: `true` / `1` forces the
+mock impl for that RPC, `false` / `0` forces the REST impl, and unset
+falls back to the global flag. Parsing lives in
+[`methodOverridesFromEnv`](./lib/sdk/client.ts).
+
+| Variable                                     | Routes              | Notes                                                                       |
+| -------------------------------------------- | ------------------- | --------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_USE_MOCKS_ORDERBOOK`            | `getOrderBook`      | I2.4 (#93). Hits `GET /v1/orderbook` when `false`.                          |
+| `NEXT_PUBLIC_USE_MOCKS_AUCTION_HISTORY`      | `getAuctionHistory` | I2.5 (#94). Hits `GET /v1/auctions` when `false`.                           |
+| `NEXT_PUBLIC_USE_MOCKS_STREAM_AUCTIONS`      | `streamAuctions`    | I2.6 (#95). Keep `true` until the SSE bridge ships — REST throws otherwise. |
+| `NEXT_PUBLIC_USE_MOCKS_PLACE_ORDER`          | `placeOrder`        | I2.10 (#99). Needs the ZK prover + browser ECIES first.                     |
+| `NEXT_PUBLIC_USE_MOCKS_CANCEL_ORDER`         | `cancelOrder`       | Pair with `placeOrder` so cancels target real orders.                       |
+| `NEXT_PUBLIC_USE_MOCKS_GET_ORDER`            | `getOrder`          | Standalone — flip once `placeOrder` is real.                                |
+
 ### Dev proxy
 
 `next.config.mjs` rewrites `/api/v1/:path*` →

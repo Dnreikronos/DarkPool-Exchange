@@ -42,13 +42,35 @@ export function StepIndicator({ steps, stage, currentIndex }: StepIndicatorProps
                 : stage.kind === 'confirmed' && i <= currentIndex
                   ? 'done'
                   : 'pending'
-        return <StepCell key={step.index} step={step} state={state} />
+        return (
+          <StepCell
+            key={step.index}
+            step={step}
+            state={state}
+            phase={state === 'current' ? stage.phase : undefined}
+          />
+        )
       })}
     </ol>
   )
 }
 
-function StepCell({ step, state }: { step: Step; state: StepState }) {
+/** Status line copy for the single in-flight step. */
+function currentStatus(phase: Stage['phase']): string {
+  if (phase === 'signing') return '[ CONFIRM IN WALLET ]'
+  if (phase === 'mining') return '[ CONFIRMING ]'
+  return '· · ·'
+}
+
+function StepCell({
+  step,
+  state,
+  phase,
+}: {
+  step: Step
+  state: StepState
+  phase?: Stage['phase']
+}) {
   return (
     <li className="flex items-start gap-3">
       <span
@@ -80,7 +102,7 @@ function StepCell({ step, state }: { step: Step; state: StepState }) {
           aria-live={state === 'current' ? 'polite' : 'off'}
           className="font-mono text-label-sm uppercase tracking-label text-brand-muted"
         >
-          {state === 'current' && '· · ·'}
+          {state === 'current' && currentStatus(phase)}
           {state === 'done' && '[ DONE ]'}
           {state === 'pending' && '[ PENDING ]'}
           {state === 'failed' && '[ FAILED ]'}

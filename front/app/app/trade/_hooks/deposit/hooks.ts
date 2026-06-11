@@ -2,11 +2,14 @@
 
 import * as React from 'react'
 
+import { config } from '@/lib/config'
 import { walletStore, type TxState } from '@/lib/wallet/mock-store'
-import type { TokenSymbol } from '@/lib/wallet/types'
+import type { Balances, TokenSymbol } from '@/lib/wallet/types'
 
 import { reduceStage, INITIAL_STAGE, type Stage } from '../../_lib/deposit/stage-machine'
 import { needsApproval } from '../../_lib/deposit/validation'
+import { useDepositChainState } from './useDepositChainState'
+import { useLiveDepositController, useLiveWithdrawController } from './live-controllers'
 
 // Step cadence per the F1.5 spec: each fake on-chain step takes ~1s.
 // Exposed so tests / stories can override without monkey-patching
@@ -22,13 +25,43 @@ export const DEFAULT_STEP_TIMING: StepTiming = {
   submitMs: 1000,
 }
 
-/** Read the tx-state slice (paused + allowances) reactively. */
+/**
+ * Per-feature mock switch, falling back to the global one — mirrors
+ * `balancesUseMocks`. Read via direct `process.env` property access so
+ * Next's NEXT_PUBLIC_* static inlining still works.
+ */
+export function depositUseMocks(): boolean {
+  const raw = process.env.NEXT_PUBLIC_USE_MOCKS_DEPOSIT
+  if (raw === 'true' || raw === '1') return true
+  if (raw === 'false' || raw === '0') return false
+  return config.useMocks
+}
+
+/** Read the mock tx-state slice (paused + allowances) reactively. */
 export function useTxState(): TxState {
   return React.useSyncExternalStore(
     walletStore.subscribe,
     walletStore.getTxState,
     walletStore.getTxState
   )
+}
+
+export interface DepositTxState {
+  paused: boolean
+  allowances: Balances
+}
+
+/**
+ * Unified `{ paused, allowances }` for the deposit form: mock store under
+ * mocks, on-chain reads in live mode. Calls both sources unconditionally
+ * (Rules of Hooks) and returns the active one — same shape as `useBalances`.
+ */
+export function useDepositTxState(): DepositTxState {
+  const useMocks = depositUseMocks()
+  const mock = useTxState()
+  const chain = useDepositChainState(!useMocks)
+  if (useMocks) return { paused: mock.paused, allowances: mock.allowances }
+  return { paused: chain.paused, allowances: chain.allowances }
 }
 
 export type DepositRevertReason = 'approve' | 'deposit'
@@ -45,13 +78,14 @@ export interface DepositController {
   start(args: { token: TokenSymbol; amount: string }): void
   /**
    * Prime the next start() to revert. The reason determines which step
-   * fails — used by the dev-only "Simulate revert" affordance.
+   * fails — used by the dev-only "Simulate revert" affordance. No-op in
+   * live mode.
    */
   simulateRevert(reason: DepositRevertReason): void
   reset(): void
 }
 
-export function useDepositController({
+export function useMockDepositController({
   timing = DEFAULT_STEP_TIMING,
 }: UseTxControllerOptions = {}): DepositController {
   const [stage, dispatch] = React.useReducer(reduceStage, INITIAL_STAGE)
@@ -79,6 +113,8 @@ export function useDepositController({
       const requiresApproval = needsApproval(amount, currentAllowance)
 
       dispatch({ type: 'start', needsApproval: requiresApproval })
+      // No wallet prompt to wait on in the mock — go straight to "mining".
+      dispatch({ type: 'signed' })
 
       let cancelled = false
       cancelRef.current = () => {
@@ -131,6 +167,7 @@ export function useDepositController({
           }
           if (cancelled) return
           dispatch({ type: 'approvalDone' })
+          dispatch({ type: 'signed' })
           runSubmit()
         }, timing.approveMs)
         cancelRef.current = () => {
@@ -165,7 +202,7 @@ export interface WithdrawController {
   reset(): void
 }
 
-export function useWithdrawController({
+export function useMockWithdrawController({
   timing = DEFAULT_STEP_TIMING,
 }: UseTxControllerOptions = {}): WithdrawController {
   const [stage, dispatch] = React.useReducer(reduceStage, INITIAL_STAGE)
@@ -187,6 +224,7 @@ export function useWithdrawController({
     ({ token, amount }: { token: TokenSymbol; amount: string }) => {
       cancelRef.current()
       dispatch({ type: 'start', needsApproval: false })
+      dispatch({ type: 'signed' })
 
       let cancelled = false
       const timer = setTimeout(() => {
@@ -225,4 +263,23 @@ export function useWithdrawController({
     simulateRevert,
     reset,
   }
+}
+
+/**
+ * Source-selecting facades: call both the mock and live controllers
+ * unconditionally (Rules of Hooks) and return whichever the per-feature
+ * mock switch selects. The form depends only on these.
+ */
+export function useDepositController(options: UseTxControllerOptions = {}): DepositController {
+  const useMocks = depositUseMocks()
+  const mock = useMockDepositController(options)
+  const live = useLiveDepositController(!useMocks)
+  return useMocks ? mock : live
+}
+
+export function useWithdrawController(options: UseTxControllerOptions = {}): WithdrawController {
+  const useMocks = depositUseMocks()
+  const mock = useMockWithdrawController(options)
+  const live = useLiveWithdrawController(!useMocks)
+  return useMocks ? mock : live
 }

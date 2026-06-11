@@ -6,13 +6,14 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/components/ui/cn'
 import { Input } from '@/components/ui/input'
 import { NumericText } from '@/components/NumericText'
-import { useInternalBalances, useWallet } from '@/lib/wallet/hooks'
+import { useWallet } from '@/lib/wallet/hooks'
 import type { TokenSymbol } from '@/lib/wallet/types'
 
+import { useBalances } from '../../_hooks/balances/useBalances'
 import { displayDecimalsFor } from '../../_lib/balances/format-balance'
 
 import {
-  useTxState,
+  useDepositTxState,
   useWithdrawController,
   type WithdrawRevertReason,
 } from '../../_hooks/deposit/hooks'
@@ -40,8 +41,8 @@ export function WithdrawForm({ initialToken = 'USDC', onConfirmed, titleId }: Wi
   const [token, setToken] = React.useState<TokenSymbol>(initialToken)
   const [amount, setAmount] = React.useState('')
   const { isConnected } = useWallet()
-  const internal = useInternalBalances()
-  const tx = useTxState()
+  const { internal } = useBalances()
+  const tx = useDepositTxState()
   const controller = useWithdrawController()
 
   React.useEffect(() => {
@@ -129,6 +130,7 @@ export function WithdrawForm({ initialToken = 'USDC', onConfirmed, titleId }: Wi
           {!validation.ok && validation.reason !== 'empty' && amount !== '' ? (
             <p
               id="withdraw-error"
+              role="alert"
               className="font-mono text-label-md uppercase tracking-label text-brand-fg"
             >
               {validation.message}
@@ -149,6 +151,7 @@ export function WithdrawForm({ initialToken = 'USDC', onConfirmed, titleId }: Wi
         <Button type="submit" variant="primary" disabled={!canStart} aria-busy={isInFlight}>
           {primaryLabel({
             stage: controller.stage.kind,
+            phase: controller.stage.phase,
             paused: isPaused,
             connected: isConnected,
           })}
@@ -263,15 +266,18 @@ function DevRevertControls({
 
 function primaryLabel({
   stage,
+  phase,
   paused,
   connected,
 }: {
   stage: 'idle' | 'approving' | 'submitting' | 'confirmed' | 'error'
+  phase?: 'signing' | 'mining'
   paused: boolean
   connected: boolean
 }): string {
   if (paused) return 'PAUSED'
   if (!connected) return 'CONNECT WALLET'
+  if (stage === 'submitting' && phase === 'signing') return 'CONFIRM IN WALLET…'
   switch (stage) {
     case 'submitting':
       return 'WITHDRAWING…'

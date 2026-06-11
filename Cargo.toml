@@ -26,8 +26,12 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 sha2 = "0.10"
+subtle = "2"
 hex = "0.4"
 ecies = { version = "0.2", default-features = false, features = ["pure"] }
+# AEAD for snapshot-at-rest encryption (#203). Default features pull `alloc`
+# (Vec/Payload API) + `getrandom` (OsRng); already in the lock via `age`.
+chacha20poly1305 = "0.10"
 bincode = "1"
 tokio-util = { version = "0.7", features = ["rt"] }
 alloy-primitives = "1"
@@ -65,6 +69,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 humantime = "2"
+ipnet = "2"
 ulid = "1"
 futures-util = "0.3"
 serial_test = "3"

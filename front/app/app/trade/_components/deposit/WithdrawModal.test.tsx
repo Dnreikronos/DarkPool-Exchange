@@ -3,8 +3,26 @@
 // rather than the modal wrapper because Radix Portal emits no SSR.
 
 import * as React from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+
+// See DepositModal.test.tsx — pin mock mode + inert wagmi so the wired
+// form renders on the walletStore path under node SSR.
+vi.mock('@/lib/config', () => ({
+  config: { useMocks: true, chainId: 31337, contracts: null },
+}))
+vi.mock('wagmi', () => ({
+  useReadContracts: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    refetch: () => {},
+  }),
+  useWatchContractEvent: () => {},
+  useWriteContract: () => ({ writeContractAsync: async () => '0x' }),
+  useConfig: () => ({}),
+}))
+vi.mock('wagmi/actions', () => ({ waitForTransactionReceipt: async () => ({}) }))
 
 import { walletStore } from '@/lib/wallet/mock-store'
 

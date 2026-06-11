@@ -10,12 +10,13 @@ use dp_api::config::{Config, TlsMode};
 use dp_api::handler::ApiHandler;
 use dp_api::observability::{self, M_EVENT_LOG_SIZE_BYTES};
 use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
-use dp_api::ratelimit::{RateLimitCore, RateLimitLayer};
+use dp_api::ratelimit::{RateLimitCore, RateLimitLayer, TrustedProxies};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
 use dp_api::tls;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
+    SnapshotCipher,
 };
 use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
 use dp_event::{
@@ -38,6 +39,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let cfg = Config::parse();
 
+    // Validate the auth posture before any side effects (store
+    // connections, state recovery, pair seeding, task spawns) so an
+    // invalid auth config fails closed without ever writing or ticking.
+    cfg.validate_siwe_config()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_admin_auth()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
     // Resolve the TLS posture up-front: half-configured TLS (cert
     // without key, etc.) must surface at boot, not when the first
     // client connects. The plaintext branch logs a loud warning so a
@@ -45,6 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // "default-on" TLS today.
     let tls_mode = cfg
         .tls_mode()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    // Fail closed before binding: plaintext on a non-loopback interface
+    // leaks credentials and order metadata on the wire. Loopback-only
+    // plaintext (local dev) and an explicit --insecure override are the
+    // only ways past this check.
+    cfg.validate_plaintext_bind(&tls_mode)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     if matches!(tls_mode, TlsMode::Plaintext) {
         warn!(
@@ -94,6 +109,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
     engine.set_snapshot_store(snapshot_store.clone());
+
+    // Snapshot-at-rest encryption (#203). A snapshot store without a cipher
+    // would persist cleartext order data (trader / price / size), so fail
+    // closed for durable backends and use a process-lifetime key for the
+    // non-durable in-memory store.
+    if snapshot_store.is_some() {
+        let cipher = if let Some(uri) = cfg.snapshot_key_uri_str() {
+            let c = SnapshotCipher::from_key_uri(uri)?;
+            info!(uri = %sanitize_uri_for_log(uri), "snapshot cipher: key loaded");
+            c
+        } else if cfg.event_db_url().is_some() || cfg.snapshot_dir_path().is_some() {
+            return Err(
+                "snapshots are enabled with a durable store but DARKPOOL_SNAPSHOT_KEY_URI \
+                 is unset — refusing to write plaintext order data at rest. Set a snapshot \
+                 key (e.g. file:/path/to/key.hex) or disable snapshots \
+                 (DARKPOOL_SNAPSHOT_ENABLED=false)."
+                    .into(),
+            );
+        } else {
+            warn!(
+                "snapshot store is in-memory and DARKPOOL_SNAPSHOT_KEY_URI is unset — using \
+                 an ephemeral per-process snapshot key. In-memory snapshots are not durable \
+                 across restarts; configure a durable store + key URI for real recovery."
+            );
+            SnapshotCipher::generate_ephemeral()
+        };
+        engine.set_snapshot_cipher(Some(Arc::new(cipher)));
+    }
 
     // Always construct a MultiKeyDecrypter and wire it to the engine
     // so admin-time rotation does not require restarting the process.
@@ -286,13 +329,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None
     };
 
-    cfg.validate_siwe_config()
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-
     let siwe_state = if cfg.siwe_enabled {
         let secret = cfg.session_secret().unwrap();
         let jwt_manager = Arc::new(dp_api::siwe::JwtManager::new(secret, cfg.session_ttl));
-        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(Duration::from_secs(300)));
+        let nonce_store = Arc::new(dp_api::siwe::NonceStore::new(dp_api::siwe::NONCE_TTL));
         nonce_store.start_cleanup(cancel.clone(), Duration::from_secs(60));
         let chain_id = if cfg.chain_id > 0 {
             Some(cfg.chain_id)
@@ -323,13 +363,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let operator_keys = cfg.operator_api_keys();
     if operator_keys.is_empty() {
+        // Reachable only when --allow-unauthenticated-admin opted in;
+        // validate_admin_auth() aborts boot otherwise.
         warn!(
-            "DARKPOOL_OPERATOR_API_KEYS is empty — admin endpoints will accept \
-             unauthenticated requests. Set the env var before exposing the server."
+            "DARKPOOL_OPERATOR_API_KEYS is empty and --allow-unauthenticated-admin is set \
+             — admin endpoints accept UNAUTHENTICATED requests, including ECIES key \
+             rotation. Never use this outside local dev."
         );
     }
     let admin_auth_core = AuthCore::new(operator_keys);
-    let rl_core = RateLimitCore::new(cfg.rate_limit, cfg.rate_burst, cfg.rate_stale_after);
+    let trusted_proxies = TrustedProxies::parse(&cfg.trusted_proxies)
+        .map_err(|e| format!("DARKPOOL_TRUSTED_PROXIES: {e}"))?;
+    if trusted_proxies.is_empty() {
+        info!(
+            "no trusted proxies configured; rate limiting keys on the TCP peer IP. \
+             Set DARKPOOL_TRUSTED_PROXIES if a reverse proxy or load balancer fronts \
+             this listener (otherwise per-IP limits collapse onto the proxy IP)."
+        );
+    } else {
+        info!(
+            trusted_proxies = %cfg.trusted_proxies,
+            "trusting X-Forwarded-For / X-Real-IP from configured proxy ranges"
+        );
+    }
+    let rl_core = RateLimitCore::with_trusted_proxies(
+        cfg.rate_limit,
+        cfg.rate_burst,
+        cfg.rate_stale_after,
+        trusted_proxies,
+    );
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
     let auth = AuthLayer::from_core(auth_core.clone());

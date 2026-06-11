@@ -27,9 +27,15 @@ service DarkPoolService {
     };
   }
 
-  rpc GetOrderBook(GetOrderBookRequest) returns (GetOrderBookResponse) {
+  // Lists the authenticated caller's own resting orders ("my orders").
+  // Scoped to the wallet identity; a trader never sees another trader's
+  // orders. There is deliberately no public pre-settlement order book —
+  // serving live cross-trader depth would defeat the dark pool (an
+  // observer could reconstruct incoming liquidity and cross it in the
+  // same auction round).
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse) {
     option (google.api.http) = {
-      get: "/v1/orderbook"
+      get: "/v1/orders"
     };
   }
 
@@ -83,11 +89,22 @@ service DarkPoolAdminService {
 // --- Place Order ---
 
 // PlaceOrderRequest carries only the encrypt-only trio. The engine never
-// sees plaintext on the wire; the operator decrypts server-side and the
-// commitment binds the ciphertext to the proof.
+// sees plaintext on the wire; the operator decrypts server-side.
+//
+// NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
+// verified today. The engine ignores the client commitment and re-derives
+// the canonical Poseidon commitment over the decrypted fields; the proof is
+// accepted unverified. Order validity is operator-enforced, not
+// proof-enforced. A verified per-order proof is deferred to ADR 0001 /
+// issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
+//
+// Both fields are still SYNTACTICALLY required: `validate_place_order`
+// rejects an empty `commitment` or `proof`. Until real verification lands,
+// clients must keep sending non-empty bytes for both (placeholder bytes are
+// fine — they are not checked, only their presence is).
 message PlaceOrderRequest {
-  bytes commitment        = 1; // binds proof to ciphertext
-  bytes proof             = 2; // aggregated or per-order ZK proof
+  bytes commitment        = 1; // client commitment; re-derived & overridden server-side (unverified)
+  bytes proof             = 2; // per-order ZK proof; ACCEPTED UNVERIFIED (see note)
   bytes encrypted_payload = 3; // opaque ciphertext to operator pubkey
 }
 
@@ -114,22 +131,14 @@ message GetOrderResponse {
   OrderInfo order = 1;
 }
 
-// --- Order Book ---
+// --- List Orders (caller-scoped "my orders") ---
 
-message GetOrderBookRequest {
-  string pair = 1;
+message ListOrdersRequest {
+  string pair = 1;  // optional filter; empty = every pair
 }
 
-message GetOrderBookResponse {
-  string pair = 1;
-  repeated PriceLevel bids = 2;
-  repeated PriceLevel asks = 3;
-}
-
-message PriceLevel {
-  string price = 1;
-  string total_size = 2;
-  int32 order_count = 3;
+message ListOrdersResponse {
+  repeated OrderInfo orders = 1;
 }
 
 // --- Auction History ---

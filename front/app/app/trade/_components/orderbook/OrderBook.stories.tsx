@@ -10,7 +10,6 @@ import { createFactoryContext, mockAuctionSummary, mockOrderBook } from '@/lib/s
 import {
   CancelOrderResponseSchema,
   GetAuctionHistoryResponseSchema,
-  GetOrderBookResponseSchema,
   GetOrderResponseSchema,
   OrderInfoSchema,
   PlaceOrderResponseSchema,
@@ -46,7 +45,7 @@ interface ClientOverrides {
 function buildClient(overrides: ClientOverrides = {}): DarkPoolClient {
   const ctx = createFactoryContext({ seed: overrides.seed ?? 7 })
   const book = overrides.bookEmpty
-    ? create(GetOrderBookResponseSchema, { pair: ctx.pair, bids: [], asks: [] })
+    ? { pair: ctx.pair, bids: [], asks: [] }
     : mockOrderBook(ctx, { depth: 12 })
   const auctions = overrides.noAuctions
     ? []

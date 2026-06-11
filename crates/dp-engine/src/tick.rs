@@ -34,13 +34,41 @@ pub(crate) struct PendingAggregation {
     /// for a fully-consumed order it disappears from the book, so we
     /// cannot rely on `book.find_order` later when building the witness.
     pub orders: HashMap<Uuid, Order>,
+    /// Ids of every order live in the book when this auction ran — the round's
+    /// admitted set (#157). Captured under the state lock; the async proof path
+    /// resolves these to commitment leaves (via the secrets lock) to build the
+    /// admitted-set Merkle root that membership is proven against.
+    pub admitted_order_ids: Vec<Uuid>,
     pub auction_at: chrono::DateTime<Utc>,
+}
+
+/// Returns `Err` if the auction's clearing price cannot be encoded as a BN254
+/// scalar. The downstream witness build / IVC fold encodes the clearing price
+/// via `dp_zk::decimal_to_scalar`; if that fails *after* the round's
+/// `AuctionExecuted`/`OrderMatched` events are persisted and applied, the
+/// engine has recorded matches that can never settle on-chain. Order
+/// legs are already encode-checked when their commitment is built at
+/// submission, so the clearing price is the one value this gate must guard.
+fn clearing_price_encodable(
+    result: &dp_auction::AuctionResult,
+) -> Result<(), dp_zk::EncodingError> {
+    dp_zk::decimal_to_scalar(result.clearing_price).map(|_| ())
 }
 
 impl Engine {
     #[tracing::instrument(name = "dp_engine.auction_tick", skip(self))]
     pub async fn run_auction_tick(&self) -> Vec<AuctionNotification> {
         let (notifications, pending, aggregator) = self.tick_under_lock();
+
+        // Broadcast the auction summaries before the ZK fold/finalize loop and
+        // on-chain submission below. Matching and the clearing price are fully
+        // settled once `tick_under_lock` returns; proving and settlement are
+        // downstream concerns a subscriber must not wait on. Folding a batch
+        // can take tens of seconds, so sending here keeps `StreamAuctions`
+        // latency bounded by the matching step rather than the proof pipeline.
+        for n in &notifications {
+            let _ = self.inner.subscribers.send(n.clone());
+        }
 
         let mut batches_to_submit = Vec::with_capacity(pending.len());
 
@@ -60,11 +88,16 @@ impl Engine {
 
             let match_prices: Vec<_> = p.matches.iter().map(|m| m.price).collect();
             let match_sizes: Vec<_> = p.matches.iter().map(|m| m.size).collect();
-            let ext = match dp_zk::step_circuit::AuctionExternalInputs::from_witness(
+            // Resolve the round's admitted set (#157) to commitment leaves off
+            // the state lock, then bind every settled leg's membership against
+            // the resulting root.
+            let admitted = self.admitted_commitments(&p.admitted_order_ids);
+            let ext = match dp_zk::step_circuit::AuctionExternalInputs::from_witness_with_admitted(
                 &witness,
                 &match_prices,
                 &match_sizes,
                 self.inner.batch_size,
+                &admitted,
             ) {
                 Ok(e) => e,
                 Err(e) => {
@@ -75,6 +108,9 @@ impl Engine {
                     continue;
                 }
             };
+            // Capture the admitted-set root before `ext` is moved into the
+            // fold; published in BatchFolded so a watcher can recompute it.
+            let input_root = dp_zk::fr_to_bytes32(ext.admitted_root).to_vec();
 
             if let Err(e) = aggregator.fold_step(p.pair.clone(), ext).await {
                 tracing::warn!(
@@ -101,6 +137,7 @@ impl Engine {
                     batch_id: p.batch_id,
                     round_index,
                     pair: p.pair.clone(),
+                    input_root: input_root.clone(),
                 },
             }]) {
                 tracing::warn!(
@@ -184,10 +221,6 @@ impl Engine {
 
                 batches_to_submit.push(p.batch_id);
             }
-        }
-
-        for n in &notifications {
-            let _ = self.inner.subscribers.send(n.clone());
         }
 
         let mut submit_set: HashSet<Uuid> = HashSet::with_capacity(batches_to_submit.len());
@@ -278,6 +311,13 @@ impl Engine {
             let bids: Vec<_> = state.book.bids(&pair);
             let asks: Vec<_> = state.book.asks(&pair);
 
+            // The admitted set for this round (#157): every order live in the
+            // book right now, before this tick's fills are applied. Snapshot
+            // the ids here under the state lock; commitments are resolved later
+            // off the lock (secrets→state ordering, see prune_dead_secrets).
+            let admitted_order_ids: Vec<Uuid> =
+                bids.iter().chain(asks.iter()).map(|o| o.id).collect();
+
             let auction_id = Uuid::new_v4();
             let auction_start = Instant::now();
             let result = match dp_auction::run(auction_id, &pair, &bids, &asks) {
@@ -285,6 +325,26 @@ impl Engine {
                 None => continue,
             };
             let auction_elapsed = auction_start.elapsed();
+
+            // Never record a match the engine cannot settle. The
+            // clearing price is the only auction output not already
+            // encode-validated upstream — order prices and sizes are checked
+            // when their Poseidon commitment is built at submission, but the
+            // midpoint is derived here and can carry sub-tick precision.
+            // `dp_auction` quantises it to 8 dp; this gate is the invariant
+            // that guarantees no unsettleable `AuctionExecuted`/`OrderMatched`
+            // event is ever persisted, even if that quantisation regresses.
+            // On failure, skip the round without persisting or applying any
+            // events — the orders stay live and are retried next tick.
+            if let Err(e) = clearing_price_encodable(&result) {
+                tracing::error!(
+                    auction_id = %result.auction_id,
+                    pair = %pair,
+                    clearing_price = %result.clearing_price,
+                    "clearing price not ZK-encodable; skipping round without recording matches: {e}"
+                );
+                continue;
+            }
 
             let mut events: Vec<Event> = Vec::with_capacity(1 + result.matches.len());
             events.push(Event {
@@ -367,6 +427,7 @@ impl Engine {
                     .map(|m| order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size))
                     .collect(),
                 orders: order_snapshot,
+                admitted_order_ids,
                 auction_at: now,
             });
         }
@@ -423,6 +484,7 @@ mod tests {
             encrypted_payload: Vec::new(),
             submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::seconds(60),
+            seq: 0,
         }
     }
 
@@ -447,6 +509,7 @@ mod tests {
                 price: Decimal::ONE,
                 size: Decimal::ONE,
             }],
+            admitted_order_ids: orders.keys().copied().collect(),
             orders,
             auction_at: Utc::now(),
         }
@@ -455,6 +518,52 @@ mod tests {
     fn fresh_engine() -> Engine {
         let store = Arc::new(MemStore::new());
         Engine::new(store, Duration::from_millis(50))
+    }
+
+    fn auction_result_with_price(clearing_price: Decimal) -> dp_auction::AuctionResult {
+        dp_auction::AuctionResult {
+            auction_id: Uuid::new_v4(),
+            pair: "ETH/USDC".into(),
+            clearing_price,
+            matched_volume: Decimal::ONE,
+            matches: Vec::new(),
+        }
+    }
+
+    /// The gate must reject a clearing price the ZK encoder cannot
+    /// represent (here, 9 dp) and accept an 8-dp one — so event persistence is
+    /// blocked for exactly the unsettleable case.
+    #[test]
+    fn clearing_price_gate_rejects_excess_precision() {
+        let bad = auction_result_with_price(Decimal::new(15, 9)); // 0.000000015
+        assert!(
+            clearing_price_encodable(&bad).is_err(),
+            "9 dp clearing price must be rejected"
+        );
+
+        let good = auction_result_with_price(Decimal::new(2, 8)); // 0.00000002
+        assert!(
+            clearing_price_encodable(&good).is_ok(),
+            "8 dp clearing price must be accepted"
+        );
+    }
+
+    /// `dp_auction` quantises the clearing price to
+    /// `CLEARING_PRICE_DP` dp, and the gate above accepts up to
+    /// `dp_zk::encoding::DECIMAL_SCALE` dp. The coupling is otherwise only a
+    /// doc-comment. If the two diverge — e.g. the encoder scale drops to 6
+    /// while quantisation stays at 8 — every cross at the extra precision is
+    /// quantised to a price the gate then rejects, silently halting trading
+    /// for those prices. This crate is the only one depending on both, so the
+    /// equality is asserted here.
+    #[test]
+    fn quantize_precision_matches_zk_encoder_scale() {
+        assert_eq!(
+            dp_auction::CLEARING_PRICE_DP,
+            dp_zk::encoding::DECIMAL_SCALE,
+            "auction quantisation precision must match the ZK encoder scale; \
+             drift halts settlement for prices between the two"
+        );
     }
 
     #[test]
@@ -615,8 +724,8 @@ mod ivc_tests {
                 use ark_ff::Zero;
                 Ok(dp_zk::folding::FinalProof {
                     proof_bytes: vec![0u8; 32],
-                    z_0: [Fr::zero(); 3],
-                    z_n: [Fr::zero(); 3],
+                    z_0: [Fr::zero(); 5],
+                    z_n: [Fr::zero(); 5],
                     n_steps: 1,
                     policy_hash: Fr::zero(),
                 })
@@ -718,5 +827,72 @@ mod ivc_tests {
         // Just verify construction + setter do not panic.
         assert_eq!(agg.fold_calls(), 0);
         assert_eq!(agg.finalize_calls(), 0);
+    }
+
+    /// A cross whose midpoint clearing price would carry
+    /// 9 dp (best bid 0.00000002, best ask 0.00000001 → midpoint 0.000000015)
+    /// must record the match *and* fold it. Before the fix the 9-dp price
+    /// failed `decimal_to_scalar`, so the fold was skipped *after* the
+    /// `OrderMatched` events were already persisted — a recorded fill that
+    /// never settled. The clearing price is now quantised to 8 dp, so the fold
+    /// runs.
+    #[tokio::test]
+    async fn fractional_midpoint_match_is_recorded_and_folds() {
+        use dp_event::Store;
+        use dp_types::EventType;
+
+        let (engine, store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        // Stay well below the finalize/submit boundary for this test.
+        engine.set_finalize_every(1000);
+
+        let ttl = Duration::from_secs(60);
+        place_plaintext_order(
+            &engine,
+            "ETH/USDC",
+            Side::Buy,
+            Decimal::new(2, 8), // 0.00000002
+            Decimal::ONE,
+            "key_bid",
+            ttl,
+        )
+        .await
+        .unwrap();
+        place_plaintext_order(
+            &engine,
+            "ETH/USDC",
+            Side::Sell,
+            Decimal::new(1, 8), // 0.00000001
+            Decimal::ONE,
+            "key_ask",
+            ttl,
+        )
+        .await
+        .unwrap();
+
+        engine.run_auction_tick().await;
+
+        let events = store.read_from(0, 10_000).unwrap();
+        let executed = events
+            .iter()
+            .filter(|e| e.event_type == EventType::AuctionExecuted)
+            .count();
+        let matched = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrderMatched)
+            .count();
+
+        assert_eq!(executed, 1, "auction must be recorded");
+        assert_eq!(matched, 1, "the fill must be recorded");
+        // The fold ran — i.e. the (quantised) clearing price encoded. Pre-fix
+        // this stayed 0 because `from_witness_with_admitted` rejected the
+        // 9-dp price after the matches had already been persisted.
+        assert_eq!(agg.fold_calls(), 1, "encodable clearing price must fold");
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "both orders fully filled and removed from the book"
+        );
     }
 }

@@ -95,7 +95,7 @@ flowchart TB
 4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (bincode-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
 5. Matched pairs are handed to a pluggable `ProofAggregator` (subprocess / FFI / RPC), then submitted on-chain via a pluggable `Submitter`. The Solidity verifier checks the aggregated proof and transfers tokens atomically.
 
-> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` exists in `dp-settlement`, but bootstrap glue from `--eth-rpc` to a live submitter is not yet wired in `darkpool-server`; setting the flag today logs a warning and runs with the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; circuits and on-chain wiring need their final integrations before mainnet.
+> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` in `dp-settlement` is wired into `darkpool-server`: setting `--eth-rpc` together with `--signer-key-uri` (and `--contract-addr`) builds a live on-chain submitter, while `--eth-rpc` without a signer logs a warning and falls back to the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; the Groth16 settlement path is live, but the HyperNova decider verifier is still a stub and its trusted setup is pending before mainnet.
 
 ---
 
@@ -107,7 +107,7 @@ flowchart TB
 - Clearing price computed as the price that maximizes matched volume.
 - Partial fills are supported. Residual quantity carries over to the next auction round.
 - Orders expire after a configurable TTL (default: 10 min).
-- Orders from the same commitment key cannot match each other.
+- Orders from the same trader cannot match each other.
 - Minimum order size is enforced at the circuit level, not in the engine.
 
 ### Settlement
@@ -193,9 +193,12 @@ cargo run   --release --bin darkpool-server
 --operator-key /etc/darkpool/op.key  # ECIES private key (single-key mode)
 --operator-key-uris file:/etc/dp/active.hex@active,age:/etc/dp/old.age@sunset
                                  # multi-key rotation mode (issue #28)
+--snapshot-key-uri file:/etc/dp/snapshot.hex
+                                 # dedicated key encrypting state snapshots at rest (issue #203);
+                                 # required when --snapshot-dir or a postgres store is used
 --signer-key-uri file:/etc/dp/eth.hex   # independent Ethereum signer URI
 --aggregator-bin /usr/local/bin/dp-aggregate  # proof aggregator subprocess (omit → noop)
---eth-rpc wss://...              # settlement RPC (currently warns; submitter wiring deferred)
+--eth-rpc https://...            # settlement RPC (with --signer-key-uri + --contract-addr → on-chain)
 --api-keys k1,k2                 # comma-separated API keys (omit → no auth)
 --rate-limit 100  --rate-burst 20  --rate-stale-after 5m
 ```
@@ -205,6 +208,9 @@ cargo run   --release --bin darkpool-server
 - [Operator key rotation](docs/operations/key-rotation.md) — runbook for
   generating, publishing, registering, draining, and deleting an
   ECIES key without restarting the operator.
+- [Snapshot encryption at rest](docs/adr/0006-snapshot-encryption-at-rest.md)
+  — why state snapshots are AEAD-sealed under a dedicated key, and how to
+  provision `--snapshot-key-uri`.
 
 ## Project structure
 
