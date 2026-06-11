@@ -2,6 +2,14 @@
 pragma solidity ^0.8.24;
 
 interface IDarkPool {
+    /// @notice One settled match. The #209 settlement binding folds only
+    ///         `bidTrader`, `askTrader`, `price`, and `size` into the proof's
+    ///         hash-chain; `bidOrderId`/`askOrderId` ride along for off-chain
+    ///         correlation and are NOT bound. Two matches with identical
+    ///         settlement legs but different order ids are thus interchangeable
+    ///         to the binding — benign, because the on-chain effect (who is
+    ///         debited/credited, and how much) is fully determined by the four
+    ///         bound fields.
     struct Match {
         bytes32 bidOrderId;
         bytes32 askOrderId;
