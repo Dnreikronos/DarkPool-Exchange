@@ -27,47 +27,19 @@ contract DeployTest is Test {
     }
 
     // forge runs a contract's test functions in parallel and vm.setEnv mutates
-    // process-global state, so two tests that set IVC_VERIFIER_ADDRESS to
-    // different values would race. These tests avoid that: only
-    // test_ivc_offAllowlistRequiresRealVerifier touches that env (reading it
-    // sequentially within itself), the allowlist tests never read it (the script
-    // auto-wires the stub before consulting the env), and every test that writes
-    // a deployment file uses a distinct chainid so the deployments/<id>.json
-    // paths never collide.
-
-    // The deploy must not leave DarkPool — which escrows every trader's funds —
-    // owned by the deploying EOA. On mainnet it refuses the silent fallback;
-    // given a DARKPOOL_OWNER it hands the pool over (Ownable2Step, so ownership
-    // is pending until the timelock/multisig accepts). Run here on an allowlisted
-    // local chain, which also confirms the stub is auto-wired and the IVC path
-    // armed for local end-to-end work.
-    function test_darkPoolOwnershipHandoff() public {
-        // Mainnet without DARKPOOL_OWNER is refused. VERIFIER_GOVERNOR is set
-        // so we get past its (earlier) guard and reach the new requirement.
-        vm.setEnv("VERIFIER_GOVERNOR", vm.toString(governor));
-        vm.chainId(1);
-        DeployScript mainnetDeploy = new DeployScript();
-        vm.expectRevert(bytes("DARKPOOL_OWNER must be set on mainnet"));
-        mainnetDeploy.run();
-
-        // With an owner set, deploy on the allowlisted local devnet (1337, not
-        // the committed 31337.json) and confirm the pool is handed over.
-        vm.setEnv("DARKPOOL_OWNER", vm.toString(darkPoolOwner));
-        vm.chainId(1337);
-        DeployScript deploy = new DeployScript();
-        deploy.run();
-
-        DarkPool pool = DarkPool(_deployedPool());
-        assertEq(pool.pendingOwner(), darkPoolOwner, "owner transfer not queued");
-        assertEq(pool.owner(), deployer, "owner should change only on acceptOwnership");
-        assertTrue(pool.ivcEnabled(), "local allowlist deploy should arm the IVC stub");
-
-        vm.removeFile(_deploymentPath());
-    }
+    // process-global state, so two tests that set the same governance env var
+    // (VERIFIER_GOVERNOR, DARKPOOL_OWNER, IVC_VERIFIER_ADDRESS) to different
+    // values — or one needing it set while another needs it absent — would race.
+    // test_deployGuardsAndOwnershipHandoff is the sole reader/writer of those
+    // three vars and walks every case sequentially within itself. The Sepolia
+    // test touches none of them (dev/test chain: governor/owner fall back and
+    // the stub is auto-wired) and asserts only ivcEnabled, so it stays
+    // standalone and race-free. Each test that writes a deployment file uses a
+    // distinct chainid so the deployments/<id>.json paths never collide.
 
     // Sepolia is on the dev/test allowlist, so the stub is auto-wired and the
-    // IVC path armed there too (covers the testnet allowlist member; the local
-    // member is covered by test_darkPoolOwnershipHandoff on 1337).
+    // IVC path armed. Asserts only ivcEnabled, which is independent of the
+    // governance env vars the comprehensive test mutates.
     function test_ivc_stubArmedOnSepolia() public {
         vm.chainId(11155111);
         DeployScript deploy = new DeployScript();
@@ -79,36 +51,57 @@ contract DeployTest is Test {
         vm.removeFile(_deploymentPath());
     }
 
-    // #210, the core guard: off the dev/test allowlist the all-accepting stub is
-    // never auto-wired. Without a real IVC_VERIFIER_ADDRESS the deploy reverts so
-    // the stub can't reach a real-money chain; with a real, code-bearing decider
-    // it wires that verifier but leaves the IVC path DISARMED for the owner to
-    // enable only after review. Both halves live in one test so this is the only
-    // function that mutates IVC_VERIFIER_ADDRESS (see the parallelism note above).
-    function test_ivc_offAllowlistRequiresRealVerifier() public {
-        // Base mainnet (8453): real money, not chainid 1. No verifier -> revert.
-        vm.setEnv("IVC_VERIFIER_ADDRESS", vm.toString(address(0)));
+    // #210 and its adjacent governance finding. On every chain off the dev/test
+    // allowlist — not just Ethereum L1 — the deploy must refuse to silently fall
+    // back to the deploying EOA for the verifier governor and pool owner, and
+    // must refuse to wire the all-accepting stub decider. Walked here in one
+    // function (the sole toucher of the three governance env vars, so it cannot
+    // race a parallel test). One DeployScript instance is reused so expectRevert
+    // only ever wraps run(), never a contract creation.
+    function test_deployGuardsAndOwnershipHandoff() public {
+        DeployScript deploy = new DeployScript();
+
+        // 1. Dev chain (legacy local 1337, not the committed 31337.json): no
+        // governance env set, so governor and owner fall back to the deployer
+        // (no transfer) and the stub is auto-wired and armed.
+        vm.chainId(1337);
+        deploy.run();
+        DarkPool devPool = DarkPool(_deployedPool());
+        assertEq(devPool.owner(), deployer, "dev chain should keep the deployer as owner");
+        assertEq(devPool.pendingOwner(), address(0), "dev chain should not queue a transfer");
+        assertTrue(devPool.ivcEnabled(), "dev chain should arm the IVC stub");
+        vm.removeFile(_deploymentPath());
+
+        // 2. Real chain (Base mainnet 8453) with no VERIFIER_GOVERNOR -> reject.
         vm.chainId(8453);
-        DeployScript blocked = new DeployScript();
+        vm.expectRevert(bytes("VERIFIER_GOVERNOR must be set on non-dev/test chains"));
+        deploy.run();
+
+        // 3. Governor set, but no DARKPOOL_OWNER -> reject.
+        vm.setEnv("VERIFIER_GOVERNOR", vm.toString(governor));
+        vm.expectRevert(bytes("DARKPOOL_OWNER must be set on non-dev/test chains"));
+        deploy.run();
+
+        // 4. Governor + owner set, but no real IVC verifier -> reject (the stub
+        // must never reach a real-money chain).
+        vm.setEnv("DARKPOOL_OWNER", vm.toString(darkPoolOwner));
         vm.expectRevert(
             bytes(
                 "IVC_VERIFIER_ADDRESS required off the dev/test allowlist; the stub decider must never settle real funds"
             )
         );
-        blocked.run();
-
-        // Optimism mainnet (10): a real, code-bearing decider is supplied. The
-        // deploy succeeds and wires it, but leaves the IVC path disarmed.
-        address realDecider = address(new HyperNovaDeciderVerifier());
-        vm.setEnv("IVC_VERIFIER_ADDRESS", vm.toString(realDecider));
-        vm.chainId(10);
-        DeployScript deploy = new DeployScript();
         deploy.run();
 
+        // 5. All three supplied: the deploy succeeds, queues the ownership
+        // handoff (Ownable2Step, pending until acceptOwnership), and leaves the
+        // IVC path disarmed for the owner to enable after review.
+        vm.setEnv("IVC_VERIFIER_ADDRESS", vm.toString(address(new HyperNovaDeciderVerifier())));
+        deploy.run();
         DarkPool pool = DarkPool(_deployedPool());
+        assertEq(pool.pendingOwner(), darkPoolOwner, "owner transfer not queued");
+        assertEq(pool.owner(), deployer, "owner should change only on acceptOwnership");
         assertFalse(pool.ivcEnabled(), "real-chain deploy must leave IVC disarmed");
         assertTrue(address(pool.ivcVerifier()) != address(0), "ivc verifier should be wired");
-
         vm.removeFile(_deploymentPath());
     }
 

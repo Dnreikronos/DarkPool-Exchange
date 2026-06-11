@@ -38,11 +38,12 @@ contract DeployScript is Script {
         // VERIFIER_GOVERNOR: address that can rotate the verifier backend.
         // In production this should be a TimelockController (or a multisig
         // fronting one); the default falls back to the deployer for local
-        // and CI deploys. On mainnet we refuse the silent fallback — a single
+        // and CI deploys. Off the dev/test allowlist — i.e. on every real
+        // chain, not just Ethereum L1 — we refuse the silent fallback: a single
         // EOA holding VK-rotation rights would be a governance footgun.
         require(
-            block.chainid != 1 || vm.envExists("VERIFIER_GOVERNOR"),
-            "VERIFIER_GOVERNOR must be set on mainnet"
+            _isDevTestChain(block.chainid) || vm.envExists("VERIFIER_GOVERNOR"),
+            "VERIFIER_GOVERNOR must be set on non-dev/test chains"
         );
         address governor = vm.envOr("VERIFIER_GOVERNOR", deployer);
 
@@ -51,12 +52,13 @@ contract DeployScript is Script {
         // verifier pointer, and pause on the contract that escrows every
         // trader's funds. In production this must be a TimelockController
         // (or a multisig fronting one); the default falls back to the
-        // deployer for local and CI deploys. On mainnet we refuse the
-        // silent fallback — leaving full protocol control on a single
-        // deploying EOA is the centralisation risk flagged in #166.
+        // deployer for local and CI deploys. Off the dev/test allowlist — i.e.
+        // on every real chain, not just Ethereum L1 — we refuse the silent
+        // fallback: leaving full protocol control on a single deploying EOA is
+        // the centralisation risk flagged in #166.
         require(
-            block.chainid != 1 || vm.envExists("DARKPOOL_OWNER"),
-            "DARKPOOL_OWNER must be set on mainnet"
+            _isDevTestChain(block.chainid) || vm.envExists("DARKPOOL_OWNER"),
+            "DARKPOOL_OWNER must be set on non-dev/test chains"
         );
         address darkPoolOwner = vm.envOr("DARKPOOL_OWNER", deployer);
 
@@ -69,9 +71,9 @@ contract DeployScript is Script {
         // HERE before vm.startBroadcast so a missing/invalid verifier aborts
         // with nothing deployed (the same fail-fast contract as the env checks
         // above) rather than reverting mid-broadcast.
-        bool stubChain = _stubAllowedOnChain(block.chainid);
+        bool devTestChain = _isDevTestChain(block.chainid);
         address realIvcVerifier;
-        if (!stubChain) {
+        if (!devTestChain) {
             // address(0) sentinel: an unset OR explicitly-zero env var both mean
             // "no real verifier provided", which is the reject case.
             realIvcVerifier = vm.envOr("IVC_VERIFIER_ADDRESS", address(0));
@@ -123,7 +125,7 @@ contract DeployScript is Script {
         // stub now and arm the path; off-allowlist use the pre-validated real
         // verifier and leave the path DISARMED until the owner reviews it.
         address ivcImpl;
-        if (stubChain) {
+        if (devTestChain) {
             HyperNovaDeciderVerifier hypernova = new HyperNovaDeciderVerifier();
             ivcImpl = address(hypernova);
             console.log("HyperNovaDeciderVerifier (STUB - dev/test only):", ivcImpl);
@@ -135,7 +137,7 @@ contract DeployScript is Script {
         // proxy.setIvcVerifier(newImpl) - no DarkPool redeployment.
         proxy.setIvcVerifier(ivcImpl);
         pool.setIvcVerifier(address(proxy));
-        if (stubChain) {
+        if (devTestChain) {
             pool.setIvcEnabled(true);
             console.log("IVC settlement path armed (dev/test stub)");
         } else {
@@ -171,12 +173,15 @@ contract DeployScript is Script {
         vm.stopBroadcast();
     }
 
-    /// @dev Chains where the all-accepting stub decider may be auto-wired and
-    ///      the IVC settlement path armed: local dev (Anvil 31337, legacy 1337)
-    ///      and the Sepolia testnet (11155111). Every other chain - including
-    ///      every L2/L1 mainnet - must instead supply a real decider via
+    /// @dev Dev/test chains, where production hardening is deliberately relaxed:
+    ///      local dev (Anvil 31337, legacy 1337) and the Sepolia testnet
+    ///      (11155111). On these the deploy may fall back to the deployer EOA
+    ///      for the verifier governor and the pool owner, and may auto-wire and
+    ///      arm the all-accepting stub decider. Every other chain - including
+    ///      every L2/L1 mainnet - must instead supply an explicit
+    ///      VERIFIER_GOVERNOR, DARKPOOL_OWNER, and a real decider via
     ///      IVC_VERIFIER_ADDRESS (#210).
-    function _stubAllowedOnChain(uint256 chainId) internal pure returns (bool) {
+    function _isDevTestChain(uint256 chainId) internal pure returns (bool) {
         return chainId == 31337 || chainId == 1337 || chainId == 11155111;
     }
 
