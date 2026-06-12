@@ -7,7 +7,12 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory
-  readonly prove_order_wasm: (a: number, b: number, c: number, d: number) => [number, number, number]
+  readonly prove_order_wasm: (
+    a: number,
+    b: number,
+    c: number,
+    d: number
+  ) => [number, number, number]
   readonly __wbindgen_exn_store: (a: number) => void
   readonly __externref_table_alloc: () => number
   readonly __wbindgen_externrefs: WebAssembly.Table
