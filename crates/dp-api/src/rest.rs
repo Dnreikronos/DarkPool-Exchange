@@ -1169,6 +1169,8 @@ mod tests {
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_ACTIVE");
+        assert_eq!(json.base_decimals, None);
+        assert_eq!(json.quote_decimals, None);
     }
 
     #[test]
@@ -1187,6 +1189,8 @@ mod tests {
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_SUSPENDED");
         assert_eq!(json.auction_interval_ms, Some(5000));
+        assert_eq!(json.base_decimals, Some(18));
+        assert_eq!(json.quote_decimals, Some(6));
     }
 
     #[test]
