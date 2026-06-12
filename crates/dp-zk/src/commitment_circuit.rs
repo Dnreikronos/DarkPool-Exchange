@@ -275,8 +275,8 @@ pub fn verify_proof_with_vk(
 /// Verify a proof against a verifying key supplied as bytes.
 ///
 /// SECURITY: the caller is responsible for the provenance of `vk_bytes`. If
-/// the bytes came from the prover, the result is meaningless (see
-/// [`setup_and_prove`]). Pass the canonical VK only. The engine uses
+/// the bytes came from the prover, the result is meaningless (see the
+/// fixtures-only `setup_and_prove`). Pass the canonical VK only. The engine uses
 /// [`verify_proof_with_vk`] with a VK it loaded at boot.
 pub fn verify_proof(
     vk_bytes: &[u8],
