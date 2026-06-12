@@ -61,6 +61,10 @@ fn compute_commitment_native(circuit: &CommitmentPreimageCircuit) -> Fr {
     commit_native(&input)
 }
 
+/// Output of the demo-only [`setup_and_prove`]: bundles a prover-chosen
+/// verifying key alongside the proof. Compiled only under the `fixtures`
+/// feature (issue #212); the sound path ([`prove_with_key`]) emits no VK.
+#[cfg(feature = "fixtures")]
 pub struct SingleOrderProof {
     pub commitment: Fr,
     pub proof_bytes: Vec<u8>,
@@ -219,6 +223,10 @@ pub fn deserialize_pk(pk_bytes: &[u8]) -> Result<ark_groth16::ProvingKey<Bn254>,
 /// where there is no canonical VK to verify against. Soundness at ingestion
 /// comes from [`generate_keys`] (run once) + [`prove_with_key`] +
 /// [`verify_proof_with_vk`] (against the pinned canonical VK).
+///
+/// Compiled only under the `fixtures` feature (issue #212): the unsound,
+/// prover-chosen-VK path must never link into a production build.
+#[cfg(feature = "fixtures")]
 pub fn setup_and_prove<R: RngCore + CryptoRng>(
     circuit: &CommitmentPreimageCircuit,
     rng: &mut R,
@@ -267,8 +275,8 @@ pub fn verify_proof_with_vk(
 /// Verify a proof against a verifying key supplied as bytes.
 ///
 /// SECURITY: the caller is responsible for the provenance of `vk_bytes`. If
-/// the bytes came from the prover, the result is meaningless (see
-/// [`setup_and_prove`]). Pass the canonical VK only. The engine uses
+/// the bytes came from the prover, the result is meaningless (see the
+/// fixtures-only `setup_and_prove`). Pass the canonical VK only. The engine uses
 /// [`verify_proof_with_vk`] with a VK it loaded at boot.
 pub fn verify_proof(
     vk_bytes: &[u8],
@@ -305,6 +313,8 @@ mod tests {
         }
     }
 
+    // Demo path (prover-chosen VK): fixtures-only since issue #212.
+    #[cfg(feature = "fixtures")]
     #[test]
     fn proof_verifies() {
         let circuit = sample_circuit();
@@ -313,6 +323,7 @@ mod tests {
         assert!(verify_proof(&result.vk_bytes, &result.proof_bytes, result.commitment).unwrap());
     }
 
+    #[cfg(feature = "fixtures")]
     #[test]
     fn proof_rejects_wrong_commitment() {
         let circuit = sample_circuit();
@@ -322,6 +333,7 @@ mod tests {
         assert!(!verify_proof(&result.vk_bytes, &result.proof_bytes, wrong_commitment).unwrap());
     }
 
+    #[cfg(feature = "fixtures")]
     #[test]
     fn deterministic_with_same_rng_seed() {
         let circuit = sample_circuit();
@@ -351,35 +363,31 @@ mod tests {
         assert!(!verify_proof_with_vk(&vk, &proof_bytes, commitment + Fr::one()).unwrap());
     }
 
-    /// SOUNDNESS REGRESSION (issue #158): a proof produced under one VK must
-    /// NOT verify against a different, canonical VK. The old per-proof-setup
-    /// path let a prover ship its own VK; pinning a canonical VK closes that
-    /// hole. A proof minted under `setup_and_prove`'s prover-chosen VK is
-    /// rejected by an independently generated canonical VK.
+    /// SOUNDNESS REGRESSION (issues #158, #212): a proof minted under one
+    /// (proving, verifying) key pair must NOT verify against a *different*
+    /// canonical verifying key. This is the exact hole the old per-proof
+    /// `setup_and_prove` opened by letting a prover ship a self-chosen VK.
+    /// We stand in for that attacker with a second, independently generated
+    /// canonical keypair — no demo helper needed, so the regression runs in
+    /// the default feature set.
     #[test]
     fn proof_under_foreign_vk_rejected_by_canonical_vk() {
         let circuit = sample_circuit();
 
-        // Prover-chosen keys (the attack surface): VK travels with the proof.
-        let mut prover_rng = StdRng::from_seed([7u8; 32]);
-        let attacker = setup_and_prove(&circuit, &mut prover_rng).unwrap();
+        // "Attacker" keypair: an independent setup the prover fully controls.
+        let mut attacker_rng = StdRng::from_seed([7u8; 32]);
+        let (attacker_pk, attacker_vk) = generate_keys(&mut attacker_rng).unwrap();
+        let (commitment, proof_bytes) =
+            prove_with_key(&attacker_pk, &circuit, &mut attacker_rng).unwrap();
 
-        // Canonical keys: generated once by the operator with different RNG.
+        // Operator's canonical keypair: generated once, with a different RNG.
         let mut canonical_rng = StdRng::from_seed([99u8; 32]);
         let (_pk, canonical_vk) = generate_keys(&mut canonical_rng).unwrap();
 
-        // The attacker's proof verifies under its own VK (that's the trap)...
-        assert!(verify_proof(
-            &attacker.vk_bytes,
-            &attacker.proof_bytes,
-            attacker.commitment
-        )
-        .unwrap());
+        // The proof verifies under the attacker's own VK (that's the trap)...
+        assert!(verify_proof_with_vk(&attacker_vk, &proof_bytes, commitment).unwrap());
         // ...but is rejected by the pinned canonical VK.
-        assert!(
-            !verify_proof_with_vk(&canonical_vk, &attacker.proof_bytes, attacker.commitment)
-                .unwrap()
-        );
+        assert!(!verify_proof_with_vk(&canonical_vk, &proof_bytes, commitment).unwrap());
     }
 
     #[test]

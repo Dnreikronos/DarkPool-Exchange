@@ -6,6 +6,9 @@ edition = "2021"
 [features]
 default = ["ivc"]
 ivc = ["dep:ark-grumpkin", "dep:folding-schemes", "dep:uuid"]
+# Demo/fixture-only helpers: per-proof setup that emits a prover-chosen VK.
+# Never enabled by production library or WASM builds (issue #212).
+fixtures = []
 
 [dependencies]
 ark-ff = { workspace = true, features = ["std"] }

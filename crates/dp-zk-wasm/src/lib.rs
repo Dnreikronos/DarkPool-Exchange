@@ -2,7 +2,7 @@ use ark_bn254::Fr;
 use ark_serialize::{CanonicalSerialize, Compress};
 use serde::Deserialize;
 
-use dp_zk::commitment_circuit::{setup_and_prove, CommitmentPreimageCircuit};
+use dp_zk::commitment_circuit::{deserialize_pk, prove_with_key, CommitmentPreimageCircuit};
 use dp_zk::encoding::decimal_to_scalar;
 use dp_zk::pedersen::{bytes_to_scalar, derive_trader_id};
 
@@ -15,7 +15,14 @@ struct WitnessInput {
     salt_hex: String,
 }
 
-pub fn prove_order(witness_json: &str) -> Result<ProveResult, String> {
+/// Prove knowledge of an order's commitment preimage against the canonical
+/// proving key supplied by the caller.
+///
+/// `pk_bytes` is the versioned proving-key blob from the trusted-setup
+/// ceremony (`dp-zk-cli setup-commitment-circuit`). The prover never runs
+/// setup and never returns a verifying key: the verifier pins the canonical VK
+/// from the same ceremony (issue #212). Output is `(proof, commitment)` only.
+pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, String> {
     let w: WitnessInput =
         serde_json::from_str(witness_json).map_err(|e| format!("invalid witness JSON: {e}"))?;
 
@@ -45,18 +52,21 @@ pub fn prove_order(witness_json: &str) -> Result<ProveResult, String> {
         salt,
     };
 
+    // Input is validated above before the (large) key is deserialized, so a
+    // malformed witness fails fast without paying for key decode.
+    let pk = deserialize_pk(pk_bytes).map_err(|e| format!("deserialize proving key: {e}"))?;
+
     let mut rng = rand::rngs::OsRng;
-    let result = setup_and_prove(&circuit, &mut rng).map_err(|e| format!("prove: {e}"))?;
+    let (commitment, proof_bytes) =
+        prove_with_key(&pk, &circuit, &mut rng).map_err(|e| format!("prove: {e}"))?;
 
     let mut commitment_bytes = Vec::new();
-    result
-        .commitment
+    commitment
         .serialize_with_mode(&mut commitment_bytes, Compress::Yes)
         .map_err(|e| format!("serialize commitment: {e}"))?;
 
     Ok(ProveResult {
-        proof: result.proof_bytes,
-        vk: result.vk_bytes,
+        proof: proof_bytes,
         commitment: commitment_bytes,
     })
 }
@@ -64,7 +74,6 @@ pub fn prove_order(witness_json: &str) -> Result<ProveResult, String> {
 #[derive(Debug)]
 pub struct ProveResult {
     pub proof: Vec<u8>,
-    pub vk: Vec<u8>,
     pub commitment: Vec<u8>,
 }
 
@@ -72,22 +81,25 @@ pub struct ProveResult {
 mod wasm_bindings {
     use wasm_bindgen::prelude::*;
 
+    /// `pk_bytes` is the canonical proving-key blob, loaded by the caller from
+    /// the ceremony asset. Returns `[proof_len(4) | commitment_len(4) | proof |
+    /// commitment]` — no verifying key crosses the boundary (issue #212).
     #[wasm_bindgen]
-    pub fn prove_order_wasm(witness_json: &str) -> Result<js_sys::Uint8Array, JsError> {
-        let result = super::prove_order(witness_json).map_err(|e| JsError::new(&e))?;
+    pub fn prove_order_wasm(
+        witness_json: &str,
+        pk_bytes: &[u8],
+    ) -> Result<js_sys::Uint8Array, JsError> {
+        let result = super::prove_order(witness_json, pk_bytes).map_err(|e| JsError::new(&e))?;
 
         let proof_len = result.proof.len() as u32;
-        let vk_len = result.vk.len() as u32;
         let commitment_len = result.commitment.len() as u32;
 
-        // Wire format: [proof_len(4) | vk_len(4) | commitment_len(4) | proof | vk | commitment]
-        let total = 12 + proof_len + vk_len + commitment_len;
+        // Wire format: [proof_len(4) | commitment_len(4) | proof | commitment]
+        let total = 8 + proof_len + commitment_len;
         let mut buf = Vec::with_capacity(total as usize);
         buf.extend_from_slice(&proof_len.to_le_bytes());
-        buf.extend_from_slice(&vk_len.to_le_bytes());
         buf.extend_from_slice(&commitment_len.to_le_bytes());
         buf.extend_from_slice(&result.proof);
-        buf.extend_from_slice(&result.vk);
         buf.extend_from_slice(&result.commitment);
 
         Ok(js_sys::Uint8Array::from(&buf[..]))
@@ -97,8 +109,17 @@ mod wasm_bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dp_zk::commitment_circuit::verify_proof;
+    use ark_std::rand::SeedableRng;
+    use dp_zk::commitment_circuit::{generate_keys, serialize_pk, serialize_vk, verify_proof};
     use dp_zk::pedersen::{commit_native, OrderCommitmentInput};
+
+    /// Canonical (pk, vk) blobs from a one-time setup, mirroring what the
+    /// ceremony CLI emits: the prover takes the pk, the verifier pins the vk.
+    fn canonical_keys() -> (Vec<u8>, Vec<u8>) {
+        let mut rng = ark_std::rand::rngs::StdRng::from_seed([7u8; 32]);
+        let (pk, vk) = generate_keys(&mut rng).unwrap();
+        (serialize_pk(&pk).unwrap(), serialize_vk(&vk).unwrap())
+    }
 
     fn sample_witness_json() -> String {
         serde_json::json!({
@@ -113,11 +134,12 @@ mod tests {
 
     #[test]
     fn prove_and_verify_round_trip() {
-        let result = prove_order(&sample_witness_json()).unwrap();
+        let (pk_bytes, vk_bytes) = canonical_keys();
+        let result = prove_order(&sample_witness_json(), &pk_bytes).unwrap();
 
-        let commitment =
+        let commitment_size =
             <Fr as CanonicalSerialize>::serialized_size(&Fr::from(0u64), Compress::Yes);
-        assert_eq!(result.commitment.len(), commitment);
+        assert_eq!(result.commitment.len(), commitment_size);
 
         let c: Fr = ark_serialize::CanonicalDeserialize::deserialize_with_mode(
             result.commitment.as_slice(),
@@ -126,7 +148,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(verify_proof(&result.vk, &result.proof, c).unwrap());
+        // Verify against the canonical VK — never a prover-supplied one.
+        assert!(verify_proof(&vk_bytes, &result.proof, c).unwrap());
     }
 
     #[test]
@@ -148,7 +171,8 @@ mod tests {
         .unwrap();
         let native_commitment = commit_native(&input);
 
-        let result = prove_order(&sample_witness_json()).unwrap();
+        let (pk_bytes, _vk_bytes) = canonical_keys();
+        let result = prove_order(&sample_witness_json(), &pk_bytes).unwrap();
         let proof_commitment: Fr = ark_serialize::CanonicalDeserialize::deserialize_with_mode(
             result.commitment.as_slice(),
             Compress::Yes,
@@ -159,6 +183,8 @@ mod tests {
         assert_eq!(native_commitment, proof_commitment);
     }
 
+    // Input validation runs before the proving key is touched, so these
+    // rejections need no real key.
     #[test]
     fn rejects_invalid_side() {
         let json = serde_json::json!({
@@ -169,7 +195,7 @@ mod tests {
             "salt_hex": "bb".repeat(32)
         })
         .to_string();
-        let err = prove_order(&json).unwrap_err();
+        let err = prove_order(&json, &[]).unwrap_err();
         assert!(err.contains("side must be 0 or 1"));
     }
 
@@ -183,7 +209,7 @@ mod tests {
             "salt_hex": "bb".repeat(32)
         })
         .to_string();
-        assert!(prove_order(&json).is_err());
+        assert!(prove_order(&json, &[]).is_err());
     }
 
     #[test]
@@ -196,7 +222,31 @@ mod tests {
             "salt_hex": "bb".repeat(32)
         })
         .to_string();
-        let err = prove_order(&json).unwrap_err();
+        let err = prove_order(&json, &[]).unwrap_err();
         assert!(err.contains("encoding"));
+    }
+
+    /// #212 boundary at the WASM layer: a proof minted under a prover-chosen
+    /// proving key verifies under that key's own VK, but the pinned canonical
+    /// VK rejects it. Switching the prover off self-setup is what makes this
+    /// hold — the prover can no longer hand the verifier a matching VK.
+    #[test]
+    fn proof_under_foreign_pk_rejected_by_canonical_vk() {
+        let (_canonical_pk, canonical_vk) = canonical_keys();
+
+        // A different keypair the prover could swap in.
+        let mut rng = ark_std::rand::rngs::StdRng::from_seed([42u8; 32]);
+        let (foreign_pk, _foreign_vk) = generate_keys(&mut rng).unwrap();
+        let foreign_pk_bytes = serialize_pk(&foreign_pk).unwrap();
+
+        let result = prove_order(&sample_witness_json(), &foreign_pk_bytes).unwrap();
+        let c: Fr = ark_serialize::CanonicalDeserialize::deserialize_with_mode(
+            result.commitment.as_slice(),
+            Compress::Yes,
+            ark_serialize::Validate::Yes,
+        )
+        .unwrap();
+
+        assert!(!verify_proof(&canonical_vk, &result.proof, c).unwrap());
     }
 }
