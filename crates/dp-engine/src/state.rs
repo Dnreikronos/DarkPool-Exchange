@@ -64,10 +64,27 @@ impl PairStatus {
     }
 }
 
+/// ERC20 default decimals, used when a [`PairConfig`] (or a replayed
+/// `PairRegistered` event) predates the per-token decimals fields (#211).
+fn default_token_decimals() -> u8 {
+    18
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairConfig {
     pub base_token: Address,
     pub quote_token: Address,
+    /// On-chain ERC20 `decimals()` of each token. Settlement does NOT read
+    /// these: the contract derives token-raw amounts from the canonical
+    /// `decimal * 1e18` wire via a live `decimals()` call (#211). They are
+    /// captured and replayed today so a later patch (the #153 balance oracle,
+    /// order validation, UI display) can honour per-token precision without a
+    /// schema change. Default 18 — the ERC20 default — for configs predating
+    /// the field.
+    #[serde(default = "default_token_decimals")]
+    pub base_decimals: u8,
+    #[serde(default = "default_token_decimals")]
+    pub quote_decimals: u8,
     pub min_order_size: Decimal,
     pub tick_size: Decimal,
     /// Reserved for future per-pair tick cadence overrides. The auction
@@ -87,6 +104,8 @@ impl PairConfig {
         Self {
             base_token,
             quote_token,
+            base_decimals: default_token_decimals(),
+            quote_decimals: default_token_decimals(),
             min_order_size: Decimal::ZERO,
             tick_size: Decimal::ZERO,
             auction_interval: None,

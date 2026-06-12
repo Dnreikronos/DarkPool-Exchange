@@ -368,6 +368,8 @@ async fn recover_propagates_store_read_error() {
             min_order_size: dec("0"),
             tick_size: dec("0"),
             auction_interval_ms: None,
+            base_decimals: 18,
+            quote_decimals: 6,
         },
     }];
     store.append(&mut events).unwrap();
