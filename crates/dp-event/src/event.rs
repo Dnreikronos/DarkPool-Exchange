@@ -276,4 +276,39 @@ mod tests {
         assert_eq!(back.event_type, original.event_type);
         assert_eq!(back.data.event_type(), EventType::OrderExpired);
     }
+
+    #[test]
+    fn pair_registered_missing_decimals_defaults_to_18() {
+        let full = EventData::PairRegistered {
+            pair: "ETH/USDC".into(),
+            base_token: "0x0".into(),
+            quote_token: "0x1".into(),
+            min_order_size: Decimal::new(1, 2),
+            tick_size: Decimal::new(1, 2),
+            auction_interval_ms: Some(5000),
+            base_decimals: 6,
+            quote_decimals: 6,
+        };
+        // Drop the decimals keys to mimic an event written before the fields
+        // existed; deserialization must fall back to the serde default (18).
+        let mut value = serde_json::to_value(&full).unwrap();
+        let obj = value
+            .get_mut("PairRegistered")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("externally tagged PairRegistered object");
+        obj.remove("base_decimals");
+        obj.remove("quote_decimals");
+
+        match serde_json::from_value::<EventData>(value).unwrap() {
+            EventData::PairRegistered {
+                base_decimals,
+                quote_decimals,
+                ..
+            } => {
+                assert_eq!(base_decimals, 18);
+                assert_eq!(quote_decimals, 18);
+            }
+            other => panic!("expected PairRegistered, got {other:?}"),
+        }
+    }
 }
