@@ -99,6 +99,8 @@ async fn place_rejects_below_min_order_size() {
     let cfg = PairConfig {
         base_token: Address::ZERO,
         quote_token: Address::ZERO,
+        base_decimals: 18,
+        quote_decimals: 18,
         min_order_size: dec("1"),
         tick_size: Decimal::ZERO,
         auction_interval: None,
@@ -118,6 +120,8 @@ async fn place_rejects_off_tick_price() {
     let cfg = PairConfig {
         base_token: Address::ZERO,
         quote_token: Address::ZERO,
+        base_decimals: 18,
+        quote_decimals: 18,
         min_order_size: Decimal::ZERO,
         tick_size: dec("0.05"),
         auction_interval: None,

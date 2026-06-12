@@ -660,6 +660,11 @@ struct PairSeedEntry {
     tick_size: String,
     #[serde(default, alias = "auctionIntervalMs")]
     auction_interval_ms: Option<u64>,
+    /// On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+    #[serde(default, alias = "baseDecimals")]
+    base_decimals: Option<u8>,
+    #[serde(default, alias = "quoteDecimals")]
+    quote_decimals: Option<u8>,
 }
 
 /// Apply the `DARKPOOL_PAIR_SEED_JSON` seed. Each entry becomes a
@@ -694,6 +699,8 @@ fn seed_pairs_from_json(
         let cfg = PairConfig {
             base_token: base,
             quote_token: quote,
+            base_decimals: e.base_decimals.unwrap_or(18),
+            quote_decimals: e.quote_decimals.unwrap_or(18),
             min_order_size: min,
             tick_size: tick,
             auction_interval: e.auction_interval_ms.map(Duration::from_millis),

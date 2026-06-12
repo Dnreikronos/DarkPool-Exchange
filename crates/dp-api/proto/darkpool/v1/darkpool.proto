@@ -213,6 +213,10 @@ message PairInfo {
   string tick_size = 5;
   optional uint32 auction_interval_ms = 6;
   PairStatus status = 7;
+  // On-chain ERC20 decimals of each token (#211). Defaults to 18 when a
+  // registration omitted them.
+  optional uint32 base_decimals = 8;
+  optional uint32 quote_decimals = 9;
 }
 
 message ListPairsRequest {}
@@ -234,6 +238,9 @@ message RegisterPairRequest {
   string min_order_size = 4;
   string tick_size = 5;
   optional uint32 auction_interval_ms = 6;
+  // On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+  optional uint32 base_decimals = 7;
+  optional uint32 quote_decimals = 8;
 }
 
 message RegisterPairResponse {

@@ -4,6 +4,12 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// ERC20 default decimals, used when a `PairRegistered` event predates the
+/// per-token decimals fields (#211).
+fn default_token_decimals() -> u8 {
+    18
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
@@ -82,6 +88,12 @@ pub enum EventData {
         tick_size: Decimal,
         #[serde(default)]
         auction_interval_ms: Option<u64>,
+        /// On-chain ERC20 decimals of each token, replayed into `PairConfig`
+        /// (#211). Default 18 for events written before the field existed.
+        #[serde(default = "default_token_decimals")]
+        base_decimals: u8,
+        #[serde(default = "default_token_decimals")]
+        quote_decimals: u8,
     },
     PairSuspended {
         pair: String,
@@ -216,6 +228,8 @@ mod tests {
                     min_order_size: Decimal::new(1, 2),
                     tick_size: Decimal::new(1, 2),
                     auction_interval_ms: Some(5000),
+                    base_decimals: 18,
+                    quote_decimals: 6,
                 },
                 EventType::PairRegistered,
             ),

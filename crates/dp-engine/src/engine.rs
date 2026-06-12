@@ -343,6 +343,8 @@ impl Engine {
                 min_order_size: config.min_order_size,
                 tick_size: config.tick_size,
                 auction_interval_ms: config.auction_interval.map(|d| d.as_millis() as u64),
+                base_decimals: config.base_decimals,
+                quote_decimals: config.quote_decimals,
             },
         }];
 

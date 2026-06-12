@@ -609,6 +609,8 @@ impl Engine {
                 min_order_size,
                 tick_size,
                 auction_interval_ms,
+                base_decimals,
+                quote_decimals,
             } => {
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
@@ -628,6 +630,8 @@ impl Engine {
                     crate::state::PairConfig {
                         base_token: base,
                         quote_token: quote,
+                        base_decimals: *base_decimals,
+                        quote_decimals: *quote_decimals,
                         min_order_size: *min_order_size,
                         tick_size: *tick_size,
                         auction_interval: auction_interval_ms.map(Duration::from_millis),
