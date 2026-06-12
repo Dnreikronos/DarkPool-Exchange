@@ -29,6 +29,12 @@ ark-std = { workspace = true, features = ["std", "getrandom"] }
 ark-serialize = { workspace = true, features = ["std"] }
 ark-snark = { workspace = true }
 
+[features]
+# Demo/fixtures-only subcommands (prove-single-order) that pull dp-zk's
+# unsound per-proof setup. Off by default, so default and whole-workspace
+# builds keep that path out of every production artifact (issue #212).
+fixtures = ["dp-zk/fixtures"]
+
 [dev-dependencies]
 tempfile = "3"
 insta = "1"

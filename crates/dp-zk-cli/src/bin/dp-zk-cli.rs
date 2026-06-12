@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use dp_zk_cli::commit::{run_commit, CommitArgs};
 use dp_zk_cli::export_poseidon::{run_export_poseidon, ExportPoseidonArgs};
+#[cfg(feature = "fixtures")]
 use dp_zk_cli::prove_single::{run_prove_single, ProveSingleArgs};
 use dp_zk_cli::setup_commitment::{run_setup_commitment, SetupCommitmentArgs};
 use dp_zk_cli::ProverArgs;
@@ -26,7 +27,9 @@ struct Cli {
 enum Commands {
     /// Compute Poseidon commitment for a single order (JSON → hex).
     Commit(CommitArgs),
-    /// Generate Groth16 proof of commitment preimage knowledge.
+    /// Generate Groth16 proof of commitment preimage knowledge. Demo/fixtures
+    /// only — uses the unsound per-proof setup (issue #212).
+    #[cfg(feature = "fixtures")]
     ProveSingleOrder(ProveSingleArgs),
     /// One-time canonical key generation for the commitment circuit (#158).
     /// Writes commitment_pk.bin + commitment_vk.bin to --out.
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Commands::Commit(args) => run_commit(args),
+        #[cfg(feature = "fixtures")]
         Commands::ProveSingleOrder(args) => run_prove_single(args),
         Commands::SetupCommitmentCircuit(args) => run_setup_commitment(args),
         Commands::ProveBatch(args) => dp_zk_cli::run_prover(args.batch_size, args.proving_key),

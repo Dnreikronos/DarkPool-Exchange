@@ -188,6 +188,8 @@ pub fn run_prover_io<R: Read, W: Write>(
 pub mod cli;
 pub mod commit;
 pub mod export_poseidon;
+// Demo/fixtures-only: pulls dp-zk's unsound per-proof setup (issue #212).
+#[cfg(feature = "fixtures")]
 pub mod prove_single;
 pub mod setup_commitment;
 pub use cli::{run_prover, run_prover_cli};
