@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -324,14 +325,29 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///      `reserved` so a valid batch never references unreserved funds —
     ///      see the BalanceOracle follow-up, which overlaps #153.)
     function _settleMatch(Match calldata m) internal {
-        uint256 notional = m.price * m.size / 1e18;
+        // `m.price`/`m.size` arrive in the canonical wei domain (`decimal * 1e18`,
+        // per the #209 binding — `_settlementChain` divides them by
+        // WEI_TO_CIRCUIT_SCALE to recover the proved 1e8 values). Convert each
+        // leg here into its token's raw on-chain units using that token's own
+        // decimals, so a non-18-decimal quote (6-decimal USDC) settles correctly
+        // instead of 10^12x off (#211). Reading decimals() live is the canonical
+        // source and is safe: only vetted standard ERC20s are ever allowlisted.
+        uint8 baseDecimals = IERC20Metadata(m.baseToken).decimals();
+        uint8 quoteDecimals = IERC20Metadata(m.quoteToken).decimals();
+
+        // size: decimal * 1e18  ->  decimal * 10^baseDecimals (base raw).
+        uint256 baseAmount = m.size * (uint256(10) ** baseDecimals) / 1e18;
+        // notional: `m.price * m.size / 1e18` is the notional still in the 1e18
+        // domain; rescale it to the quote token's decimals (quote raw). For an
+        // 18-decimal quote this is identity, so existing settlement is unchanged.
+        uint256 notional = (m.price * m.size / 1e18) * (uint256(10) ** quoteDecimals) / 1e18;
         uint256 fee = notional * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         uint256 askReceives = notional - fee;
 
         _consumeReserved(m.bidTrader, m.quoteToken, notional);
-        balances[m.bidTrader][m.baseToken] += m.size;
+        balances[m.bidTrader][m.baseToken] += baseAmount;
 
-        _consumeReserved(m.askTrader, m.baseToken, m.size);
+        _consumeReserved(m.askTrader, m.baseToken, baseAmount);
         balances[m.askTrader][m.quoteToken] += askReceives;
 
         balances[feeRecipient][m.quoteToken] += fee;

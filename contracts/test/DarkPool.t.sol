@@ -375,6 +375,51 @@ contract DarkPoolTest is Test {
         assertEq(pool.balances(feeRecipient, address(quoteToken)), fee);
     }
 
+    /// #211 regression: a 6-decimal quote token (USDC-like) must settle its
+    /// quote leg in 1e6 units, not 1e18. The operator submits canonical
+    /// `price`/`size` (decimal * 1e18, the #209 wire domain); `_settleMatch`
+    /// rescales the notional to the quote token's own decimals. Pre-fix the
+    /// contract computed `notional` 1e18-scaled (1000e18), underflowing the
+    /// 1000e6 the bid actually reserved and reverting the whole batch.
+    function test_submitBatch_settles6DecimalQuote() public {
+        MockERC20 usdc = new MockERC20("USDC", "USDC", 6);
+        pool.setTokenAllowed(address(usdc), true);
+
+        uint256 price = 100e18; // 100.0
+        uint256 size = 10e18; // 10.0
+        uint256 baseAmount = 10e18; // base raw (18 decimals)
+        uint256 notional = 1000e6; // 100 * 10, in 6-decimal USDC units
+        uint256 fee = notional * 5 / 10_000; // 5 bps = 5e5
+
+        _depositAndReserve(trader1, address(usdc), notional);
+        _depositAndReserve(trader2, address(baseToken), baseAmount);
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(usdc),
+            price: price,
+            size: size
+        });
+
+        vm.prank(operator);
+        pool.submitBatch(bytes32(uint256(0x6d)), bytes32(0), new bytes(256), inputs, matches);
+
+        assertTrue(pool.settled(bytes32(uint256(0x6d))));
+        assertEq(pool.balances(trader1, address(usdc)), 0);
+        assertEq(pool.balances(trader1, address(baseToken)), baseAmount);
+        assertEq(pool.balances(trader2, address(baseToken)), 0);
+        assertEq(pool.balances(trader2, address(usdc)), notional - fee);
+        assertEq(pool.balances(feeRecipient, address(usdc)), fee);
+    }
+
     function test_submitBatch_emitsEvent() public {
         bytes32 batchId = bytes32(uint256(77));
         _setupBatchBalances();
