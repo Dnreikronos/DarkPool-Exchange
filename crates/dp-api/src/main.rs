@@ -667,6 +667,21 @@ struct PairSeedEntry {
     quote_decimals: Option<u8>,
 }
 
+/// Validate an optional seed `decimals` field, mirroring the `<= 30` bound the
+/// admin `register_pair` RPC enforces, so a JSON seed cannot persist a pair the
+/// operator API would itself refuse to register. Absent defaults to 18.
+fn seed_decimals(
+    v: Option<u8>,
+    field: &str,
+    pair: &str,
+) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    match v {
+        None => Ok(18),
+        Some(d) if d <= 30 => Ok(d),
+        Some(d) => Err(format!("pair seed {pair}: {field} must be <= 30, got {d}").into()),
+    }
+}
+
 /// Apply the `DARKPOOL_PAIR_SEED_JSON` seed. Each entry becomes a
 /// `PairRegistered` event so the seed survives subsequent restarts via
 /// replay (the seed env var is consulted only on first boot).
@@ -696,11 +711,13 @@ fn seed_pairs_from_json(
             Decimal::from_str(e.tick_size.trim())
                 .map_err(|err| format!("pair seed {}: bad tick_size: {err}", e.pair))?
         };
+        let base_decimals = seed_decimals(e.base_decimals, "base_decimals", &e.pair)?;
+        let quote_decimals = seed_decimals(e.quote_decimals, "quote_decimals", &e.pair)?;
         let cfg = PairConfig {
             base_token: base,
             quote_token: quote,
-            base_decimals: e.base_decimals.unwrap_or(18),
-            quote_decimals: e.quote_decimals.unwrap_or(18),
+            base_decimals,
+            quote_decimals,
             min_order_size: min,
             tick_size: tick,
             auction_interval: e.auction_interval_ms.map(Duration::from_millis),
