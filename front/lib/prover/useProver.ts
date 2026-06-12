@@ -7,13 +7,12 @@ import type { ProverRequest, ProverResponse, WitnessInput } from './prover.worke
 export type ProverState = 'idle' | 'initializing' | 'proving' | 'ready' | 'error'
 
 export interface ProverProgress {
-  stage: 'loading' | 'keygen' | 'proving'
+  stage: 'loading' | 'proving'
   pct: number
 }
 
 export interface ProveResult {
   proof: Uint8Array
-  vk: Uint8Array
   commitment: Uint8Array
 }
 
@@ -67,7 +66,6 @@ export function useProver(): UseProverReturn {
           pendingRef.current.delete(msg.id)
           pending.resolve({
             proof: msg.proof,
-            vk: msg.vk,
             commitment: msg.commitment,
           })
         }
