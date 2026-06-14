@@ -19,6 +19,9 @@ pub enum EngineError {
     #[error("submit batch: {0}")]
     Submit(#[source] SettlementError),
 
+    #[error("balance oracle lookup: {0}")]
+    BalanceLookup(#[source] SettlementError),
+
     #[error(transparent)]
     Event(#[from] EventError),
 

@@ -6,7 +6,7 @@ use chrono::Utc;
 use dp_aggregator::{NoopAggregator, ProofAggregator};
 use dp_crypto::{Decrypter, NoopDecrypter, SnapshotCipher};
 use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
-use dp_settlement::{NoopSubmitter, Submitter};
+use dp_settlement::{BalanceOracle, InsecureDevOracle, NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
 use dp_types::{DarkPoolError, EventType, Order, Side};
 use parking_lot::{Mutex, RwLock};
@@ -47,35 +47,6 @@ impl Drop for OrderSecrets {
         self.salt.zeroize();
         self.trader_id.zeroize();
         self.commitment.zeroize();
-    }
-}
-
-/// Looks up balance/position for a trader. Default impl trusts the caller
-/// — pending escrow oracle integration.
-///
-/// **Per-leg asset semantics (#170).** The solvency constraint checks each
-/// leg's balance in the asset that leg *spends*: a bid (buyer) is checked
-/// against `notional` in the quote asset, an ask (seller) against `size` in
-/// the base asset — mirroring the on-chain `_settleMatch` debits. The real
-/// oracle must therefore return the balance in the right asset for the
-/// order's side: quote for a bid, base for an ask. The lookup is keyed only
-/// by `trader_id` today because the stub is asset-blind; the escrow-backed
-/// oracle wiring (the #165/#153-overlapping follow-up) must thread the side
-/// or per-asset escrow through so the witnessed `balance` matches the leg.
-pub trait BalanceOracle: Send + Sync {
-    fn lookup(&self, trader_id: &[u8; 32]) -> (Decimal, i128);
-}
-
-/// Returns a hard-coded 1B balance / 0 position for any trader. Solvency
-/// constraints (family 7) pass trivially under this oracle. NOT FOR
-/// PRODUCTION — `Engine::new` installs it as a placeholder and emits a
-/// startup warning; wire a real oracle via [`Engine::set_balance_oracle`]
-/// before serving traffic.
-pub struct InsecureDevOracle;
-
-impl BalanceOracle for InsecureDevOracle {
-    fn lookup(&self, _trader_id: &[u8; 32]) -> (Decimal, i128) {
-        (Decimal::from(1_000_000_000u64), 0)
     }
 }
 
@@ -572,8 +543,9 @@ impl Engine {
         // Pair-registry defense-in-depth. The API layer cannot inspect the
         // encrypted PlaceOrder payload, so the engine is the only point at
         // which an unknown/suspended pair, sub-minimum size, or off-tick
-        // price can be rejected.
-        {
+        // price can be rejected. The same lock-scoped lookup resolves the asset
+        // this leg spends for the solvency witness (#170/#213).
+        let (spend_token, spend_decimals) = {
             let state = self.inner.state.lock();
             let cfg = state.pair_config(&pair_key).ok_or_else(|| {
                 EngineError::Validation(DarkPoolError::PairNotRegistered(pair_key.clone()))
@@ -605,7 +577,14 @@ impl Engine {
                     ));
                 }
             }
-        }
+            // A bid (buyer) pays the quote token; an ask (seller) delivers the
+            // base token. The solvency oracle reads `reserved` for exactly this
+            // asset, so the witnessed balance matches the leg (#170).
+            match decrypted.side {
+                Side::Buy => (cfg.quote_token, cfg.quote_decimals),
+                Side::Sell => (cfg.base_token, cfg.base_decimals),
+            }
+        };
 
         let default_ttl = self.inner.state.lock().default_ttl;
         let ttl = if decrypted.ttl > 0 {
@@ -640,6 +619,16 @@ impl Engine {
         // derived from commitment_key. This avoids persisting plaintext
         // and survives the privacy canary test.
         let nonce = &self.inner.salt_nonce;
+        // Read the trader's settlement-locked balance for the asset this leg
+        // spends from the installed BalanceOracle (#213). Clone the Arc out so
+        // the parking_lot read guard is not held across the await; a real
+        // (chain-backed) oracle does an RPC here and fails the placement closed
+        // if the read errors rather than fabricating a balance.
+        let oracle = self.inner.oracle.read().clone();
+        let (balance, position) = oracle
+            .lookup(order.trader, spend_token, spend_decimals)
+            .await
+            .map_err(EngineError::BalanceLookup)?;
         let secrets = derive_order_secrets(
             order.id,
             order.trader.as_slice(),
@@ -647,7 +636,8 @@ impl Engine {
             order.side as u8,
             order.price,
             order.size,
-            self.inner.oracle.read().as_ref(),
+            balance,
+            position,
             nonce,
         )?;
         let commitment = secrets.commitment.to_vec();
@@ -921,8 +911,9 @@ fn leg_witness_from(
         trader_id: hex::encode(secret.trader_id),
         salt: hex::encode(secret.salt),
         // Circuit checks this in the asset the leg spends: quote for a bid,
-        // base for an ask (#170). The stub oracle is asset-blind; see
-        // `BalanceOracle` for the per-asset wiring the real oracle owes.
+        // base for an ask (#170). `place_encrypted_order` already read the
+        // BalanceOracle for that exact asset (#213), so `secret.balance` is
+        // denominated to match the leg.
         balance: secret.balance,
         position: secret.position.to_string(),
         limit_price: order.price,
@@ -953,7 +944,8 @@ fn derive_order_secrets(
     side: u8,
     price: Decimal,
     size: Decimal,
-    oracle: &dyn BalanceOracle,
+    balance: Decimal,
+    position: i128,
     nonce: &[u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
     // Identity is bound to the verified on-chain address, not the client-
@@ -963,7 +955,9 @@ fn derive_order_secrets(
     let salt = derive_salt(commitment_key, order_id, nonce);
     let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
 
-    let (balance, position) = oracle.lookup(&trader_id);
+    // `balance`/`position` are read from the installed BalanceOracle by the
+    // caller (#213) — in the asset this leg spends (#170) — and threaded in
+    // here so this helper stays pure and synchronous.
     Ok(OrderSecrets {
         salt,
         trader_id,
