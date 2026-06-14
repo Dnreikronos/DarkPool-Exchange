@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::time::Duration;
 
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
@@ -67,6 +68,13 @@ impl BalanceOracle for InsecureDevOracle {
 /// limit remains effectively unenforced. Wiring a real position source needs
 /// on-chain position accounting and is tracked as a separate follow-up; this
 /// oracle deliberately does not pretend otherwise.
+///
+/// **Reports total reserved, not per-order available.** `reserved` is the
+/// trader's whole settlement-locked bucket for the asset, so each of N
+/// concurrent orders witnesses the full balance and the solvency check
+/// over-approximates what is actually free. The on-chain `_consumeReserved`
+/// debit is the real guard against over-spend; trustless per-order accounting
+/// would need a committed reserved-state root (out of scope, see #213).
 pub struct ChainBalanceOracle<P> {
     provider: P,
     contract: Address,
@@ -78,6 +86,12 @@ impl<P: Provider + Send + Sync> ChainBalanceOracle<P> {
     }
 }
 
+/// Wall-clock bound on a single `reserved` read. Order placement awaits this
+/// synchronously and the HTTP transport has no default timeout, so without a
+/// cap a hung RPC would stall placement indefinitely — the opposite of the
+/// fail-closed contract. On elapse the lookup errors and the order is rejected.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl<P: Provider + Send + Sync + 'static> BalanceOracle for ChainBalanceOracle<P> {
     fn lookup<'a>(
         &'a self,
@@ -87,10 +101,13 @@ impl<P: Provider + Send + Sync + 'static> BalanceOracle for ChainBalanceOracle<P
     ) -> BalanceLookupFuture<'a> {
         Box::pin(async move {
             let pool = DarkPool::new(self.contract, &self.provider);
-            let raw = pool
-                .reserved(trader, asset)
-                .call()
+            let raw = tokio::time::timeout(LOOKUP_TIMEOUT, pool.reserved(trader, asset).call())
                 .await
+                .map_err(|_| {
+                    SettlementError::Rpc(format!(
+                        "balance oracle lookup timed out after {LOOKUP_TIMEOUT:?}"
+                    ))
+                })?
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
             let balance = raw_to_decimal(raw, decimals)?;
             Ok((balance, 0i128))
