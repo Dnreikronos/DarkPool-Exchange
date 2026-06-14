@@ -270,6 +270,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 chain_id = cfg.chain_id,
                 "batch submitter: on-chain (EthSubmitter)"
             );
+
+            // Value-bearing deployment: fail closed on the InsecureDevOracle
+            // default. The matching circuit's solvency witness must come from
+            // real on-chain `reserved` collateral, not a fabricated 1B balance
+            // (#213). A read-only provider (no signer needed for eth_call) backs
+            // the oracle; a bad address/URL aborts boot rather than serving
+            // traffic whose solvency proof attests nothing about real funds.
+            let oracle_contract = contract_addr
+                .parse::<alloy_primitives::Address>()
+                .map_err(|e| format!("bad DARKPOOL_CONTRACT_ADDR: {e}"))?;
+            let oracle_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            engine.set_balance_oracle(Arc::new(dp_settlement::ChainBalanceOracle::new(
+                oracle_provider,
+                oracle_contract,
+            )));
+            info!(
+                contract = %contract_addr,
+                "balance oracle: on-chain (reads reserved[trader][asset])"
+            );
         } else {
             warn!(
                 rpc = %rpc,

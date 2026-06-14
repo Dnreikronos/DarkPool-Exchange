@@ -5,7 +5,7 @@ use alloy_primitives::Address;
 use dp_aggregator::ProofAggregator;
 use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
-use dp_settlement::Submitter;
+use dp_settlement::{BalanceOracle, SettlementError, Submitter};
 use dp_types::{EventType, Side};
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -42,6 +42,41 @@ fn register_btc_usd(engine: &Engine) {
     engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
 }
 
+/// Test oracle whose lookup always errors — exercises the #213 fail-closed
+/// path where a balance read failure must reject the placement.
+struct FailingOracle;
+
+impl BalanceOracle for FailingOracle {
+    fn lookup<'a>(
+        &'a self,
+        _trader: Address,
+        _asset: Address,
+        _decimals: u8,
+    ) -> dp_settlement::BalanceLookupFuture<'a> {
+        Box::pin(async { Err(SettlementError::Rpc("oracle offline".into())) })
+    }
+}
+
+/// Test oracle that records the `(asset, decimals)` of each lookup so a test
+/// can assert the engine reads the asset each leg spends (#170): quote for a
+/// bid, base for an ask.
+#[derive(Default)]
+struct RecordingOracle {
+    seen: std::sync::Mutex<Vec<(Address, u8)>>,
+}
+
+impl BalanceOracle for RecordingOracle {
+    fn lookup<'a>(
+        &'a self,
+        _trader: Address,
+        asset: Address,
+        decimals: u8,
+    ) -> dp_settlement::BalanceLookupFuture<'a> {
+        self.seen.lock().unwrap().push((asset, decimals));
+        Box::pin(async { Ok((Decimal::from(1_000_000u64), 0)) })
+    }
+}
+
 // --- engine_test.go ports ---
 
 #[tokio::test]
@@ -61,6 +96,70 @@ async fn place_order_succeeds() {
     assert_eq!(order.pair, "BTC-USD");
     assert_eq!(order.side, Side::Buy);
     assert_eq!(engine.active_order_count(), 1);
+}
+
+#[tokio::test]
+async fn place_order_fails_closed_when_balance_oracle_errors() {
+    let (engine, _store) = make_engine();
+    engine.set_balance_oracle(Arc::new(FailingOracle));
+    let r = place_plaintext_order(
+        &engine,
+        "BTC-USD",
+        Side::Buy,
+        dec(100),
+        dec(1),
+        "key1",
+        Duration::from_secs(60),
+    )
+    .await;
+    assert!(
+        matches!(r, Err(crate::EngineError::BalanceLookup(_))),
+        "a failing balance oracle must reject placement, got {r:?}"
+    );
+    assert_eq!(engine.active_order_count(), 0, "no order should be booked");
+}
+
+#[tokio::test]
+async fn place_order_reads_spend_asset_per_side() {
+    let base = Address::from([0x11u8; 20]);
+    let quote = Address::from([0x22u8; 20]);
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store, Duration::from_millis(50));
+    let mut pc = crate::state::PairConfig::new(base, quote);
+    pc.base_decimals = 18;
+    pc.quote_decimals = 6;
+    engine.register_pair_without_event("ETH/USDC".into(), pc);
+
+    let oracle = Arc::new(RecordingOracle::default());
+    engine.set_balance_oracle(oracle.clone());
+
+    // A bid (buyer) spends the quote token; an ask (seller) spends the base.
+    place_plaintext_order(
+        &engine,
+        "ETH/USDC",
+        Side::Buy,
+        dec(100),
+        dec(1),
+        "bid",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    place_plaintext_order(
+        &engine,
+        "ETH/USDC",
+        Side::Sell,
+        dec(100),
+        dec(1),
+        "ask",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    let seen = oracle.seen.lock().unwrap();
+    assert_eq!(seen[0], (quote, 6), "bid must read the quote asset");
+    assert_eq!(seen[1], (base, 18), "ask must read the base asset");
 }
 
 #[tokio::test]

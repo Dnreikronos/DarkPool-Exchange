@@ -1,4 +1,5 @@
 mod abi;
+mod balance_oracle;
 mod eth_submitter;
 mod helpers;
 pub mod signer;
@@ -6,6 +7,9 @@ mod submitter;
 mod watcher;
 
 pub use abi::DarkPool;
+pub use balance_oracle::{
+    BalanceLookupFuture, BalanceOracle, ChainBalanceOracle, InsecureDevOracle,
+};
 pub use eth_submitter::{EthSubmitter, EthSubmitterConfig};
 pub use helpers::{bytes32_to_uuid, decimal_to_wei, uuid_to_bytes32};
 pub use signer::{LocalTxSigner, TxSigner};
