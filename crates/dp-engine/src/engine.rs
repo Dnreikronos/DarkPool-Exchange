@@ -498,6 +498,22 @@ impl Engine {
         ciphertext: Vec<u8>,
         caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
+        // Cheap replay shed (#233): a byte-identical ciphertext is a replay of a
+        // captured submission (ECIES is randomized), so reject it before the
+        // ECIES decrypt + commitment derivation every admitted order pays. This
+        // is advisory — the race-free, durable check is the same-lock test in
+        // `persist_order_placed`; this only avoids spending crypto on a
+        // ciphertext already known to be spent.
+        if self
+            .inner
+            .state
+            .lock()
+            .seen_ciphertexts
+            .contains(&ciphertext_digest(&ciphertext))
+        {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
+
         let decrypter = self.inner.decrypter.read().clone();
         let decrypted = decrypter
             .decrypt(&ciphertext)

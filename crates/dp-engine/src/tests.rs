@@ -567,6 +567,52 @@ async fn place_encrypted_order_rejects_replayed_ciphertext() {
     );
 }
 
+/// #233: a replay is shed by the cheap pre-decrypt early-out, not just the
+/// under-lock check — so a captured ciphertext can't burn ECIES decrypt +
+/// commitment derivation on every resubmission. The spy decrypter must see
+/// exactly one call across two identical submissions.
+#[tokio::test]
+async fn replayed_ciphertext_rejected_before_decrypt() {
+    use std::sync::atomic::Ordering;
+
+    let (engine, _) = make_engine();
+    let spy = Arc::new(crate::test_helpers::CountingDecrypter::default());
+    engine.set_decrypter(spy.clone());
+
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+
+    engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
+        .await
+        .expect("first submission is admitted");
+
+    let err = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
+        ),
+        "replay must be rejected as DuplicateOrder, got: {err}"
+    );
+    assert_eq!(
+        spy.calls.load(Ordering::SeqCst),
+        1,
+        "replay must short-circuit before decrypt — decrypt ran more than once"
+    );
+}
+
 /// #233: the replay spent-set is a projection — a fresh engine that recovers
 /// from the event log rebuilds it, so the same ciphertext is rejected after a
 /// restart even though the in-memory order secrets are gone.
