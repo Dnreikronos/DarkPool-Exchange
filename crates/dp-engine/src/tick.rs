@@ -417,19 +417,36 @@ impl Engine {
             }
 
             notifications.push(record_to_notification(&record));
-            pending.push(PendingAggregation {
-                batch_id: Uuid::new_v4(),
-                auction_id: result.auction_id,
-                pair: result.pair.clone(),
-                matches: result
-                    .matches
-                    .iter()
-                    .map(|m| order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size))
-                    .collect(),
-                orders: order_snapshot,
-                admitted_order_ids,
-                auction_at: now,
-            });
+
+            // Settlement is bounded by the IVC circuit width (`batch_size` ==
+            // `IVC_BATCH_SIZE`): one fold step proves at most that many match
+            // rows. Matching itself is uncapped, so a round can cross into more
+            // matches than a single batch can carry. Split the round into
+            // chunks of at most `batch_size` matches and emit one aggregation
+            // per chunk; each folds and settles independently against the same
+            // admitted set and clearing price. The events above already record
+            // the round as one logical auction with every fill — only the proof
+            // batching is chunked. Without this split an oversized witness was
+            // rejected downstream by `from_witness_with_admitted` *after* the
+            // matches were persisted and applied to the book, so the fold was
+            // skipped and the fills sat on the book but never settled on-chain,
+            // diverging book state from chain permanently (#215).
+            let round_matches: Vec<dp_auction::Match> = result
+                .matches
+                .iter()
+                .map(|m| order_matched_to_match(m.bid.clone(), m.ask.clone(), m.price, m.size))
+                .collect();
+            for chunk in round_matches.chunks(self.inner.batch_size) {
+                pending.push(PendingAggregation {
+                    batch_id: Uuid::new_v4(),
+                    auction_id: result.auction_id,
+                    pair: result.pair.clone(),
+                    matches: chunk.to_vec(),
+                    orders: order_snapshot.clone(),
+                    admitted_order_ids: admitted_order_ids.clone(),
+                    auction_at: now,
+                });
+            }
         }
 
         let aggregator = self.inner.aggregator.read().clone();
@@ -893,6 +910,86 @@ mod ivc_tests {
             engine.active_order_count(),
             0,
             "both orders fully filled and removed from the book"
+        );
+    }
+
+    /// A single auction round that crosses into more matches than the circuit
+    /// width (`IVC_BATCH_SIZE` = 8) must still settle every fill. The round is
+    /// split into chunks of at most `batch_size` matches, each folded as its
+    /// own batch. Before the fix the engine pushed one oversized aggregation:
+    /// `from_witness_with_admitted` rejected the >8-match witness *after* the
+    /// `OrderMatched` events were already persisted and applied, the fold was
+    /// skipped with `continue`, and the book diverged permanently from chain —
+    /// recorded fills that could never settle (#215). Here `fold_calls` was 0
+    /// pre-fix; with chunking nine matches fold as 8 + 1.
+    #[tokio::test]
+    async fn oversized_round_chunks_and_folds_every_match() {
+        use dp_event::Store;
+        use dp_types::EventType;
+
+        let (engine, store) = make_engine_with_pair();
+        let agg = MockFoldingAggregator::new();
+        engine.set_aggregator(Arc::clone(&agg) as Arc<dyn ProofAggregator>);
+        // Stay well below the finalize/submit boundary; this test asserts only
+        // that every match folds, not that a batch is submitted.
+        engine.set_finalize_every(1000);
+
+        let ttl = Duration::from_secs(60);
+        // One size-9 bid crossing nine size-1 asks at the same price → nine
+        // matches in a single round, one more than the circuit width of 8.
+        place_plaintext_order(
+            &engine,
+            "ETH/USDC",
+            Side::Buy,
+            Decimal::from(100),
+            Decimal::from(9),
+            "key_bid",
+            ttl,
+        )
+        .await
+        .unwrap();
+        for i in 0..9 {
+            place_plaintext_order(
+                &engine,
+                "ETH/USDC",
+                Side::Sell,
+                Decimal::from(100),
+                Decimal::ONE,
+                &format!("key_ask_{i}"),
+                ttl,
+            )
+            .await
+            .unwrap();
+        }
+
+        engine.run_auction_tick().await;
+
+        let events = store.read_from(0, 10_000).unwrap();
+        let executed = events
+            .iter()
+            .filter(|e| e.event_type == EventType::AuctionExecuted)
+            .count();
+        let matched = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrderMatched)
+            .count();
+
+        // The event log records one logical auction with all nine fills; only
+        // the proof batching is split.
+        assert_eq!(executed, 1, "exactly one auction round recorded");
+        assert_eq!(matched, 9, "every one of the nine fills recorded");
+        // Nine matches at batch_size 8 → two chunks (8 + 1), each folded once.
+        // Pre-fix the single oversized witness was rejected and fold_calls
+        // stayed 0 while the fills were already on the book.
+        assert_eq!(
+            agg.fold_calls(),
+            2,
+            "oversized round must fold in chunks of at most batch_size"
+        );
+        assert_eq!(
+            engine.active_order_count(),
+            0,
+            "bid and all nine asks fully filled and removed from the book"
         );
     }
 }
