@@ -304,14 +304,19 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c) = _decodeProof(proof);
         require(verifier.verifyProof(a, b, c, publicInputs), "invalid proof");
 
-        for (uint256 i = 0; i < matches.length; i++) {
-            _settleMatch(matches[i]);
-        }
-
+        // Effects before interactions: set the replay guards before the
+        // _settleMatch loop, which makes external decimals() staticcalls. This
+        // matches settleAuction's ordering; on the success path it changes
+        // nothing (an atomic revert rolls the writes back either way).
         settledBatch[batchId] = true;
         // Mark the economic round settled in the shared namespace so the IVC arm
         // cannot later re-settle the same auctionId (#214).
         settledAuction[auctionId] = true;
+
+        for (uint256 i = 0; i < matches.length; i++) {
+            _settleMatch(matches[i]);
+        }
+
         emit BatchSettled(batchId, block.timestamp);
     }
 
