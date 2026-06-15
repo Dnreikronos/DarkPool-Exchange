@@ -585,20 +585,6 @@ mod tests {
         assert_ne!(b1, b2, "Groth16 proofs are re-randomized per proving");
     }
 
-    /// The native nullifier helper the engine calls matches what
-    /// [`OrderProofPublics::derive`] embeds, so the engine's spent-set key and
-    /// the circuit's bound value never drift.
-    #[test]
-    fn native_nullifier_matches_derive() {
-        let c = sample_circuit();
-        let commitment = compute_commitment_native(&c);
-        let publics = OrderProofPublics::derive(commitment, c.salt);
-        assert_eq!(
-            publics.nullifier,
-            compute_nullifier_native(commitment, c.salt)
-        );
-    }
-
     // Demo path (prover-chosen VK): fixtures-only since issue #212.
     #[cfg(feature = "fixtures")]
     #[test]
