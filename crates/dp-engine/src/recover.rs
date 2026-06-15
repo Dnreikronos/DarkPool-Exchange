@@ -488,6 +488,12 @@ impl Engine {
                 // logs always emit `PairRegistered` first.
                 state.pair_tokens.entry(pair_key).or_default();
                 state.book.insert_order(order);
+                // Rebuild the replay spent-set from the log so a recovered
+                // engine rejects the same ciphertext replays a live one would
+                // (#233). Same hash helper as the live path keeps them aligned.
+                state
+                    .seen_ciphertexts
+                    .insert(crate::engine::ciphertext_digest(ciphertext));
             }
             EventData::OrderCancelled { .. } | EventData::OrderExpired { .. } => {
                 self.inner.state.lock().book.apply(ev);

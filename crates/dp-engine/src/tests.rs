@@ -533,6 +533,85 @@ async fn place_encrypted_order_accepts_matching_caller() {
     assert_eq!(order.trader, Address::ZERO);
 }
 
+/// #233: a byte-identical ciphertext resubmitted is a replay (real ECIES is
+/// randomized), so the second submission is rejected with `DuplicateOrder`.
+#[tokio::test]
+async fn place_encrypted_order_rejects_replayed_ciphertext() {
+    let (engine, _) = make_engine();
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+
+    engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
+        .await
+        .expect("first submission is admitted");
+
+    let err = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
+        ),
+        "replay must be rejected as DuplicateOrder, got: {err}"
+    );
+}
+
+/// #233: the replay spent-set is a projection — a fresh engine that recovers
+/// from the event log rebuilds it, so the same ciphertext is rejected after a
+/// restart even though the in-memory order secrets are gone.
+#[tokio::test]
+async fn replayed_ciphertext_rejected_after_recovery() {
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    engine.set_snapshot_cipher(Some(test_snapshot_cipher()));
+    engine
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register pair");
+
+    let d = DecryptedOrder {
+        trader: Address::ZERO,
+        pair: "BTC-USD".into(),
+        side: Side::Buy,
+        price: dec(100),
+        size: dec(1),
+        commitment_key: "k".into(),
+        ttl: 60_000_000_000,
+    };
+    let ct = serde_json::to_vec(&d).unwrap();
+    engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
+        .await
+        .expect("first submission is admitted");
+
+    // A fresh engine replays the same event log (no snapshot store → full replay).
+    let recovered = Engine::new(store.clone(), Duration::from_millis(50));
+    recovered.set_snapshot_cipher(Some(test_snapshot_cipher()));
+    recovered.recover().await.expect("recover from log");
+
+    let err = recovered
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
+        ),
+        "recovered engine must reject the replay, got: {err}"
+    );
+}
+
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
 /// but traders may send any casing. The trader path must canonicalise
 /// before the registry lookup — otherwise `eth/usdc` 404s against an

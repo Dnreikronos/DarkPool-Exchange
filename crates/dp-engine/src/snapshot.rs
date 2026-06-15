@@ -326,6 +326,7 @@ mod tests {
             pair_tokens: HashMap::new(),
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
+            seen_ciphertexts: Default::default(),
         }
     }
 

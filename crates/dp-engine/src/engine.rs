@@ -758,6 +758,9 @@ impl Engine {
         ciphertext: Vec<u8>,
         salt_nonce: Vec<u8>,
     ) -> Result<u64, EngineError> {
+        // Hash the ciphertext now, before it is moved into the event below;
+        // this is the replay/spent-set key (#233).
+        let digest = ciphertext_digest(&ciphertext);
         let mut events = [Event {
             seq: 0,
             event_type: EventType::OrderPlaced,
@@ -771,7 +774,7 @@ impl Engine {
             },
         }];
 
-        let state = self.inner.state.lock();
+        let mut state = self.inner.state.lock();
         // Re-validate the pair status under the *same* lock that does the
         // append + insert. The status check in `place_encrypted_order` runs
         // in an earlier, separately-acquired lock scope; between dropping
@@ -795,6 +798,11 @@ impl Engine {
                 )));
             }
         }
+        // Reject a replayed ciphertext (#233), under the same lock that appends
+        // and inserts so two concurrent identical submissions can't both pass.
+        if state.seen_ciphertexts.contains(&digest) {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         // The store stamped the monotonic seq onto the event during append;
@@ -808,6 +816,9 @@ impl Engine {
             Side::Sell => "sell",
         };
         state.book.insert_order(order);
+        // Record the digest only after the event is durably appended, so the
+        // live spent-set and a replay rebuilt from the log stay in lockstep.
+        state.seen_ciphertexts.insert(digest);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(assigned_seq)
     }
@@ -982,6 +993,16 @@ pub(crate) fn recompute_persisted_commitment(
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
     let salt = derive_salt(commitment_key, order_id, nonce);
     compute_poseidon_commitment(&trader_id, side, price, size, &salt)
+}
+
+/// SHA-256 of an order's ciphertext — the key for the replay spent-set (#233).
+/// ECIES is randomized, so a byte-identical ciphertext is a replay of a captured
+/// submission, not a fresh order. The live `persist_order_placed` path and the
+/// recovery replay path MUST hash identically, so both call this one helper.
+pub(crate) fn ciphertext_digest(ciphertext: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(ciphertext);
+    h.finalize().into()
 }
 
 fn derive_salt(commitment_key: &str, order_id: Uuid, nonce: &[u8; 32]) -> [u8; 32] {
