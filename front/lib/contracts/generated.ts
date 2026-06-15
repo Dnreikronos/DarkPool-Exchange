@@ -341,7 +341,14 @@ export const darkPoolAbi = [
   {
     type: 'function',
     inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
-    name: 'settled',
+    name: 'settledAuction',
+    outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    name: 'settledBatch',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
   },

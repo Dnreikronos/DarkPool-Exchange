@@ -44,7 +44,27 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     IVerifier public immutable verifier;
 
     mapping(address => bool) public operators;
-    mapping(bytes32 => bool) public settled;
+
+    /// @notice Replay guard for the Groth16 path, keyed by `batchId`. Kept in a
+    ///         namespace distinct from `settledAuction` so a `batchId` can never
+    ///         alias an `auctionId` of the same 32-byte value (#214). A single
+    ///         shared map would either let one economic round settle twice
+    ///         (different keys, no overlap) or falsely block an unrelated round
+    ///         (coincidental key collision).
+    mapping(bytes32 => bool) public settledBatch;
+
+    /// @notice Replay guard for the economic auction round, keyed by `auctionId`
+    ///         and SHARED across both settlement arms. `submitBatch` (Groth16)
+    ///         and `settleAuction` (HyperNova IVC) each set and check it, so a
+    ///         round settled through one arm cannot be re-settled through the
+    ///         other (#214). The off-chain operator runs one auction → one batch
+    ///         → one `submitBatch`, so a one-settlement-per-`auctionId` rule does
+    ///         not constrain any legitimate flow. Without this, the same proved
+    ///         matches could run `_settleMatch` twice — once via `submitBatch`,
+    ///         once via `submitSession` + `settleAuction` — double-charging
+    ///         traders.
+    mapping(bytes32 => bool) public settledAuction;
+
     mapping(address => mapping(address => uint256)) public balances;
 
     /// @notice Tokens approved for deposit. Only vetted, standard ERC20s
@@ -269,7 +289,10 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint256[6] calldata publicInputs,
         Match[] calldata matches
     ) external onlyOperator whenNotPaused {
-        require(!settled[batchId], "already settled");
+        require(!settledBatch[batchId], "batch already settled");
+        // Shared with the IVC arm: if this round already settled via
+        // submitSession + settleAuction, reject the Groth16 replay (#214).
+        require(!settledAuction[auctionId], "auction already settled");
         require(matches.length > 0 && matches.length <= MAX_BATCH_SIZE, "invalid batch size");
         require(proof.length == 256, "invalid proof length");
 
@@ -281,11 +304,19 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c) = _decodeProof(proof);
         require(verifier.verifyProof(a, b, c, publicInputs), "invalid proof");
 
+        // Effects before interactions: set the replay guards before the
+        // _settleMatch loop, which makes external decimals() staticcalls. This
+        // matches settleAuction's ordering; on the success path it changes
+        // nothing (an atomic revert rolls the writes back either way).
+        settledBatch[batchId] = true;
+        // Mark the economic round settled in the shared namespace so the IVC arm
+        // cannot later re-settle the same auctionId (#214).
+        settledAuction[auctionId] = true;
+
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);
         }
 
-        settled[batchId] = true;
         emit BatchSettled(batchId, block.timestamp);
     }
 
@@ -476,7 +507,9 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         IDarkPool.Match[] calldata matches
     ) external onlyOperator whenNotPaused whenIvcEnabled {
         require(sessionSubmitted[sessionId], "session not submitted");
-        require(!settled[auctionId], "auction already settled");
+        // Shared with the Groth16 arm (#214): blocks re-settling this round
+        // whether it first settled via this path or via submitBatch.
+        require(!settledAuction[auctionId], "auction already settled");
         // A session proves exactly one auction's matches. Because the binding
         // below is over `matches[]` only (auctionId is absent from the proof's
         // hash-chain), the same proved session would otherwise settle multiple
@@ -485,7 +518,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         // settlement.
         require(!sessionSettled[sessionId], "session already settled");
         // Defense in depth: once an auction is bound to a session, only that
-        // session can settle it. `settled[auctionId]` already blocks
+        // session can settle it. `settledAuction[auctionId]` already blocks
         // re-settlement; this guards a cross-session race where two distinct
         // submitSession calls both try to settle the same auctionId.
         bytes32 bound = auctionToSession[auctionId];
@@ -499,7 +532,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         // over `matches[]` and require it equals the proved `zN[3]`.
         require(_settlementChain(matches) == sessionSettlementAcc[sessionId], "settlement binding");
         auctionToSession[auctionId] = sessionId;
-        settled[auctionId] = true;
+        settledAuction[auctionId] = true;
         sessionSettled[sessionId] = true;
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);
