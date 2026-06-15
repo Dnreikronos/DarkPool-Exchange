@@ -160,8 +160,8 @@ mod tests {
 
         let circuit = sample_circuit();
         let mut rng = make_rng(Some(7));
-        let (commitment, proof) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
-        assert!(verify_proof_with_vk(&vk, &proof, commitment).unwrap());
+        let (publics, proof) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
+        assert!(verify_proof_with_vk(&vk, &proof, &publics).unwrap());
     }
 
     #[test]

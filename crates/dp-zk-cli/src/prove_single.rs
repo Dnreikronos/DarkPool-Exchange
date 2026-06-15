@@ -253,8 +253,14 @@ mod tests {
         let proof_bytes = hex::decode(&output.proof).unwrap();
         let vk_bytes = hex::decode(&output.verification_key).unwrap();
 
+        // The verifier derives the nullifier public input from the commitment
+        // and the salt — the same value the circuit bound (#217).
+        let salt_bytes = hex::decode(&output.scalars.salt).unwrap();
+        let salt = dp_zk::pedersen::bytes_to_scalar(&salt_bytes);
+        let publics = dp_zk::commitment_circuit::OrderProofPublics::derive(commitment, salt);
+
         let valid =
-            dp_zk::commitment_circuit::verify_proof(&vk_bytes, &proof_bytes, commitment).unwrap();
+            dp_zk::commitment_circuit::verify_proof(&vk_bytes, &proof_bytes, &publics).unwrap();
         assert!(valid);
     }
 

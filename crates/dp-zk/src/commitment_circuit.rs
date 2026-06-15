@@ -1,20 +1,26 @@
 //! Groth16 circuit proving an order's commitment preimage is well-formed.
 //!
-//! Public input:  commitment (1 Fr element)
+//! Public inputs: commitment, nullifier (2 Fr elements, in that order)
 //! Private witness: (trader_id, trader_addr, side, limit_price, size, salt)
 //! Constraints (ADR-0001 §2, mirroring the IVC step circuit's families):
 //!   - family 5: `poseidon(trader_id, side, limit_price, size, salt) == commitment`
 //!   - family 9: `poseidon(trader_addr) == trader_id`   (identity binding)
 //!   - family 1: `side ∈ {0, 1}`
 //!   - family 4: `limit_price < 2^60`, `size < 2^60`
+//!   - #217:     `poseidon(NULLIFIER_DOMAIN, commitment, salt) == nullifier`
 //!
-//! Without the last three a prover could commit to `side = 7`, a negative or
+//! Without families 1/4/9 a prover could commit to `side = 7`, a negative or
 //! overflowing price/size, or an arbitrary `trader_id` and still verify (#216).
+//! The nullifier (#217) is a public, per-order uniqueness token bound to the
+//! secret `salt`, so the engine can track a spent-set keyed on it rather than on
+//! the re-randomizable Groth16 proof bytes — which carry no replay binding.
 
 use ark_bn254::{Bn254, Fr};
 use ark_crypto_primitives::snark::SNARK;
 use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
 use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
+use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
+use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_groth16::Groth16;
 use ark_r1cs_std::alloc::AllocVar;
 use ark_r1cs_std::boolean::Boolean;
@@ -84,11 +90,26 @@ impl ConstraintSynthesizer<Fr> for CommitmentPreimageCircuit {
         let expected = compute_commitment_native(&self);
         let expected_var = FpVar::new_input(cs.clone(), || Ok(expected))?;
 
-        let mut sponge = PoseidonSpongeVar::<Fr>::new(cs, &cfg);
-        sponge.absorb(&[trader_id, side, limit_price, size, salt].as_ref())?;
+        let mut sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
+        sponge.absorb(&[trader_id, side, limit_price, size, salt.clone()].as_ref())?;
         let computed = sponge.squeeze_field_elements(1)?[0].clone();
 
         computed.enforce_equal(&expected_var)?;
+
+        // ── #217: nullifier binding ─────────────────────────────────────────
+        // `nullifier = poseidon(NULLIFIER_DOMAIN, commitment, salt)`, a public
+        // per-order uniqueness token. Bound to the secret `salt` so the spent-set
+        // keys on this value, never on the re-randomizable proof bytes. The
+        // domain tag keeps it from ever colliding with the commitment hash above.
+        let expected_nullifier = compute_nullifier_native(expected, self.salt);
+        let nullifier_var = FpVar::new_input(cs.clone(), || Ok(expected_nullifier))?;
+        let domain = FpVar::new_constant(cs.clone(), nullifier_domain())?;
+
+        let mut null_sponge = PoseidonSpongeVar::<Fr>::new(cs, &cfg);
+        null_sponge.absorb(&[domain, computed, salt].as_ref())?;
+        let computed_nullifier = null_sponge.squeeze_field_elements(1)?[0].clone();
+
+        computed_nullifier.enforce_equal(&nullifier_var)?;
 
         Ok(())
     }
@@ -103,6 +124,52 @@ fn compute_commitment_native(circuit: &CommitmentPreimageCircuit) -> Fr {
         salt: circuit.salt,
     };
     commit_native(&input)
+}
+
+/// Domain-separation tag absorbed first into the nullifier hash so it can never
+/// alias the commitment hash (which omits the tag) or any other Poseidon use.
+/// Fixed for the `v3` circuit; changing it changes the nullifier and therefore
+/// the key material, so bump [`COMMITMENT_CIRCUIT_VERSION`] alongside it.
+fn nullifier_domain() -> Fr {
+    crate::pedersen::bytes_to_scalar(b"DP/order-nullifier/v1")
+}
+
+/// Native `poseidon(NULLIFIER_DOMAIN, commitment, salt)`. MUST stay byte-for-byte
+/// identical to the in-circuit gadget in `generate_constraints`: the engine
+/// recomputes it to cross-check the public-input nullifier and to key its replay
+/// spent-set (#217).
+pub fn compute_nullifier_native(commitment: Fr, salt: Fr) -> Fr {
+    let cfg = poseidon_config();
+    let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+    sponge.absorb(&vec![nullifier_domain(), commitment, salt]);
+    sponge.squeeze_field_elements::<Fr>(1)[0]
+}
+
+/// Public inputs of a [`CommitmentPreimageCircuit`] proof, in the exact order the
+/// circuit allocates them. Centralising the order here keeps the prover, the
+/// `verify_*` entrypoints, and the on-the-wire decode from ever disagreeing on
+/// it — a mismatch would silently reject every proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrderProofPublics {
+    /// `poseidon(trader_id, side, limit_price, size, salt)`.
+    pub commitment: Fr,
+    /// `poseidon(NULLIFIER_DOMAIN, commitment, salt)` — the replay/spent-set key.
+    pub nullifier: Fr,
+}
+
+impl OrderProofPublics {
+    /// Derive both public inputs natively from the order's commitment and salt.
+    pub fn derive(commitment: Fr, salt: Fr) -> Self {
+        Self {
+            commitment,
+            nullifier: compute_nullifier_native(commitment, salt),
+        }
+    }
+
+    /// Public-input slice in circuit-allocation order: `[commitment, nullifier]`.
+    fn as_inputs(&self) -> [Fr; 2] {
+        [self.commitment, self.nullifier]
+    }
 }
 
 /// Range-proof width for price/size: values must fit in 60 bits. Matches the
@@ -125,7 +192,7 @@ fn enforce_range_60(value: &FpVar<Fr>) -> Result<(), SynthesisError> {
 /// feature (issue #212); the sound path ([`prove_with_key`]) emits no VK.
 #[cfg(feature = "fixtures")]
 pub struct SingleOrderProof {
-    pub commitment: Fr,
+    pub publics: OrderProofPublics,
     pub proof_bytes: Vec<u8>,
     pub vk_bytes: Vec<u8>,
 }
@@ -167,20 +234,21 @@ pub fn generate_keys<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Groth16Keys,
 
 /// Prove against an existing (canonical) proving key. The verifying key is
 /// NOT emitted — proving must not let the prover choose the VK. Returns the
-/// commitment (engine cross-checks this) and the compressed proof bytes.
+/// proof's public inputs (commitment + nullifier; the engine cross-checks both)
+/// and the compressed proof bytes.
 pub fn prove_with_key<R: RngCore + CryptoRng>(
     pk: &ark_groth16::ProvingKey<Bn254>,
     circuit: &CommitmentPreimageCircuit,
     rng: &mut R,
-) -> Result<(Fr, Vec<u8>), crate::ZkError> {
-    let commitment = compute_commitment_native(circuit);
+) -> Result<(OrderProofPublics, Vec<u8>), crate::ZkError> {
+    let publics = OrderProofPublics::derive(compute_commitment_native(circuit), circuit.salt);
     let proof = Groth16::<Bn254>::prove(pk, circuit.clone(), rng)
         .map_err(|e| crate::ZkError::Prove(e.to_string()))?;
     let mut proof_bytes = Vec::new();
     proof
         .serialize_with_mode(&mut proof_bytes, Compress::Yes)
         .map_err(|e| crate::ZkError::Serialize(e.to_string()))?;
-    Ok((commitment, proof_bytes))
+    Ok((publics, proof_bytes))
 }
 
 /// On-disk version tag for serialized [`CommitmentPreimageCircuit`] key
@@ -191,9 +259,10 @@ pub fn prove_with_key<R: RngCore + CryptoRng>(
 /// circuit and discover the mismatch only when proofs start failing.
 ///
 /// `v2` adds the ADR-0001 §2 side-bit, 60-bit range, and identity-binding
-/// constraints (#216), which changes the constraint system and therefore the
-/// key material. Any `v1` keys must be regenerated.
-pub const COMMITMENT_CIRCUIT_VERSION: &str = "v2-poseidon-commitment-constrained";
+/// constraints (#216). `v3` adds the #217 nullifier public input and its binding
+/// constraint, which changes the constraint system and the public-input arity —
+/// again new key material. Any `v1`/`v2` keys must be regenerated.
+pub const COMMITMENT_CIRCUIT_VERSION: &str = "v3-poseidon-commitment-nullifier";
 
 /// Magic prefix identifying a versioned commitment-key envelope.
 const KEY_ENVELOPE_MAGIC: &[u8; 8] = b"DPCMTKEY";
@@ -299,18 +368,18 @@ pub fn setup_and_prove<R: RngCore + CryptoRng>(
     rng: &mut R,
 ) -> Result<SingleOrderProof, crate::ZkError> {
     let (pk, vk) = generate_keys(rng)?;
-    let (commitment, proof_bytes) = prove_with_key(&pk, circuit, rng)?;
+    let (publics, proof_bytes) = prove_with_key(&pk, circuit, rng)?;
     let vk_bytes = serialize_vk(&vk)?;
 
     // Self-check the proof verifies under the just-generated VK. This is a
     // sanity check on the prover, NOT a security guarantee — the VK is
     // prover-chosen here.
-    if !verify_proof(&vk_bytes, &proof_bytes, commitment)? {
+    if !verify_proof(&vk_bytes, &proof_bytes, &publics)? {
         return Err(crate::ZkError::Verify);
     }
 
     Ok(SingleOrderProof {
-        commitment,
+        publics,
         proof_bytes,
         vk_bytes,
     })
@@ -318,12 +387,14 @@ pub fn setup_and_prove<R: RngCore + CryptoRng>(
 
 /// Verify a proof against a deserialized, **canonical** verifying key. This
 /// is the sound entrypoint: the VK is pinned by the verifier (loaded once at
-/// boot), never supplied by the prover. The proof is bound to `commitment`
-/// via the public input.
+/// boot), never supplied by the prover. The proof is bound to both public
+/// inputs — `commitment` and `nullifier` — supplied via [`OrderProofPublics`].
+/// The verifier derives the expected nullifier itself (the salt is secret) and
+/// passes the value it expects, so a forged or mismatched nullifier fails here.
 pub fn verify_proof_with_vk(
     vk: &ark_groth16::VerifyingKey<Bn254>,
     proof_bytes: &[u8],
-    commitment: Fr,
+    publics: &OrderProofPublics,
 ) -> Result<bool, crate::ZkError> {
     let proof = ark_groth16::Proof::<Bn254>::deserialize_with_mode(
         proof_bytes,
@@ -333,7 +404,7 @@ pub fn verify_proof_with_vk(
     .map_err(|e| crate::ZkError::Serialize(format!("deserialize proof: {e}")))?;
 
     let pvk = ark_groth16::prepare_verifying_key(vk);
-    let valid = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &[commitment], &proof)
+    let valid = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &publics.as_inputs(), &proof)
         .map_err(|e| crate::ZkError::Prove(e.to_string()))?;
 
     Ok(valid)
@@ -348,10 +419,10 @@ pub fn verify_proof_with_vk(
 pub fn verify_proof(
     vk_bytes: &[u8],
     proof_bytes: &[u8],
-    commitment: Fr,
+    publics: &OrderProofPublics,
 ) -> Result<bool, crate::ZkError> {
     let vk = deserialize_vk(vk_bytes)?;
-    verify_proof_with_vk(&vk, proof_bytes, commitment)
+    verify_proof_with_vk(&vk, proof_bytes, publics)
 }
 
 #[cfg(test)]
@@ -460,6 +531,60 @@ mod tests {
         assert!(!constraints_satisfied(c));
     }
 
+    /// #217: the nullifier is a real, enforced public input — a proof verifies
+    /// only against the nullifier the circuit actually bound. An attacker cannot
+    /// recompute it (the salt is secret), and swapping in any other value is
+    /// rejected. This is what lets the engine treat the nullifier (not the
+    /// re-randomizable proof bytes) as the replay/spent-set key.
+    #[test]
+    fn rejects_tampered_nullifier() {
+        let mut rng = fixed_rng();
+        let (pk, vk) = generate_keys(&mut rng).unwrap();
+        let (publics, proof_bytes) = prove_with_key(&pk, &sample_circuit(), &mut rng).unwrap();
+
+        assert!(verify_proof_with_vk(&vk, &proof_bytes, &publics).unwrap());
+
+        let mut tampered = publics;
+        tampered.nullifier += Fr::one();
+        assert!(!verify_proof_with_vk(&vk, &proof_bytes, &tampered).unwrap());
+    }
+
+    /// #217: the nullifier is bound to the secret salt, so two orders identical
+    /// in every field but the salt produce distinct nullifiers — the spent-set
+    /// key is per-order, not per-(price, size, side).
+    #[test]
+    fn nullifier_changes_with_salt() {
+        let mut rng = fixed_rng();
+        let (pk, _vk) = generate_keys(&mut rng).unwrap();
+
+        let mut a = sample_circuit();
+        a.salt = bytes_to_scalar(&[0x01u8; 32]);
+        let mut b = sample_circuit();
+        b.salt = bytes_to_scalar(&[0x02u8; 32]);
+
+        let (pa, _) = prove_with_key(&pk, &a, &mut rng).unwrap();
+        let (pb, _) = prove_with_key(&pk, &b, &mut rng).unwrap();
+        assert_ne!(pa.nullifier, pb.nullifier);
+        assert_ne!(pa.commitment, pb.commitment);
+    }
+
+    /// #217: a replayed order — same secrets, re-proven — reproduces the SAME
+    /// nullifier, which is exactly what lets a spent-set reject the replay. The
+    /// proof bytes, by contrast, differ run-to-run (Groth16 proving is
+    /// randomized), underscoring why they cannot be the uniqueness token.
+    #[test]
+    fn replayed_order_reuses_nullifier() {
+        let mut rng = fixed_rng();
+        let (pk, _vk) = generate_keys(&mut rng).unwrap();
+        let circuit = sample_circuit();
+
+        let (p1, b1) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
+        let (p2, b2) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
+
+        assert_eq!(p1, p2, "same order must reproduce the same public inputs");
+        assert_ne!(b1, b2, "Groth16 proofs are re-randomized per proving");
+    }
+
     // Demo path (prover-chosen VK): fixtures-only since issue #212.
     #[cfg(feature = "fixtures")]
     #[test]
@@ -467,7 +592,7 @@ mod tests {
         let circuit = sample_circuit();
         let mut rng = fixed_rng();
         let result = setup_and_prove(&circuit, &mut rng).unwrap();
-        assert!(verify_proof(&result.vk_bytes, &result.proof_bytes, result.commitment).unwrap());
+        assert!(verify_proof(&result.vk_bytes, &result.proof_bytes, &result.publics).unwrap());
     }
 
     #[cfg(feature = "fixtures")]
@@ -476,8 +601,9 @@ mod tests {
         let circuit = sample_circuit();
         let mut rng = fixed_rng();
         let result = setup_and_prove(&circuit, &mut rng).unwrap();
-        let wrong_commitment = result.commitment + Fr::one();
-        assert!(!verify_proof(&result.vk_bytes, &result.proof_bytes, wrong_commitment).unwrap());
+        let mut wrong = result.publics;
+        wrong.commitment += Fr::one();
+        assert!(!verify_proof(&result.vk_bytes, &result.proof_bytes, &wrong).unwrap());
     }
 
     #[cfg(feature = "fixtures")]
@@ -488,7 +614,7 @@ mod tests {
         let mut rng2 = fixed_rng();
         let r1 = setup_and_prove(&circuit, &mut rng1).unwrap();
         let r2 = setup_and_prove(&circuit, &mut rng2).unwrap();
-        assert_eq!(r1.commitment, r2.commitment);
+        assert_eq!(r1.publics, r2.publics);
         assert_eq!(r1.proof_bytes, r2.proof_bytes);
         assert_eq!(r1.vk_bytes, r2.vk_bytes);
     }
@@ -503,11 +629,13 @@ mod tests {
         let (pk, vk) = generate_keys(&mut rng).unwrap();
 
         let circuit = sample_circuit();
-        let (commitment, proof_bytes) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
+        let (publics, proof_bytes) = prove_with_key(&pk, &circuit, &mut rng).unwrap();
 
-        assert!(verify_proof_with_vk(&vk, &proof_bytes, commitment).unwrap());
+        assert!(verify_proof_with_vk(&vk, &proof_bytes, &publics).unwrap());
         // Tampering with the commitment public input must fail.
-        assert!(!verify_proof_with_vk(&vk, &proof_bytes, commitment + Fr::one()).unwrap());
+        let mut wrong = publics;
+        wrong.commitment += Fr::one();
+        assert!(!verify_proof_with_vk(&vk, &proof_bytes, &wrong).unwrap());
     }
 
     /// SOUNDNESS REGRESSION (issues #158, #212): a proof minted under one
@@ -524,7 +652,7 @@ mod tests {
         // "Attacker" keypair: an independent setup the prover fully controls.
         let mut attacker_rng = StdRng::from_seed([7u8; 32]);
         let (attacker_pk, attacker_vk) = generate_keys(&mut attacker_rng).unwrap();
-        let (commitment, proof_bytes) =
+        let (publics, proof_bytes) =
             prove_with_key(&attacker_pk, &circuit, &mut attacker_rng).unwrap();
 
         // Operator's canonical keypair: generated once, with a different RNG.
@@ -532,9 +660,9 @@ mod tests {
         let (_pk, canonical_vk) = generate_keys(&mut canonical_rng).unwrap();
 
         // The proof verifies under the attacker's own VK (that's the trap)...
-        assert!(verify_proof_with_vk(&attacker_vk, &proof_bytes, commitment).unwrap());
+        assert!(verify_proof_with_vk(&attacker_vk, &proof_bytes, &publics).unwrap());
         // ...but is rejected by the pinned canonical VK.
-        assert!(!verify_proof_with_vk(&canonical_vk, &proof_bytes, commitment).unwrap());
+        assert!(!verify_proof_with_vk(&canonical_vk, &proof_bytes, &publics).unwrap());
     }
 
     #[test]
@@ -549,8 +677,8 @@ mod tests {
 
         // A proof under the round-tripped pk verifies under the round-tripped vk.
         let circuit = sample_circuit();
-        let (commitment, proof_bytes) = prove_with_key(&pk2, &circuit, &mut rng).unwrap();
-        assert!(verify_proof_with_vk(&vk2, &proof_bytes, commitment).unwrap());
+        let (publics, proof_bytes) = prove_with_key(&pk2, &circuit, &mut rng).unwrap();
+        assert!(verify_proof_with_vk(&vk2, &proof_bytes, &publics).unwrap());
     }
 
     #[test]

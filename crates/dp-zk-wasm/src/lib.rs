@@ -61,11 +61,16 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
     let pk = deserialize_pk(pk_bytes).map_err(|e| format!("deserialize proving key: {e}"))?;
 
     let mut rng = rand::rngs::OsRng;
-    let (commitment, proof_bytes) =
+    let (publics, proof_bytes) =
         prove_with_key(&pk, &circuit, &mut rng).map_err(|e| format!("prove: {e}"))?;
 
+    // The wire format carries only the commitment. The verifier re-derives the
+    // nullifier public input from (commitment, salt) — both of which the engine
+    // holds after decryption (#217) — so it need not cross the boundary here.
+    // Transmitting the nullifier on the wire is deferred to the wire-format PR.
     let mut commitment_bytes = Vec::new();
-    commitment
+    publics
+        .commitment
         .serialize_with_mode(&mut commitment_bytes, Compress::Yes)
         .map_err(|e| format!("serialize commitment: {e}"))?;
 
@@ -114,7 +119,9 @@ mod wasm_bindings {
 mod tests {
     use super::*;
     use ark_std::rand::SeedableRng;
-    use dp_zk::commitment_circuit::{generate_keys, serialize_pk, serialize_vk, verify_proof};
+    use dp_zk::commitment_circuit::{
+        generate_keys, serialize_pk, serialize_vk, verify_proof, OrderProofPublics,
+    };
     use dp_zk::pedersen::{commit_native, OrderCommitmentInput};
 
     /// Canonical (pk, vk) blobs from a one-time setup, mirroring what the
@@ -152,8 +159,13 @@ mod tests {
         )
         .unwrap();
 
+        // The verifier derives the nullifier public input from the commitment and
+        // the (known) salt — the same value the circuit bound.
+        let salt = bytes_to_scalar(&hex::decode("bb".repeat(32)).unwrap());
+        let publics = OrderProofPublics::derive(c, salt);
+
         // Verify against the canonical VK — never a prover-supplied one.
-        assert!(verify_proof(&vk_bytes, &result.proof, c).unwrap());
+        assert!(verify_proof(&vk_bytes, &result.proof, &publics).unwrap());
     }
 
     #[test]
@@ -251,6 +263,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!verify_proof(&canonical_vk, &result.proof, c).unwrap());
+        let salt = bytes_to_scalar(&hex::decode("bb".repeat(32)).unwrap());
+        let publics = OrderProofPublics::derive(c, salt);
+
+        assert!(!verify_proof(&canonical_vk, &result.proof, &publics).unwrap());
     }
 }
