@@ -400,6 +400,16 @@ mod tests {
         assert!(constraints_satisfied(sample_circuit()));
     }
 
+    /// The other valid `side` bit: a sell order (`side = 1`) must satisfy too,
+    /// so the family-1 check accepts both bits, not just the `sample_circuit`
+    /// buy side.
+    #[test]
+    fn well_formed_sell_side_satisfies_constraints() {
+        let mut c = sample_circuit();
+        c.side = Fr::one();
+        assert!(constraints_satisfied(c));
+    }
+
     /// #216: `side` must be a bit; `side = 7` previously slipped through.
     #[test]
     fn rejects_non_bit_side() {
