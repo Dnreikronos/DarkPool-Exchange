@@ -33,8 +33,12 @@ pub struct CommitmentPreimageCircuit {
     pub trader_id: Fr,
     /// Preimage of `trader_id`: the commitment-key scalar, with
     /// `trader_id == poseidon(trader_addr)` enforced in-circuit (ADR-0001 §2,
-    /// family 9). Engine and step circuit derive `trader_id` the same way, so a
-    /// prover cannot bind a proof to an identity it does not control.
+    /// family 9). This proves `trader_id` is a well-formed Poseidon image —
+    /// the same shape the engine and step circuit derive — so the commitment
+    /// can later flow through matching. `trader_addr` is a private witness and
+    /// `commitment` the sole public input, so binding the proof to a *specific*
+    /// verified caller needs `trader_addr` (or the caller address) exposed as a
+    /// public input and checked at ingestion: deferred to #97/#98.
     pub trader_addr: Fr,
     pub side: Fr,
     pub limit_price: Fr,
@@ -65,10 +69,12 @@ impl ConstraintSynthesizer<Fr> for CommitmentPreimageCircuit {
         enforce_range_60(&size)?;
 
         // ── Family 9: trader-id identity binding ────────────────────────────
-        // `trader_id` must be `poseidon(trader_addr)`. The engine derives
-        // `trader_id` the same way from the verified caller, so a lying prover
-        // cannot rebind a proof to a `trader_id` it does not control. Mirrors
-        // `step_circuit`'s family-9 gadget.
+        // `trader_id` must be `poseidon(trader_addr)`, mirroring `step_circuit`'s
+        // family-9 gadget so the same commitment can flow through matching.
+        // `trader_addr` is a private witness and `commitment` the sole public
+        // input here, so this proves `trader_id` is a well-formed Poseidon image,
+        // not that it belongs to a specific caller — binding to the verified
+        // caller is the deferred #97/#98 work.
         let mut id_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
         id_sponge.absorb(&[trader_addr].as_ref())?;
         let derived_trader_id = id_sponge.squeeze_field_elements(1)?[0].clone();
