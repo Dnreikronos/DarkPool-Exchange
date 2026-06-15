@@ -140,6 +140,7 @@ mod tests {
         let trader_id = dp_zk::pedersen::derive_trader_id(b"alice").unwrap();
         CommitmentPreimageCircuit {
             trader_id,
+            trader_addr: bytes_to_scalar(b"alice"),
             side: Fr::zero(),
             limit_price: decimal_to_scalar(Decimal::from(100)).unwrap(),
             size: decimal_to_scalar(Decimal::from(10)).unwrap(),
