@@ -533,12 +533,12 @@ async fn place_encrypted_order_accepts_matching_caller() {
     assert_eq!(order.trader, Address::ZERO);
 }
 
-/// #233: a byte-identical ciphertext resubmitted is a replay (real ECIES is
-/// randomized), so the second submission is rejected with `DuplicateOrder`.
-#[tokio::test]
-async fn place_encrypted_order_rejects_replayed_ciphertext() {
-    let (engine, _) = make_engine();
-    let d = DecryptedOrder {
+/// The canonical encrypted order the #233 replay tests submit then resubmit.
+/// Real ECIES is randomized; these tests reuse identical bytes on purpose so a
+/// resubmission is a replay. `NoopDecrypter`/`CountingDecrypter` parse the JSON
+/// straight from the ciphertext, so the plaintext order round-trips.
+fn replay_ciphertext() -> Vec<u8> {
+    serde_json::to_vec(&DecryptedOrder {
         trader: Address::ZERO,
         pair: "BTC-USD".into(),
         side: Side::Buy,
@@ -546,8 +546,27 @@ async fn place_encrypted_order_rejects_replayed_ciphertext() {
         size: dec(1),
         commitment_key: "k".into(),
         ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
+    })
+    .unwrap()
+}
+
+/// Assert an engine error is the #233 replay rejection.
+fn assert_duplicate_order(err: crate::EngineError) {
+    assert!(
+        matches!(
+            err,
+            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
+        ),
+        "replay must be rejected as DuplicateOrder, got: {err}"
+    );
+}
+
+/// #233: a byte-identical ciphertext resubmitted is a replay (real ECIES is
+/// randomized), so the second submission is rejected with `DuplicateOrder`.
+#[tokio::test]
+async fn place_encrypted_order_rejects_replayed_ciphertext() {
+    let (engine, _) = make_engine();
+    let ct = replay_ciphertext();
 
     engine
         .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
@@ -558,13 +577,7 @@ async fn place_encrypted_order_rejects_replayed_ciphertext() {
         .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
-        ),
-        "replay must be rejected as DuplicateOrder, got: {err}"
-    );
+    assert_duplicate_order(err);
 }
 
 /// #233: a replay is shed by the cheap pre-decrypt early-out, not just the
@@ -579,17 +592,7 @@ async fn replayed_ciphertext_rejected_before_decrypt() {
     let spy = Arc::new(crate::test_helpers::CountingDecrypter::default());
     engine.set_decrypter(spy.clone());
 
-    let d = DecryptedOrder {
-        trader: Address::ZERO,
-        pair: "BTC-USD".into(),
-        side: Side::Buy,
-        price: dec(100),
-        size: dec(1),
-        commitment_key: "k".into(),
-        ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
-
+    let ct = replay_ciphertext();
     engine
         .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
         .await
@@ -599,13 +602,7 @@ async fn replayed_ciphertext_rejected_before_decrypt() {
         .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
-        ),
-        "replay must be rejected as DuplicateOrder, got: {err}"
-    );
+    assert_duplicate_order(err);
     assert_eq!(
         spy.calls.load(Ordering::SeqCst),
         1,
@@ -625,16 +622,7 @@ async fn replayed_ciphertext_rejected_after_recovery() {
         .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
         .expect("register pair");
 
-    let d = DecryptedOrder {
-        trader: Address::ZERO,
-        pair: "BTC-USD".into(),
-        side: Side::Buy,
-        price: dec(100),
-        size: dec(1),
-        commitment_key: "k".into(),
-        ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
+    let ct = replay_ciphertext();
     engine
         .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
         .await
@@ -649,13 +637,7 @@ async fn replayed_ciphertext_rejected_after_recovery() {
         .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
         .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
-        ),
-        "recovered engine must reject the replay, got: {err}"
-    );
+    assert_duplicate_order(err);
 }
 
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
