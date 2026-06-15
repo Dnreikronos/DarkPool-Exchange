@@ -365,7 +365,7 @@ contract DarkPoolTest is Test {
         });
 
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, matches);
 
         assertTrue(pool.settledBatch(batchId));
         assertEq(pool.balances(trader1, address(quoteToken)), 0);
@@ -410,7 +410,7 @@ contract DarkPoolTest is Test {
         });
 
         vm.prank(operator);
-        pool.submitBatch(bytes32(uint256(0x6d)), bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(bytes32(uint256(0x6d)), _auctionFor(bytes32(uint256(0x6d))), new bytes(256), inputs, matches);
 
         assertTrue(pool.settledBatch(bytes32(uint256(0x6d))));
         assertEq(pool.balances(trader1, address(usdc)), 0);
@@ -430,7 +430,7 @@ contract DarkPoolTest is Test {
         vm.prank(operator);
         vm.expectEmit(true, false, false, true);
         emit IDarkPool.BatchSettled(batchId, block.timestamp);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, _fundedMatch());
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, _fundedMatch());
     }
 
     // --- Fee math ---
@@ -460,7 +460,7 @@ contract DarkPoolTest is Test {
         });
 
         vm.prank(operator);
-        pool.submitBatch(bytes32(uint256(99)), bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(bytes32(uint256(99)), _auctionFor(bytes32(uint256(99))), new bytes(256), inputs, matches);
 
         assertEq(pool.balances(feeRecipient, address(quoteToken)), expectedFee);
         assertEq(expectedFee, 5e17);
@@ -1325,7 +1325,7 @@ contract DarkPoolTest is Test {
 
         // Settlement succeeds despite the pending unbonds.
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, matches);
 
         assertTrue(pool.settledBatch(batchId));
         assertEq(pool.reserved(trader1, address(quoteToken)), 0);
@@ -1465,7 +1465,7 @@ contract DarkPoolTest is Test {
         // Settlement consumes trader1's reserved quote; the pending request and
         // its timer must be cleared, not left dangling.
         vm.prank(operator);
-        pool.submitBatch(bytes32(uint256(11)), bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(bytes32(uint256(11)), _auctionFor(bytes32(uint256(11))), new bytes(256), inputs, matches);
         assertEq(pool.reserved(trader1, address(quoteToken)), 0);
         assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
         assertEq(pool.unreserveReadyAt(trader1, address(quoteToken)), 0);
@@ -1564,6 +1564,15 @@ contract DarkPoolTest is Test {
         return matches;
     }
 
+    /// A batch-distinct throwaway auction id for submitBatch settling tests.
+    /// submitBatch records settledAuction[auctionId] (#214), so a settling batch
+    /// needs a real auction id; bytes32(0) reused across two settling batches in
+    /// one test would falsely collide. (Tests asserting a pre-settlement revert
+    /// still pass bytes32(0): they never reach the settledAuction write.)
+    function _auctionFor(bytes32 batchId) internal pure returns (bytes32) {
+        return bytes32(~uint256(batchId));
+    }
+
     function _setupBatchBalances() internal {
         uint256 notional = 100e18 * 10e18 / 1e18;
         _depositAndReserve(trader1, address(quoteToken), notional);
@@ -1577,6 +1586,6 @@ contract DarkPoolTest is Test {
         inputs[0] = 1;
 
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, _fundedMatch());
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, _fundedMatch());
     }
 }
