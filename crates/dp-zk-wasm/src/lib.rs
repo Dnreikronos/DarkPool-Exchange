@@ -28,6 +28,9 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
 
     let commitment_key_bytes =
         hex::decode(&w.commitment_key).map_err(|e| format!("bad commitment_key hex: {e}"))?;
+    // `trader_id == poseidon(trader_addr)` (#216): the circuit binds the proof
+    // to the commitment-key preimage, which the prover already holds here.
+    let trader_addr = bytes_to_scalar(&commitment_key_bytes);
     let trader_id =
         derive_trader_id(&commitment_key_bytes).map_err(|e| format!("derive_trader_id: {e}"))?;
 
@@ -46,6 +49,7 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
 
     let circuit = CommitmentPreimageCircuit {
         trader_id,
+        trader_addr,
         side: side_fr,
         limit_price: price_fr,
         size: size_fr,

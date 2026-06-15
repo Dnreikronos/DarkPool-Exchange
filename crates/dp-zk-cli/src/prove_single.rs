@@ -25,13 +25,15 @@ pub struct ProveSingleArgs {
 
 #[derive(Debug, Deserialize)]
 pub struct ProveSingleInput {
-    pub trader_id: Option<String>,
     pub salt: String,
     pub side: u8,
     #[serde(with = "rust_decimal::serde::str")]
     pub limit_price: Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub size: Decimal,
+    /// Commitment-key preimage. Required since #216: the circuit binds
+    /// `trader_id == poseidon(commitment_key)`, so a bare `trader_id` image can
+    /// no longer satisfy the proof.
     pub commitment_key: Option<String>,
 }
 
@@ -85,7 +87,7 @@ pub fn generate_proof(
     input: &ProveSingleInput,
     seed: Option<u64>,
 ) -> Result<ProveSingleOutput, String> {
-    let trader_id = resolve_trader_id(input)?;
+    let (trader_id, trader_addr) = resolve_identity(input)?;
 
     let salt_bytes =
         hex::decode(input.salt.trim_start_matches("0x")).map_err(|e| format!("salt hex: {e}"))?;
@@ -109,6 +111,7 @@ pub fn generate_proof(
 
     let circuit = CommitmentPreimageCircuit {
         trader_id,
+        trader_addr,
         side: side_fr,
         limit_price,
         size,
@@ -141,23 +144,18 @@ pub fn generate_proof(
     })
 }
 
-fn resolve_trader_id(input: &ProveSingleInput) -> Result<ark_bn254::Fr, String> {
-    if let Some(ref tid) = input.trader_id {
-        let bytes =
-            hex::decode(tid.trim_start_matches("0x")).map_err(|e| format!("trader_id hex: {e}"))?;
-        if bytes.len() != 32 {
-            return Err(format!(
-                "trader_id must be exactly 32 bytes, got {}",
-                bytes.len()
-            ));
-        }
-        Ok(bytes_to_scalar(&bytes))
-    } else if let Some(ref ck) = input.commitment_key {
-        dp_zk::pedersen::derive_trader_id(ck.as_bytes())
-            .map_err(|e| format!("derive trader_id: {e}"))
-    } else {
-        Err("must provide either trader_id or commitment_key".into())
-    }
+/// Derive `(trader_id, trader_addr)` from the commitment key. The hardened
+/// circuit (#216) binds `trader_id == poseidon(trader_addr)`, so proving needs
+/// the commitment-key preimage — a bare `trader_id` image is insufficient.
+fn resolve_identity(input: &ProveSingleInput) -> Result<(ark_bn254::Fr, ark_bn254::Fr), String> {
+    let ck = input
+        .commitment_key
+        .as_ref()
+        .ok_or("commitment_key is required to prove the trader-identity binding")?;
+    let trader_addr = bytes_to_scalar(ck.as_bytes());
+    let trader_id = dp_zk::pedersen::derive_trader_id(ck.as_bytes())
+        .map_err(|e| format!("derive trader_id: {e}"))?;
+    Ok((trader_id, trader_addr))
 }
 
 fn make_rng(seed: Option<u64>) -> ark_std::rand::rngs::StdRng {
@@ -187,7 +185,6 @@ mod tests {
 
     fn sample_input() -> ProveSingleInput {
         ProveSingleInput {
-            trader_id: None,
             salt: "00".repeat(32),
             side: 0,
             limit_price: Decimal::from(100),
@@ -264,7 +261,6 @@ mod tests {
     #[test]
     fn rejects_missing_identity() {
         let input = ProveSingleInput {
-            trader_id: None,
             salt: "00".repeat(32),
             side: 0,
             limit_price: Decimal::from(100),

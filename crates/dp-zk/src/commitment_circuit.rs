@@ -1,8 +1,15 @@
-//! Groth16 circuit proving knowledge of a Poseidon commitment preimage.
+//! Groth16 circuit proving an order's commitment preimage is well-formed.
 //!
 //! Public input:  commitment (1 Fr element)
-//! Private witness: (trader_id, side, limit_price, size, salt)
-//! Constraint:    poseidon(trader_id, side, limit_price, size, salt) == commitment
+//! Private witness: (trader_id, trader_addr, side, limit_price, size, salt)
+//! Constraints (ADR-0001 §2, mirroring the IVC step circuit's families):
+//!   - family 5: `poseidon(trader_id, side, limit_price, size, salt) == commitment`
+//!   - family 9: `poseidon(trader_addr) == trader_id`   (identity binding)
+//!   - family 1: `side ∈ {0, 1}`
+//!   - family 4: `limit_price < 2^60`, `size < 2^60`
+//!
+//! Without the last three a prover could commit to `side = 7`, a negative or
+//! overflowing price/size, or an arbitrary `trader_id` and still verify (#216).
 
 use ark_bn254::{Bn254, Fr};
 use ark_crypto_primitives::snark::SNARK;
@@ -10,8 +17,11 @@ use ark_crypto_primitives::sponge::constraints::CryptographicSpongeVar;
 use ark_crypto_primitives::sponge::poseidon::constraints::PoseidonSpongeVar;
 use ark_groth16::Groth16;
 use ark_r1cs_std::alloc::AllocVar;
+use ark_r1cs_std::boolean::Boolean;
 use ark_r1cs_std::eq::EqGadget;
 use ark_r1cs_std::fields::fp::FpVar;
+use ark_r1cs_std::fields::FieldVar;
+use ark_r1cs_std::prelude::ToBitsGadget;
 use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
 use ark_std::rand::{CryptoRng, RngCore};
@@ -21,6 +31,11 @@ use crate::pedersen::{commit_native, poseidon_config, OrderCommitmentInput};
 #[derive(Clone, Debug)]
 pub struct CommitmentPreimageCircuit {
     pub trader_id: Fr,
+    /// Preimage of `trader_id`: the commitment-key scalar, with
+    /// `trader_id == poseidon(trader_addr)` enforced in-circuit (ADR-0001 §2,
+    /// family 9). Engine and step circuit derive `trader_id` the same way, so a
+    /// prover cannot bind a proof to an identity it does not control.
+    pub trader_addr: Fr,
     pub side: Fr,
     pub limit_price: Fr,
     pub size: Fr,
@@ -32,11 +47,34 @@ impl ConstraintSynthesizer<Fr> for CommitmentPreimageCircuit {
         let cfg = poseidon_config();
 
         let trader_id = FpVar::new_witness(cs.clone(), || Ok(self.trader_id))?;
+        let trader_addr = FpVar::new_witness(cs.clone(), || Ok(self.trader_addr))?;
         let side = FpVar::new_witness(cs.clone(), || Ok(self.side))?;
         let limit_price = FpVar::new_witness(cs.clone(), || Ok(self.limit_price))?;
         let size = FpVar::new_witness(cs.clone(), || Ok(self.size))?;
         let salt = FpVar::new_witness(cs.clone(), || Ok(self.salt))?;
 
+        // ── Family 1: side ∈ {0, 1} ─────────────────────────────────────────
+        let one = FpVar::<Fr>::one();
+        let zero = FpVar::<Fr>::zero();
+        (&side * (&one - &side)).enforce_equal(&zero)?;
+
+        // ── Family 4: 60-bit range on price and size ────────────────────────
+        // Rejects negative (field-wrapped) and overflowing magnitudes that the
+        // commitment hash would otherwise launder into a valid-looking proof.
+        enforce_range_60(&limit_price)?;
+        enforce_range_60(&size)?;
+
+        // ── Family 9: trader-id identity binding ────────────────────────────
+        // `trader_id` must be `poseidon(trader_addr)`. The engine derives
+        // `trader_id` the same way from the verified caller, so a lying prover
+        // cannot rebind a proof to a `trader_id` it does not control. Mirrors
+        // `step_circuit`'s family-9 gadget.
+        let mut id_sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &cfg);
+        id_sponge.absorb(&[trader_addr].as_ref())?;
+        let derived_trader_id = id_sponge.squeeze_field_elements(1)?[0].clone();
+        derived_trader_id.enforce_equal(&trader_id)?;
+
+        // ── Family 5: commitment binding ────────────────────────────────────
         let expected = compute_commitment_native(&self);
         let expected_var = FpVar::new_input(cs.clone(), || Ok(expected))?;
 
@@ -59,6 +97,21 @@ fn compute_commitment_native(circuit: &CommitmentPreimageCircuit) -> Fr {
         salt: circuit.salt,
     };
     commit_native(&input)
+}
+
+/// Range-proof width for price/size: values must fit in 60 bits. Matches the
+/// encoder's `MAX_ENCODED = 2^60` and `step_circuit`'s `SIZE_BITS`.
+const SIZE_BITS: usize = 60;
+
+/// Enforce `0 <= value < 2^60` by binding every bit above bit 59 to zero. A
+/// negative field element (e.g. `-1 = p-1`) has high bits set and is rejected,
+/// exactly as in `step_circuit::enforce_range_60`.
+fn enforce_range_60(value: &FpVar<Fr>) -> Result<(), SynthesisError> {
+    let bits = value.to_bits_le()?;
+    for bit in bits.iter().skip(SIZE_BITS) {
+        bit.enforce_equal(&Boolean::FALSE)?;
+    }
+    Ok(())
 }
 
 /// Output of the demo-only [`setup_and_prove`]: bundles a prover-chosen
@@ -88,11 +141,15 @@ type Groth16Keys = (
 /// system here — they only affect the public-input value), so any concrete
 /// circuit instance produces an interchangeable key pair for the same RNG.
 pub fn generate_keys<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Groth16Keys, crate::ZkError> {
-    // The witness values are placeholders: setup only inspects the
-    // constraint structure, which is identical for every instance of this
-    // circuit. Using zeros keeps key generation independent of any order.
+    // Setup only inspects the constraint structure, which is identical for
+    // every instance of this circuit, so the witness values are placeholders.
+    // We still pick an internally consistent instance — `trader_id =
+    // poseidon(trader_addr)` over the empty key (both reduce to 0), side a bit,
+    // price/size in range — so the shape is a valid assignment, not merely a
+    // structurally valid one.
     let shape = CommitmentPreimageCircuit {
-        trader_id: Fr::from(0u64),
+        trader_id: crate::pedersen::derive_trader_id(&[]).expect("derive_trader_id is infallible"),
+        trader_addr: Fr::from(0u64),
         side: Fr::from(0u64),
         limit_price: Fr::from(0u64),
         size: Fr::from(0u64),
@@ -126,7 +183,11 @@ pub fn prove_with_key<R: RngCore + CryptoRng>(
 /// Bump it whenever the circuit constraints — and therefore the key material —
 /// change, so a node can never silently load keys minted for an incompatible
 /// circuit and discover the mismatch only when proofs start failing.
-pub const COMMITMENT_CIRCUIT_VERSION: &str = "v1-poseidon-commitment";
+///
+/// `v2` adds the ADR-0001 §2 side-bit, 60-bit range, and identity-binding
+/// constraints (#216), which changes the constraint system and therefore the
+/// key material. Any `v1` keys must be regenerated.
+pub const COMMITMENT_CIRCUIT_VERSION: &str = "v2-poseidon-commitment-constrained";
 
 /// Magic prefix identifying a versioned commitment-key envelope.
 const KEY_ENVELOPE_MAGIC: &[u8; 8] = b"DPCMTKEY";
@@ -293,6 +354,7 @@ mod tests {
     use crate::encoding::decimal_to_scalar;
     use crate::pedersen::bytes_to_scalar;
     use ark_ff::{One, Zero};
+    use ark_relations::gr1cs::ConstraintSystem;
     use ark_std::rand::rngs::StdRng;
     use ark_std::rand::SeedableRng;
     use rust_decimal::Decimal;
@@ -303,14 +365,83 @@ mod tests {
 
     fn sample_circuit() -> CommitmentPreimageCircuit {
         let trader_id = crate::pedersen::derive_trader_id(b"alice").unwrap();
+        let trader_addr = bytes_to_scalar(b"alice");
         let salt = bytes_to_scalar(&[0x22u8; 32]);
         CommitmentPreimageCircuit {
             trader_id,
+            trader_addr,
             side: Fr::zero(),
             limit_price: decimal_to_scalar(Decimal::from(100)).unwrap(),
             size: decimal_to_scalar(Decimal::from(10)).unwrap(),
             salt,
         }
+    }
+
+    /// Synthesize the circuit into a fresh constraint system and report whether
+    /// the witness satisfies every constraint. The commitment public input is
+    /// derived inside `generate_constraints` from the (possibly tampered)
+    /// witness, so a forged field still satisfies the commitment-binding family
+    /// — these tests therefore isolate the side-bit, range, and identity
+    /// families that #216 adds.
+    fn constraints_satisfied(circuit: CommitmentPreimageCircuit) -> bool {
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+        cs.is_satisfied().unwrap()
+    }
+
+    #[test]
+    fn well_formed_order_satisfies_constraints() {
+        assert!(constraints_satisfied(sample_circuit()));
+    }
+
+    /// #216: `side` must be a bit; `side = 7` previously slipped through.
+    #[test]
+    fn rejects_non_bit_side() {
+        let mut c = sample_circuit();
+        c.side = Fr::from(7u64);
+        assert!(!constraints_satisfied(c));
+    }
+
+    /// #216: price at the 2^60 boundary overflows the 60-bit range check.
+    #[test]
+    fn rejects_oversized_price() {
+        let mut c = sample_circuit();
+        c.limit_price = Fr::from(1u128 << 60);
+        assert!(!constraints_satisfied(c));
+    }
+
+    /// #216: size at the 2^60 boundary overflows the 60-bit range check.
+    #[test]
+    fn rejects_oversized_size() {
+        let mut c = sample_circuit();
+        c.size = Fr::from(1u128 << 60);
+        assert!(!constraints_satisfied(c));
+    }
+
+    /// #216: a negative amount wraps to `p - 1`, whose high bits are set, so
+    /// the range check rejects it.
+    #[test]
+    fn rejects_negative_price() {
+        let mut c = sample_circuit();
+        c.limit_price = -Fr::one();
+        assert!(!constraints_satisfied(c));
+    }
+
+    /// #216: `trader_id` must equal `poseidon(trader_addr)`; an arbitrary
+    /// `trader_id` no longer verifies.
+    #[test]
+    fn rejects_forged_trader_id() {
+        let mut c = sample_circuit();
+        c.trader_id += Fr::one();
+        assert!(!constraints_satisfied(c));
+    }
+
+    /// The mirror of the above: tampering with the preimage breaks the binding.
+    #[test]
+    fn rejects_forged_trader_addr() {
+        let mut c = sample_circuit();
+        c.trader_addr += Fr::one();
+        assert!(!constraints_satisfied(c));
     }
 
     // Demo path (prover-chosen VK): fixtures-only since issue #212.
