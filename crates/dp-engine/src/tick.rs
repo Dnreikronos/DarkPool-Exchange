@@ -431,6 +431,15 @@ impl Engine {
             // matches were persisted and applied to the book, so the fold was
             // skipped and the fills sat on the book but never settled on-chain,
             // diverging book state from chain permanently (#215).
+            //
+            // The per-pair IVC round counter (advanced in the fold loop) ticks
+            // once per chunk, so an oversized round can straddle a
+            // `finalize_every` boundary: an earlier chunk finalizes and settles
+            // in this window while a later one folds into the next. This
+            // double-increments a single pair's counter within one tick —
+            // distinct from separate pairs, which carry independent counters.
+            // Every chunk stays settleable, so this is bounded extra settlement
+            // latency, not the unsettleable-forever divergence above.
             let round_matches: Vec<dp_auction::Match> = result
                 .matches
                 .iter()
@@ -665,7 +674,7 @@ mod ivc_tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use alloy_primitives::Address;
@@ -686,6 +695,10 @@ mod ivc_tests {
     struct MockFoldingAggregator {
         fold_calls: AtomicU32,
         finalize_calls: AtomicU32,
+        /// Count of active (non-padding) match rows seen by each `fold_step`,
+        /// in call order. Lets a test assert the chunk boundary (e.g. 8 then 1)
+        /// rather than only the number of folds.
+        fold_active_counts: Mutex<Vec<usize>>,
     }
 
     impl MockFoldingAggregator {
@@ -693,6 +706,7 @@ mod ivc_tests {
             Arc::new(Self {
                 fold_calls: AtomicU32::new(0),
                 finalize_calls: AtomicU32::new(0),
+                fold_active_counts: Mutex::new(Vec::new()),
             })
         }
 
@@ -702,6 +716,10 @@ mod ivc_tests {
 
         fn finalize_calls(&self) -> u32 {
             self.finalize_calls.load(Ordering::SeqCst)
+        }
+
+        fn fold_active_counts(&self) -> Vec<usize> {
+            self.fold_active_counts.lock().unwrap().clone()
         }
     }
 
@@ -719,9 +737,17 @@ mod ivc_tests {
         fn fold_step<'a>(
             &'a self,
             _pair: String,
-            _ext: dp_zk::step_circuit::AuctionExternalInputs,
+            ext: dp_zk::step_circuit::AuctionExternalInputs,
         ) -> Pin<Box<dyn Future<Output = Result<(), AggregatorError>> + Send + 'a>> {
             self.fold_calls.fetch_add(1, Ordering::SeqCst);
+            // Padding rows carry `is_active = 0`; the active rows are the real
+            // matches this chunk folds, so their count is the chunk size.
+            let active = ext
+                .matches
+                .iter()
+                .filter(|m| m.is_active == ark_bn254::Fr::from(1u64))
+                .count();
+            self.fold_active_counts.lock().unwrap().push(active);
             Box::pin(async { Ok(()) })
         }
 
@@ -985,6 +1011,13 @@ mod ivc_tests {
             agg.fold_calls(),
             2,
             "oversized round must fold in chunks of at most batch_size"
+        );
+        // Prove the boundary, not just the fold count: nine matches split into
+        // a full 8-row chunk and a 1-row remainder, each folded as one batch.
+        assert_eq!(
+            agg.fold_active_counts(),
+            vec![8, 1],
+            "oversized round must fold as chunks of 8 then 1"
         );
         assert_eq!(
             engine.active_order_count(),
