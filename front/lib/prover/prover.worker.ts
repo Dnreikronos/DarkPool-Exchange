@@ -5,7 +5,7 @@ import init, { prove_order_wasm } from './zk-pkg/dp_zk_wasm'
 export type ProverRequest = { type: 'init' } | { type: 'prove'; id: string; witness: WitnessInput }
 
 export interface WitnessInput {
-  commitment_key: string
+  trader_addr: string
   side: number
   price: string
   size: string

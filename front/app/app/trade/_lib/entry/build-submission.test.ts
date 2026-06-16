@@ -19,16 +19,16 @@ describe('randomHex', () => {
 })
 
 describe('buildWitness', () => {
-  it('maps buy→0 and carries the hex key + salt and string price/size', () => {
+  it('maps buy→0 and carries trader address, salt, price, and size', () => {
     const w = buildWitness({
-      commitmentKey: 'aa'.repeat(32),
+      trader: TRADER,
       saltHex: 'bb'.repeat(32),
       side: 'buy',
       price: '3000.5',
       size: '0.25',
     })
     expect(w).toEqual({
-      commitment_key: 'aa'.repeat(32),
+      trader_addr: TRADER,
       side: 0,
       price: '3000.5',
       size: '0.25',
@@ -37,7 +37,7 @@ describe('buildWitness', () => {
   })
   it('maps sell→1', () => {
     expect(
-      buildWitness({ commitmentKey: 'aa', saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side
+      buildWitness({ trader: TRADER, saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side
     ).toBe(1)
   })
 })
@@ -51,6 +51,7 @@ describe('buildOrderPayload', () => {
       price: '3000.5',
       size: '0.25',
       commitmentKey: 'aa'.repeat(32),
+      saltHex: 'bb'.repeat(32),
       ttlNs: ORDER_TTL_NS,
     })
     expect(p).toEqual({
@@ -60,6 +61,7 @@ describe('buildOrderPayload', () => {
       price: '3000.5',
       size: '0.25',
       commitment_key: 'aa'.repeat(32),
+      salt: 'bb'.repeat(32),
       ttl: 300_000_000_000,
     })
   })
@@ -72,6 +74,7 @@ describe('buildOrderPayload', () => {
       price: '3000',
       size: '0.5',
       commitmentKey: 'aa'.repeat(32),
+      saltHex: 'bb'.repeat(32),
       ttlNs: ORDER_TTL_NS,
     })
     expect(() => serializeOrder(payload)).not.toThrow()
@@ -109,7 +112,7 @@ describe('createRealSteps', () => {
     expect(steps.map((s) => s.id)).toEqual(['preparing', 'proving', 'encrypting', 'submitting'])
   })
 
-  it('threads ONE commitment_key into both witness and payload', async () => {
+  it('threads trader, commitment key, and salt into their proof/payload slots', async () => {
     const d = deps()
     const steps = createRealSteps(d)
     await steps[0].run(ctx) // preparing
@@ -119,15 +122,14 @@ describe('createRealSteps', () => {
     // witness passed to prove
     expect(d.prove).toHaveBeenCalledWith(
       expect.objectContaining({
-        commitment_key: 'cc'.repeat(32),
+        trader_addr: TRADER,
         salt_hex: 'dd'.repeat(32),
         side: 0,
       })
     )
-    // payload passed to serialize has the SAME commitment_key, no salt field
     const payload = d.serialize.mock.calls[0][0]
     expect(payload.commitment_key).toBe('cc'.repeat(32))
-    expect(payload).not.toHaveProperty('salt_hex')
+    expect(payload.salt).toBe('dd'.repeat(32))
     expect(payload.trader).toBe(TRADER)
   })
 

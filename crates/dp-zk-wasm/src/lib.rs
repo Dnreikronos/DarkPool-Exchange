@@ -8,7 +8,7 @@ use dp_zk::pedersen::{bytes_to_scalar, derive_trader_id};
 
 #[derive(Deserialize)]
 struct WitnessInput {
-    commitment_key: String,
+    trader_addr: String,
     side: u8,
     price: String,
     size: String,
@@ -26,13 +26,18 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
     let w: WitnessInput =
         serde_json::from_str(witness_json).map_err(|e| format!("invalid witness JSON: {e}"))?;
 
-    let commitment_key_bytes =
-        hex::decode(&w.commitment_key).map_err(|e| format!("bad commitment_key hex: {e}"))?;
+    let trader_addr_bytes = decode_hex_field("trader_addr", &w.trader_addr)?;
+    if trader_addr_bytes.len() != 20 {
+        return Err(format!(
+            "trader_addr must be 20 bytes, got {}",
+            trader_addr_bytes.len()
+        ));
+    }
     // `trader_id == poseidon(trader_addr)` (#216): the circuit binds the proof
-    // to the commitment-key preimage, which the prover already holds here.
-    let trader_addr = bytes_to_scalar(&commitment_key_bytes);
+    // to the verified on-chain address, matching the engine's derivation.
+    let trader_addr = bytes_to_scalar(&trader_addr_bytes);
     let trader_id =
-        derive_trader_id(&commitment_key_bytes).map_err(|e| format!("derive_trader_id: {e}"))?;
+        derive_trader_id(&trader_addr_bytes).map_err(|e| format!("derive_trader_id: {e}"))?;
 
     if w.side > 1 {
         return Err(format!("side must be 0 or 1, got {}", w.side));
@@ -44,7 +49,13 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
     let price_fr = decimal_to_scalar(price).map_err(|e| format!("price encoding: {e}"))?;
     let size_fr = decimal_to_scalar(size).map_err(|e| format!("size encoding: {e}"))?;
 
-    let salt_bytes = hex::decode(&w.salt_hex).map_err(|e| format!("bad salt hex: {e}"))?;
+    let salt_bytes = decode_hex_field("salt_hex", &w.salt_hex)?;
+    if salt_bytes.len() != 32 {
+        return Err(format!(
+            "salt_hex must be 32 bytes, got {}",
+            salt_bytes.len()
+        ));
+    }
     let salt = bytes_to_scalar(&salt_bytes);
 
     let circuit = CommitmentPreimageCircuit {
@@ -78,6 +89,14 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
         proof: proof_bytes,
         commitment: commitment_bytes,
     })
+}
+
+fn decode_hex_field(name: &str, value: &str) -> Result<Vec<u8>, String> {
+    let trimmed = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    hex::decode(trimmed).map_err(|e| format!("bad {name} hex: {e}"))
 }
 
 #[derive(Debug)]
@@ -134,7 +153,7 @@ mod tests {
 
     fn sample_witness_json() -> String {
         serde_json::json!({
-            "commitment_key": "aa".repeat(32),
+            "trader_addr": "0x1111111111111111111111111111111111111111",
             "side": 0,
             "price": "100",
             "size": "10",
@@ -170,9 +189,8 @@ mod tests {
 
     #[test]
     fn commitment_matches_native() {
-        let key_hex = "aa".repeat(32);
-        let key_bytes = hex::decode(&key_hex).unwrap();
-        let trader_id = derive_trader_id(&key_bytes).unwrap();
+        let trader_addr = hex::decode("1111111111111111111111111111111111111111").unwrap();
+        let trader_id = derive_trader_id(&trader_addr).unwrap();
         let salt_hex = "bb".repeat(32);
         let salt_bytes = hex::decode(&salt_hex).unwrap();
         let salt = bytes_to_scalar(&salt_bytes);
@@ -204,7 +222,7 @@ mod tests {
     #[test]
     fn rejects_invalid_side() {
         let json = serde_json::json!({
-            "commitment_key": "aa".repeat(32),
+            "trader_addr": "0x1111111111111111111111111111111111111111",
             "side": 2,
             "price": "100",
             "size": "10",
@@ -218,7 +236,7 @@ mod tests {
     #[test]
     fn rejects_bad_hex() {
         let json = serde_json::json!({
-            "commitment_key": "not_hex",
+            "trader_addr": "not_hex",
             "side": 0,
             "price": "100",
             "size": "10",
@@ -231,7 +249,7 @@ mod tests {
     #[test]
     fn rejects_negative_price() {
         let json = serde_json::json!({
-            "commitment_key": "aa".repeat(32),
+            "trader_addr": "0x1111111111111111111111111111111111111111",
             "side": 0,
             "price": "-100",
             "size": "10",

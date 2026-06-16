@@ -8,6 +8,7 @@ const validPayload: DecryptedOrderPayload = {
   price: '2500.00',
   size: '1.0',
   commitment_key: 'abc123',
+  salt: 'aa'.repeat(32),
   ttl: 5_000_000_000,
 }
 
@@ -22,6 +23,7 @@ describe('serializeOrder', () => {
     expect(parsed.price).toBe('2500.00')
     expect(parsed.size).toBe('1.0')
     expect(parsed.commitment_key).toBe('abc123')
+    expect(parsed.salt).toBe('aa'.repeat(32))
     expect(parsed.ttl).toBe(5_000_000_000)
   })
 
@@ -44,6 +46,12 @@ describe('serializeOrder', () => {
     const parsed = JSON.parse(new TextDecoder().decode(bytes))
     expect('commitment_key' in parsed).toBe(true)
     expect('commitmentKey' in parsed).not.toBe(true)
+  })
+
+  it('carries salt as 32 bytes of hex', () => {
+    const bytes = serializeOrder(validPayload)
+    const parsed = JSON.parse(new TextDecoder().decode(bytes))
+    expect(parsed.salt).toBe('aa'.repeat(32))
   })
 
   it('trader field is present and 0x-prefixed', () => {
@@ -71,10 +79,23 @@ describe('serializeOrder', () => {
     expect(() => serializeOrder({ ...validPayload, size: '' })).toThrow('size')
   })
 
+  it('rejects malformed salt', () => {
+    expect(() => serializeOrder({ ...validPayload, salt: 'aa' })).toThrow('salt')
+  })
+
   it('preserves field order matching Rust struct', () => {
     const bytes = serializeOrder(validPayload)
     const json = new TextDecoder().decode(bytes)
     const keys = Object.keys(JSON.parse(json))
-    expect(keys).toEqual(['trader', 'pair', 'side', 'price', 'size', 'commitment_key', 'ttl'])
+    expect(keys).toEqual([
+      'trader',
+      'pair',
+      'side',
+      'price',
+      'size',
+      'commitment_key',
+      'salt',
+      'ttl',
+    ])
   })
 })
