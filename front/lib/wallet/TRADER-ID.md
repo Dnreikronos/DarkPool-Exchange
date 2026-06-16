@@ -5,7 +5,7 @@ prefix-free hex string used by wallet-scoped UI state.
 
 ## Projection
 
-```
+```text
 address                                      -> useTraderId()
 0x1111111111111111111111111111111111111111  -> "1111111111111111111111111111111111111111"
 ```
@@ -22,7 +22,7 @@ is no longer the ZK prover's identity preimage.
 
 The order proof binds identity to the connected on-chain address bytes:
 
-```
+```rust
 trader_id = poseidon(Fr::from_be_bytes_mod_order(address_bytes))
 ```
 
