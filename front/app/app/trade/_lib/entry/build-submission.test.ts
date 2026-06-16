@@ -51,6 +51,7 @@ describe('buildOrderPayload', () => {
       price: '3000.5',
       size: '0.25',
       commitmentKey: 'aa'.repeat(32),
+      saltHex: 'bb'.repeat(32),
       ttlNs: ORDER_TTL_NS,
     })
     expect(p).toEqual({
@@ -60,6 +61,7 @@ describe('buildOrderPayload', () => {
       price: '3000.5',
       size: '0.25',
       commitment_key: 'aa'.repeat(32),
+      salt: 'bb'.repeat(32),
       ttl: 300_000_000_000,
     })
   })
@@ -72,6 +74,7 @@ describe('buildOrderPayload', () => {
       price: '3000',
       size: '0.5',
       commitmentKey: 'aa'.repeat(32),
+      saltHex: 'bb'.repeat(32),
       ttlNs: ORDER_TTL_NS,
     })
     expect(() => serializeOrder(payload)).not.toThrow()
@@ -109,7 +112,7 @@ describe('createRealSteps', () => {
     expect(steps.map((s) => s.id)).toEqual(['preparing', 'proving', 'encrypting', 'submitting'])
   })
 
-  it('threads ONE commitment_key into both witness and payload', async () => {
+  it('threads one commitment_key and salt into witness and payload', async () => {
     const d = deps()
     const steps = createRealSteps(d)
     await steps[0].run(ctx) // preparing
@@ -124,9 +127,9 @@ describe('createRealSteps', () => {
         side: 0,
       })
     )
-    // payload passed to serialize has the SAME commitment_key, no salt field
     const payload = d.serialize.mock.calls[0][0]
     expect(payload.commitment_key).toBe('cc'.repeat(32))
+    expect(payload.salt).toBe('dd'.repeat(32))
     expect(payload).not.toHaveProperty('salt_hex')
     expect(payload.trader).toBe(TRADER)
   })

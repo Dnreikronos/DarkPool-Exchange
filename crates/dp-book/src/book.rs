@@ -643,7 +643,6 @@ mod tests {
                 commitment: vec![1],
                 proof: vec![2],
                 ciphertext: vec![3],
-                salt_nonce: vec![0u8; 32],
             },
         }];
         store.append(&mut events).unwrap();

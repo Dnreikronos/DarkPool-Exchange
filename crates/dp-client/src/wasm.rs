@@ -53,11 +53,14 @@ pub fn compute_commitment_wasm(
     let trader_id = inner_derive_trader_id(commitment_key.as_bytes());
     let price_d = Decimal::from_str(price).map_err(js_err)?;
     let size_d = Decimal::from_str(size).map_err(js_err)?;
-    let stripped = salt_hex
-        .strip_prefix("0x")
-        .or_else(|| salt_hex.strip_prefix("0X"))
-        .unwrap_or(salt_hex);
-    let salt_bytes = hex::decode(stripped).map_err(js_err)?;
+    if salt_hex.len() != 64
+        || !salt_hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(JsError::new("salt must be a 32-byte lowercase hex string"));
+    }
+    let salt_bytes = hex::decode(salt_hex).map_err(js_err)?;
     if salt_bytes.len() != 32 {
         return Err(JsError::new(&format!(
             "salt must be exactly 32 bytes, got {}",

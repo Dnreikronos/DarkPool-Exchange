@@ -75,7 +75,6 @@ mod tests {
                 commitment: vec![],
                 proof: vec![],
                 ciphertext: vec![],
-                salt_nonce: vec![0u8; 32],
             },
         }
     }

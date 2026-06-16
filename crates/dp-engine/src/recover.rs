@@ -409,7 +409,6 @@ impl Engine {
                 order_id,
                 commitment,
                 ciphertext,
-                salt_nonce,
                 ..
             } => {
                 let decrypted = decrypter.decrypt(ciphertext).await.map_err(|source| {
@@ -418,26 +417,22 @@ impl Engine {
                         source,
                     }
                 })?;
-                // A persisted salt_nonce of != 32 bytes cannot be the one the
-                // commitment was originally derived from. Surface the bad
-                // length as a distinct error instead of silently falling back
-                // to a zero nonce — the zero fallback would have produced a
-                // misleading `RecoverCommitmentMismatch` for every affected
-                // event, hiding the actual corruption.
-                let nonce: [u8; 32] = salt_nonce.as_slice().try_into().map_err(|_| {
-                    EngineError::RecoverSaltNonceLen {
+                // The salt is the client's, carried in the ciphertext (#217), so
+                // recovery decodes it from the decrypted order and recomputes the
+                // identical commitment the live path persisted. A malformed salt
+                // is corruption — surface it distinctly instead of letting it
+                // masquerade as a `RecoverCommitmentMismatch`.
+                let salt = crate::engine::parse_order_salt(&decrypted.salt).map_err(|_| {
+                    EngineError::RecoverSaltInvalid {
                         order_id: *order_id,
-                        len: salt_nonce.len(),
                     }
                 })?;
                 let recomputed = crate::engine::recompute_persisted_commitment(
-                    *order_id,
                     decrypted.trader.as_slice(),
-                    &decrypted.commitment_key,
                     decrypted.side as u8,
                     decrypted.price,
                     decrypted.size,
-                    &nonce,
+                    &salt,
                 )?;
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
@@ -1002,7 +997,6 @@ mod tests {
                 commitment: vec![],
                 proof: vec![],
                 ciphertext: vec![],
-                salt_nonce: vec![0u8; 32],
             },
         }
     }

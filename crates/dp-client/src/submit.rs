@@ -1,17 +1,9 @@
-//! Orchestrates an order submission: derive trader id, sample salt, compute
-//! Poseidon commitment, ECIES-encrypt the payload.
-//!
-//! The engine recomputes its own commitment from the decrypted payload using a
-//! per-boot salt the client cannot know (engine.rs:469-476), so the
-//! commitment we emit here is for local record-keeping and future per-order
-//! verification — not for content-binding the engine.
+//! Orchestrates an order submission: derive trader id, decode the payload salt,
+//! compute Poseidon commitment, ECIES-encrypt the payload.
 //!
 //! The proof slot is a placeholder until per-order circuits exist; the
 //! validation layer (dp-api) only checks non-emptiness and a 64 KiB upper
 //! bound today.
-
-use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 use crate::commitment::{
     bytes_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
@@ -21,7 +13,6 @@ use crate::error::ClientError;
 use crate::payload::OrderPayload;
 
 pub const PLACEHOLDER_PROOF: &[u8] = b"dp-client-v0";
-const SALT_DOMAIN_TAG: &[u8] = b"dp-client-salt";
 
 #[derive(Clone, Debug)]
 pub struct OrderSubmission {
@@ -36,33 +27,25 @@ pub fn prepare_order(
     operator_pubkey: &[u8],
     payload: &OrderPayload,
 ) -> Result<OrderSubmission, ClientError> {
-    let mut rng = rand::thread_rng();
-    let mut entropy = [0u8; 32];
-    rng.fill_bytes(&mut entropy);
-    prepare_order_with_entropy(operator_pubkey, payload, &entropy)
+    prepare_order_with_entropy(operator_pubkey, payload, &[0u8; 32])
 }
 
 pub fn prepare_order_with_entropy(
     operator_pubkey: &[u8],
     payload: &OrderPayload,
-    entropy: &[u8; 32],
+    _entropy: &[u8; 32],
 ) -> Result<OrderSubmission, ClientError> {
     if payload.commitment_key.trim().is_empty() {
         return Err(ClientError::InvalidPayload(
             "commitment_key must be non-empty".to_string(),
         ));
     }
+    validate_trader(&payload.trader)?;
 
     let key_bytes = payload.commitment_key.as_bytes();
-
     let trader_id_fr = derive_trader_id(key_bytes);
     let trader_id = scalar_to_be_bytes(trader_id_fr);
-
-    let mut hasher = Sha256::new();
-    hasher.update(SALT_DOMAIN_TAG);
-    hasher.update(key_bytes);
-    hasher.update(entropy);
-    let salt: [u8; 32] = hasher.finalize().into();
+    let salt = parse_payload_salt(&payload.salt)?;
     let salt_fr = bytes_to_scalar(&salt);
 
     let inp = OrderCommitmentInput::from_decimals(
@@ -85,6 +68,34 @@ pub fn prepare_order_with_entropy(
     })
 }
 
+fn validate_trader(trader: &str) -> Result<(), ClientError> {
+    if trader.len() != 42
+        || !trader.starts_with("0x")
+        || !trader[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(ClientError::InvalidPayload(
+            "trader must be a 0x-prefixed 20-byte address".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_payload_salt(salt_hex: &str) -> Result<[u8; 32], ClientError> {
+    if salt_hex.len() != 64
+        || !salt_hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(ClientError::InvalidPayload(
+            "salt must be a 32-byte lowercase hex string".to_string(),
+        ));
+    }
+    let bytes = hex::decode(salt_hex)?;
+    bytes.try_into().map_err(|_| {
+        ClientError::InvalidPayload("salt must be a 32-byte lowercase hex string".to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,11 +111,13 @@ mod tests {
 
     fn sample() -> OrderPayload {
         OrderPayload {
+            trader: "0x0000000000000000000000000000000000000000".into(),
             pair: "ETH-USD".into(),
             side: Side::Buy,
             price: Decimal::new(250000, 2),
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
+            salt: "ab".repeat(32),
             ttl: 5_000_000_000,
         }
     }
@@ -125,13 +138,34 @@ mod tests {
     }
 
     #[test]
-    fn entropy_perturbs_commitment() {
+    fn payload_salt_perturbs_commitment() {
         let pk = fake_pubkey();
-        let p = sample();
-        let a = prepare_order_with_entropy(&pk, &p, &[1u8; 32]).unwrap();
-        let b = prepare_order_with_entropy(&pk, &p, &[2u8; 32]).unwrap();
+        let a = prepare_order(&pk, &sample()).unwrap();
+        let mut p = sample();
+        p.salt = "cd".repeat(32);
+        let b = prepare_order(&pk, &p).unwrap();
         assert_ne!(a.commitment, b.commitment);
         assert_ne!(a.salt, b.salt);
+    }
+
+    #[test]
+    fn malformed_payload_salt_is_rejected() {
+        let pk = fake_pubkey();
+        for salt in ["".to_string(), "AB".repeat(32), "ab".repeat(31)] {
+            let mut p = sample();
+            p.salt = salt;
+            let err = prepare_order(&pk, &p).unwrap_err();
+            assert!(err.to_string().contains("salt"));
+        }
+    }
+
+    #[test]
+    fn malformed_trader_is_rejected() {
+        let pk = fake_pubkey();
+        let mut p = sample();
+        p.trader = "0xdead".into();
+        let err = prepare_order(&pk, &p).unwrap_err();
+        assert!(err.to_string().contains("trader"));
     }
 
     #[test]

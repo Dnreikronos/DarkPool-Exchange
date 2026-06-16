@@ -61,6 +61,7 @@ async fn place(
         price: dec(price),
         size: dec(size),
         commitment_key: key.into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();

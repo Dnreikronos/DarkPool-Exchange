@@ -320,6 +320,7 @@ mod tests {
             price: Decimal::new(180000, 2),
             size: Decimal::new(5, 0),
             commitment_key: "ck-multi".into(),
+            salt: "44".repeat(32),
             ttl: 3_000_000_000,
         }
     }

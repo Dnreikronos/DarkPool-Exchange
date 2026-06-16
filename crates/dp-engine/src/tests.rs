@@ -6,7 +6,7 @@ use dp_aggregator::ProofAggregator;
 use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::{BalanceOracle, SettlementError, Submitter};
-use dp_types::{EventType, Side};
+use dp_types::{DarkPoolError, EventType, Side};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ use crate::test_helpers::{
     count_events, last_proof_for_batch, place_plaintext_order, place_plaintext_order_as,
     BlockingAggregator, FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
 };
-use crate::Engine;
+use crate::{Engine, EngineError};
 
 /// Fixed snapshot cipher for tests that exercise the snapshot store. Writer
 /// and restorer engines must share this key so a sealed envelope round-trips
@@ -418,6 +418,7 @@ async fn place_encrypted_order_noop_round_trip() {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -438,38 +439,34 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
-    let order = engine
+    let _order = engine
         .place_encrypted_order(vec![0xAB; 32], vec![], ct, None)
         .await
         .expect("engine no longer rejects on client commitment");
 
     let events = store.read_from(0, 16).unwrap();
-    let (persisted, nonce) = events
+    let persisted = events
         .iter()
         .find_map(|e| match &e.data {
-            EventData::OrderPlaced {
-                commitment,
-                salt_nonce,
-                ..
-            } => {
-                let n: [u8; 32] = salt_nonce.as_slice().try_into().unwrap();
-                Some((commitment.clone(), n))
-            }
+            EventData::OrderPlaced { commitment, .. } => Some(commitment.clone()),
             _ => None,
         })
         .expect("OrderPlaced");
 
+    // The engine re-derives the commitment from the client's salt (carried in
+    // the ciphertext, #217) bound to the verified on-chain address — never the
+    // client-supplied commitment bytes.
+    let salt = crate::engine::parse_order_salt(&d.salt).unwrap();
     let expected = crate::engine::recompute_persisted_commitment(
-        order.id,
         d.trader.as_slice(),
-        &d.commitment_key,
         d.side as u8,
         d.price,
         d.size,
-        &nonce,
+        &salt,
     );
 
     assert_eq!(persisted, expected.unwrap().to_vec());
@@ -478,6 +475,17 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         vec![0xAB; 32],
         "engine must not echo client value"
     );
+}
+
+#[test]
+fn parse_order_salt_requires_lowercase_32_byte_hex() {
+    assert!(crate::engine::parse_order_salt(&"ab".repeat(32)).is_ok());
+    for salt in ["AB".repeat(32), "zz".repeat(32), "ab".repeat(31)] {
+        assert!(matches!(
+            crate::engine::parse_order_salt(&salt),
+            Err(EngineError::Validation(DarkPoolError::SaltInvalid))
+        ));
+    }
 }
 
 #[tokio::test]
@@ -500,6 +508,7 @@ fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     })
     .unwrap()
@@ -647,6 +656,7 @@ async fn event_store_contains_no_plaintext() {
         price: Decimal::new(123456789, 4),
         size: Decimal::new(987654321, 4),
         commitment_key: commitment_key.into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     let plain = serde_json::to_vec(&d).unwrap();
@@ -1299,6 +1309,7 @@ async fn full_pipeline_encrypted_order_to_settlement() {
                 price,
                 size: dec(1),
                 commitment_key: key.into(),
+                salt: "ab".repeat(32),
                 ttl: 60_000_000_000,
             };
             let plaintext = serde_json::to_vec(&order).unwrap();
@@ -1431,13 +1442,7 @@ mod delist_toctou {
         engine.delist_pair("BTC-USD").unwrap();
 
         let err = engine
-            .persist_order_placed(
-                dummy_order("BTC-USD"),
-                vec![0u8; 32],
-                vec![],
-                vec![1, 2, 3],
-                vec![],
-            )
+            .persist_order_placed(dummy_order("BTC-USD"), vec![0u8; 32], vec![], vec![1, 2, 3])
             .unwrap_err();
         assert!(
             matches!(
@@ -1466,13 +1471,7 @@ mod delist_toctou {
         engine.suspend_pair("BTC-USD").unwrap();
 
         let err = engine
-            .persist_order_placed(
-                dummy_order("BTC-USD"),
-                vec![0u8; 32],
-                vec![],
-                vec![1, 2, 3],
-                vec![],
-            )
+            .persist_order_placed(dummy_order("BTC-USD"), vec![0u8; 32], vec![], vec![1, 2, 3])
             .unwrap_err();
         assert!(matches!(
             err,
@@ -1488,13 +1487,7 @@ mod delist_toctou {
     async fn persist_rejects_when_pair_unregistered() {
         let (engine, _store) = make_engine();
         let err = engine
-            .persist_order_placed(
-                dummy_order("DOGE/USDC"),
-                vec![0u8; 32],
-                vec![],
-                vec![],
-                vec![],
-            )
+            .persist_order_placed(dummy_order("DOGE/USDC"), vec![0u8; 32], vec![], vec![])
             .unwrap_err();
         assert!(matches!(
             err,

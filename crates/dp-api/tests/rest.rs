@@ -124,6 +124,7 @@ async fn rest_place_get_cancel_round_trip() {
         price: "1800".parse().unwrap(),
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -187,6 +188,44 @@ async fn rest_place_get_cancel_round_trip() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn rest_place_order_bad_salt_returns_400() {
+    let (app, _engine) = registered_app();
+    let d = dp_crypto::DecryptedOrder {
+        trader: alloy_primitives::Address::ZERO,
+        pair: "ETH/USDC".into(),
+        side: dp_types::Side::Buy,
+        price: "1800".parse().unwrap(),
+        size: "1".parse().unwrap(),
+        commitment_key: "k1".into(),
+        salt: "AB".repeat(32),
+        ttl: 60_000_000_000,
+    };
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let body = serde_json::json!({
+        "commitment": STANDARD.encode([0u8; 32]),
+        "proof": STANDARD.encode(b"proof"),
+        "encryptedPayload": encrypt_b64(&d),
+    })
+    .to_string();
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/orders")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_to_json(resp.into_body()).await;
+    assert!(json["message"].as_str().unwrap().contains("salt"));
+}
+
 /// `GET /v1/orders` returns only the authenticated caller's own orders,
 /// and nothing at all without a wallet identity. There is no public book.
 #[tokio::test]
@@ -202,6 +241,7 @@ async fn rest_list_orders_is_scoped_to_caller() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
+            salt: "ab".repeat(32),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -423,6 +463,7 @@ async fn sse_stream_receives_auction_events() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("sse-{}-{}", side as u8, price),
+            salt: "ab".repeat(32),
             ttl: 60_000_000_000,
         };
         serde_json::json!({

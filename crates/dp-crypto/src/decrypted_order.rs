@@ -12,6 +12,14 @@ pub struct DecryptedOrder {
     pub price: Decimal,
     pub size: Decimal,
     pub commitment_key: String,
+    /// Client-chosen 32-byte blinding salt, lowercase hex (#217). The client
+    /// picks it, encrypts it here, and proves the order commitment/nullifier
+    /// against it; the engine reads it back to re-derive the same commitment
+    /// and to key the nullifier spent-set. Carrying it inside the ciphertext —
+    /// rather than deriving it server-side from a secret nonce (#153) — is what
+    /// makes the commitment client-reproducible, so the per-order proof can be
+    /// verified at ingestion.
+    pub salt: String,
     pub ttl: i64,
 }
 
@@ -27,6 +35,7 @@ mod tests {
             price: Decimal::new(250000, 2),
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
+            salt: "11".repeat(32),
             ttl: 5_000_000_000,
         }
     }

@@ -1,3 +1,4 @@
+use dp_crypto::CryptoError;
 use dp_engine::EngineError;
 use dp_types::DarkPoolError;
 use tonic::Status;
@@ -22,6 +23,9 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
         EngineError::Validation(e @ DarkPoolError::DuplicateOrder) => {
             Status::already_exists(e.to_string())
         }
+        EngineError::Decrypt(CryptoError::DeserializationFailed(e)) => {
+            Status::invalid_argument(e.to_string())
+        }
         EngineError::Validation(
             e @ (DarkPoolError::PairRequired
             | DarkPoolError::PriceMustBePositive
@@ -30,6 +34,7 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
             | DarkPoolError::LimitMustBePositive
             | DarkPoolError::OrderSizeBelowMinimum { .. }
             | DarkPoolError::OrderPriceNotOnTick { .. }
+            | DarkPoolError::SaltInvalid
             | DarkPoolError::InvalidPair(_)),
         ) => Status::invalid_argument(e.to_string()),
         other => Status::internal(other.to_string()),
@@ -89,6 +94,7 @@ mod tests {
                 pair: "ETH/USDC".into(),
                 tick: "0.01".into(),
             },
+            DarkPoolError::SaltInvalid,
             DarkPoolError::InvalidPair("bad".into()),
         ] {
             let s = engine_error_to_status(EngineError::Validation(err));
