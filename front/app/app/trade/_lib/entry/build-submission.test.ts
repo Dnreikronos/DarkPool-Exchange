@@ -19,16 +19,16 @@ describe('randomHex', () => {
 })
 
 describe('buildWitness', () => {
-  it('maps buy→0 and carries the hex key + salt and string price/size', () => {
+  it('maps buy→0 and carries trader address, salt, price, and size', () => {
     const w = buildWitness({
-      commitmentKey: 'aa'.repeat(32),
+      trader: TRADER,
       saltHex: 'bb'.repeat(32),
       side: 'buy',
       price: '3000.5',
       size: '0.25',
     })
     expect(w).toEqual({
-      commitment_key: 'aa'.repeat(32),
+      trader_addr: TRADER,
       side: 0,
       price: '3000.5',
       size: '0.25',
@@ -37,7 +37,7 @@ describe('buildWitness', () => {
   })
   it('maps sell→1', () => {
     expect(
-      buildWitness({ commitmentKey: 'aa', saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side
+      buildWitness({ trader: TRADER, saltHex: 'bb', side: 'sell', price: '1', size: '1' }).side
     ).toBe(1)
   })
 })
@@ -112,7 +112,7 @@ describe('createRealSteps', () => {
     expect(steps.map((s) => s.id)).toEqual(['preparing', 'proving', 'encrypting', 'submitting'])
   })
 
-  it('threads one commitment_key and salt into witness and payload', async () => {
+  it('threads trader, commitment key, and salt into their proof/payload slots', async () => {
     const d = deps()
     const steps = createRealSteps(d)
     await steps[0].run(ctx) // preparing
@@ -122,7 +122,7 @@ describe('createRealSteps', () => {
     // witness passed to prove
     expect(d.prove).toHaveBeenCalledWith(
       expect.objectContaining({
-        commitment_key: 'cc'.repeat(32),
+        trader_addr: TRADER,
         salt_hex: 'dd'.repeat(32),
         side: 0,
       })

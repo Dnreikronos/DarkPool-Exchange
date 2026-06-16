@@ -81,7 +81,7 @@ export function buildMockSteps(
   opts: {
     placeOrder: (payload: SubmitPayload) => void | Promise<void>
     prove?: (witness: {
-      commitment_key: string
+      trader_addr: string
       side: number
       price: string
       size: string
@@ -96,7 +96,7 @@ export function buildMockSteps(
     run: async () => {
       if (id === 'proving' && opts.prove) {
         await opts.prove({
-          commitment_key: randomHex(32),
+          trader_addr: `0x${randomHex(20)}`,
           side: payload.side === 'buy' ? 0 : 1,
           price: payload.price,
           size: payload.size,

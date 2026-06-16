@@ -1,8 +1,8 @@
 // Pure builders for the real submission pipeline (#99). No React, no
-// network, no worker — everything is injected so this is node-testable.
-// One commitment_key and one salt are generated per submission. The salt is
-// threaded into both the prover witness and the encrypted order payload so the
-// engine can re-derive the same commitment after decrypting.
+// network, no worker; everything is injected so this is node-testable.
+// The connected wallet address binds the proof to the trader. The commitment
+// key is payload-only entropy, while salt is shared between the prover witness
+// and encrypted payload so the engine can reproduce the proof commitment.
 
 import type { DecryptedOrderPayload } from '@/lib/crypto'
 import type { WitnessInput } from '@/lib/prover'
@@ -27,14 +27,14 @@ export function randomHex(nBytes: number): string {
 }
 
 export function buildWitness(args: {
-  commitmentKey: string
+  trader: string
   saltHex: string
   side: OrderSide
   price: string
   size: string
 }): WitnessInput {
   return {
-    commitment_key: args.commitmentKey,
+    trader_addr: args.trader,
     side: sideToNum(args.side),
     price: args.price,
     size: args.size,
@@ -86,8 +86,8 @@ export interface RealStepDeps {
 
 /**
  * Build the four real stage steps. The steps share a private draft so the
- * commitment_key minted in `preparing` reaches `proving`/`encrypting`, and
- * the prove output reaches `submitting`.
+ * entropy minted in `preparing` reaches `proving`/`encrypting`, and the prove
+ * output reaches `submitting`.
  */
 export function createRealSteps(deps: RealStepDeps): StageStep[] {
   const draft: {
@@ -106,7 +106,7 @@ export function createRealSteps(deps: RealStepDeps): StageStep[] {
         const commitmentKey = deps.randomHex(32)
         const saltHex = deps.randomHex(32)
         draft.witness = buildWitness({
-          commitmentKey,
+          trader: deps.trader,
           saltHex,
           side: deps.side,
           price: deps.price,
