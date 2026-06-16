@@ -489,19 +489,55 @@ async fn place_encrypted_order_bad_ciphertext() {
     assert!(r.is_err());
 }
 
-#[tokio::test]
-async fn place_encrypted_order_rejects_caller_address_mismatch() {
-    let (engine, _) = make_engine();
-    let d = DecryptedOrder {
+/// The canonical encrypted order on `pair`, shared by the `place_encrypted_order`
+/// tests. `NoopDecrypter`/`CountingDecrypter` parse the order straight from this
+/// JSON, so the plaintext round-trips.
+fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
+    serde_json::to_vec(&DecryptedOrder {
         trader: Address::ZERO,
-        pair: "BTC-USD".into(),
+        pair: pair.into(),
         side: Side::Buy,
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
         ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
+    })
+    .unwrap()
+}
+
+/// The canonical order on the default `BTC-USD` pair. Real ECIES is randomized,
+/// so the replay tests resubmit these exact bytes to stand in for a replay.
+fn sample_order_ciphertext() -> Vec<u8> {
+    sample_order_ciphertext_for("BTC-USD")
+}
+
+/// Submit the canonical order, expecting admission.
+async fn admit_sample_order(engine: &Engine, ct: Vec<u8>) {
+    engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .await
+        .expect("first submission is admitted");
+}
+
+/// Resubmit `ct` and assert it is rejected as a #233 replay.
+async fn expect_replay_rejected(engine: &Engine, ct: Vec<u8>) {
+    let err = engine
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
+        ),
+        "replay must be rejected as DuplicateOrder, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn place_encrypted_order_rejects_caller_address_mismatch() {
+    let (engine, _) = make_engine();
+    let ct = sample_order_ciphertext();
     let wrong_caller: Address = "0x0000000000000000000000000000000000000001"
         .parse()
         .unwrap();
@@ -516,16 +552,7 @@ async fn place_encrypted_order_rejects_caller_address_mismatch() {
 #[tokio::test]
 async fn place_encrypted_order_accepts_matching_caller() {
     let (engine, _) = make_engine();
-    let d = DecryptedOrder {
-        trader: Address::ZERO,
-        pair: "BTC-USD".into(),
-        side: Side::Buy,
-        price: dec(100),
-        size: dec(1),
-        commitment_key: "k".into(),
-        ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
+    let ct = sample_order_ciphertext();
     let order = engine
         .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(Address::ZERO))
         .await
@@ -533,57 +560,11 @@ async fn place_encrypted_order_accepts_matching_caller() {
     assert_eq!(order.trader, Address::ZERO);
 }
 
-/// The canonical encrypted order the #233 replay tests submit then resubmit.
-/// Real ECIES is randomized; these tests reuse identical bytes on purpose so a
-/// resubmission is a replay. `NoopDecrypter`/`CountingDecrypter` parse the JSON
-/// straight from the ciphertext, so the plaintext order round-trips.
-fn replay_ciphertext() -> Vec<u8> {
-    serde_json::to_vec(&DecryptedOrder {
-        trader: Address::ZERO,
-        pair: "BTC-USD".into(),
-        side: Side::Buy,
-        price: dec(100),
-        size: dec(1),
-        commitment_key: "k".into(),
-        ttl: 60_000_000_000,
-    })
-    .unwrap()
-}
-
-/// Assert an engine error is the #233 replay rejection.
-fn assert_duplicate_order(err: crate::EngineError) {
-    assert!(
-        matches!(
-            err,
-            crate::EngineError::Validation(dp_types::DarkPoolError::DuplicateOrder)
-        ),
-        "replay must be rejected as DuplicateOrder, got: {err}"
-    );
-}
-
-/// #233: a byte-identical ciphertext resubmitted is a replay (real ECIES is
-/// randomized), so the second submission is rejected with `DuplicateOrder`.
-#[tokio::test]
-async fn place_encrypted_order_rejects_replayed_ciphertext() {
-    let (engine, _) = make_engine();
-    let ct = replay_ciphertext();
-
-    engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
-        .await
-        .expect("first submission is admitted");
-
-    let err = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
-        .await
-        .unwrap_err();
-    assert_duplicate_order(err);
-}
-
-/// #233: a replay is shed by the cheap pre-decrypt early-out, not just the
-/// under-lock check — so a captured ciphertext can't burn ECIES decrypt +
-/// commitment derivation on every resubmission. The spy decrypter must see
-/// exactly one call across two identical submissions.
+/// #233: a replayed ciphertext is rejected on a live engine, and the cheap
+/// pre-decrypt early-out — not just the under-lock check — sheds it, so a
+/// captured ciphertext can't burn ECIES decrypt + commitment derivation on
+/// every resubmission. The spy decrypter must see exactly one call across the
+/// two identical submissions.
 #[tokio::test]
 async fn replayed_ciphertext_rejected_before_decrypt() {
     use std::sync::atomic::Ordering;
@@ -592,17 +573,9 @@ async fn replayed_ciphertext_rejected_before_decrypt() {
     let spy = Arc::new(crate::test_helpers::CountingDecrypter::default());
     engine.set_decrypter(spy.clone());
 
-    let ct = replay_ciphertext();
-    engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
-        .await
-        .expect("first submission is admitted");
-
-    let err = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
-        .await
-        .unwrap_err();
-    assert_duplicate_order(err);
+    let ct = sample_order_ciphertext();
+    admit_sample_order(&engine, ct.clone()).await;
+    expect_replay_rejected(&engine, ct).await;
     assert_eq!(
         spy.calls.load(Ordering::SeqCst),
         1,
@@ -622,22 +595,15 @@ async fn replayed_ciphertext_rejected_after_recovery() {
         .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
         .expect("register pair");
 
-    let ct = replay_ciphertext();
-    engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct.clone(), None)
-        .await
-        .expect("first submission is admitted");
+    let ct = sample_order_ciphertext();
+    admit_sample_order(&engine, ct.clone()).await;
 
     // A fresh engine replays the same event log (no snapshot store → full replay).
     let recovered = Engine::new(store.clone(), Duration::from_millis(50));
     recovered.set_snapshot_cipher(Some(test_snapshot_cipher()));
     recovered.recover().await.expect("recover from log");
 
-    let err = recovered
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
-        .await
-        .unwrap_err();
-    assert_duplicate_order(err);
+    expect_replay_rejected(&recovered, ct).await;
 }
 
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
@@ -652,16 +618,7 @@ async fn place_encrypted_order_canonicalises_lowercase_pair() {
         .register_pair_with_event("ETH/USDC", crate::state::PairConfig::default())
         .unwrap();
 
-    let d = DecryptedOrder {
-        trader: Address::ZERO,
-        pair: "eth/usdc".into(),
-        side: Side::Buy,
-        price: dec(100),
-        size: dec(1),
-        commitment_key: "k".into(),
-        ttl: 60_000_000_000,
-    };
-    let ct = serde_json::to_vec(&d).unwrap();
+    let ct = sample_order_ciphertext_for("eth/usdc");
     let order = engine
         .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
         .await
