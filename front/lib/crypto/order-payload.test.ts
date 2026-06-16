@@ -89,6 +89,15 @@ describe('serializeOrder', () => {
     const bytes = serializeOrder(validPayload)
     const json = new TextDecoder().decode(bytes)
     const keys = Object.keys(JSON.parse(json))
-    expect(keys).toEqual(['trader', 'pair', 'side', 'price', 'size', 'commitment_key', 'salt', 'ttl'])
+    expect(keys).toEqual([
+      'trader',
+      'pair',
+      'side',
+      'price',
+      'size',
+      'commitment_key',
+      'salt',
+      'ttl',
+    ])
   })
 })
