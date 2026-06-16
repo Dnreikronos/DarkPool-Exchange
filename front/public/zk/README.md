@@ -19,16 +19,14 @@ cargo run -p dp-zk-cli --bin dp-zk-cli -- \
 ```
 
 It exists only so the proving UX works end-to-end before a real ceremony.
-It is safe **today** because nothing verifies the per-order proof at
-ingestion — the engine re-derives order validity operator-side (see
-`dp-engine::place_encrypted_order` and ADR 0001). Do not rely on it for any
-security property.
+Do **not** configure the engine with the matching demo `commitment_vk.bin` in
+any real environment: because the seed is public, anyone can forge proofs that
+verify under that VK. Use `DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true` only
+for local/dev fixtures, or replace this key with ceremony output.
 
 ## Replacement
 
-A real, single-contributor-honest trusted setup is tracked in #97/#98.
-That ceremony produces the canonical `(commitment_pk.bin,
-commitment_vk.bin)` pair; the proving key replaces this file and the engine
-pins the matching verifying key. The VK for this demo key is reproducible
-from the same command above (`commitment_vk.bin`, ~330 B) and is not
-checked in here because no verifier consumes it yet.
+A real, single-contributor-honest trusted setup produces the canonical
+`(commitment_pk.bin, commitment_vk.bin)` pair. The proving key replaces this
+file, and `darkpool-server` must be started with `DARKPOOL_ORDER_PROOF_VK`
+pointing at the matching verifying key.

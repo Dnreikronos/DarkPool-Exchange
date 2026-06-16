@@ -17,30 +17,23 @@ export const file_darkpool_v1_darkpool: GenFile = /*@__PURE__*/
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
  * sees plaintext on the wire; the operator decrypts server-side.
  *
- * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
- * verified today. The engine ignores the client commitment and re-derives
- * the canonical Poseidon commitment over the decrypted fields; the proof is
- * accepted unverified. Order validity is operator-enforced, not
- * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
- * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
- *
- * Both fields are still SYNTACTICALLY required: `validate_place_order`
- * rejects an empty `commitment` or `proof`. Until real verification lands,
- * clients must keep sending non-empty bytes for both (placeholder bytes are
- * fine — they are not checked, only their presence is).
+ * The API only performs syntactic checks on `commitment` and `proof`; the
+ * engine decrypts the payload, re-derives the canonical Poseidon commitment
+ * and nullifier from plaintext fields, and verifies the proof against those
+ * engine-derived public inputs when the operator has pinned a canonical VK.
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
   /**
-   * client commitment; re-derived & overridden server-side (unverified)
+   * client commitment; engine re-derives canonical value
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment: Uint8Array;
 
   /**
-   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
+   * per-order Groth16 proof for commitment/nullifier
    *
    * @generated from field: bytes proof = 2;
    */
@@ -58,30 +51,23 @@ export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
  * sees plaintext on the wire; the operator decrypts server-side.
  *
- * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
- * verified today. The engine ignores the client commitment and re-derives
- * the canonical Poseidon commitment over the decrypted fields; the proof is
- * accepted unverified. Order validity is operator-enforced, not
- * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
- * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
- *
- * Both fields are still SYNTACTICALLY required: `validate_place_order`
- * rejects an empty `commitment` or `proof`. Until real verification lands,
- * clients must keep sending non-empty bytes for both (placeholder bytes are
- * fine — they are not checked, only their presence is).
+ * The API only performs syntactic checks on `commitment` and `proof`; the
+ * engine decrypts the payload, re-derives the canonical Poseidon commitment
+ * and nullifier from plaintext fields, and verifies the proof against those
+ * engine-derived public inputs when the operator has pinned a canonical VK.
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequestJson = {
   /**
-   * client commitment; re-derived & overridden server-side (unverified)
+   * client commitment; engine re-derives canonical value
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment?: string;
 
   /**
-   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
+   * per-order Groth16 proof for commitment/nullifier
    *
    * @generated from field: bytes proof = 2;
    */

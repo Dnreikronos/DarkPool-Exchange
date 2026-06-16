@@ -7,10 +7,11 @@
 
 ## Problem
 
-The per-order Groth16 proof is **accepted unverified** at ingestion
+Before the #217 enforcement work, the per-order Groth16 proof was **accepted
+unverified** at ingestion
 (`Engine::place_encrypted_order`). The merged circuit (#243) now exposes a
 nullifier public input (`poseidon(NULLIFIER_DOMAIN, commitment, salt)`), but
-nothing verifies the proof or tracks a nullifier spent-set, so a captured
+no code verified the proof or tracked a nullifier spent-set, so a captured
 `(proof, commitment)` pair carries no replay/trader binding. #244 keys a
 spent-set on the ciphertext SHA-256, which catches byte-identical replays but
 is not a cryptographic per-order binding.
