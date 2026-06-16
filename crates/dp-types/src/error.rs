@@ -40,6 +40,12 @@ pub enum DarkPoolError {
     /// submission, not a fresh order (#233).
     #[error("duplicate order: this encrypted payload was already submitted")]
     DuplicateOrder,
+    /// The decrypted order's `salt` is not a 32-byte lowercase-hex string. The
+    /// client must send a well-formed blinding salt — the engine re-derives the
+    /// commitment and nullifier from it (#217), so a malformed salt is a
+    /// malformed order, not an internal fault.
+    #[error("invalid salt: expected 32-byte hex")]
+    SaltInvalid,
 }
 
 #[cfg(test)]

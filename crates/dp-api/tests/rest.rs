@@ -124,6 +124,7 @@ async fn rest_place_get_cancel_round_trip() {
         price: "1800".parse().unwrap(),
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -202,6 +203,7 @@ async fn rest_list_orders_is_scoped_to_caller() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
+            salt: "ab".repeat(32),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -423,6 +425,7 @@ async fn sse_stream_receives_auction_events() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("sse-{}-{}", side as u8, price),
+            salt: "ab".repeat(32),
             ttl: 60_000_000_000,
         };
         serde_json::json!({

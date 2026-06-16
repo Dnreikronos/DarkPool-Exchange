@@ -72,6 +72,7 @@ fn valid_decrypted() -> DecryptedOrder {
         price: Decimal::new(180050, 2),
         size: Decimal::from(10),
         commitment_key: format!("ck-{}", n),
+        salt: "ab".repeat(32),
         ttl: 60_000_000_000,
     }
 }
@@ -91,6 +92,7 @@ async fn place_test_order(
         price: price.parse().unwrap(),
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
+        salt: "ab".repeat(32),
         ttl: 600_000_000_000,
     };
     let resp = h
@@ -120,6 +122,7 @@ async fn place_test_order_as(
         price: price.parse().unwrap(),
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
+        salt: "ab".repeat(32),
         ttl: 600_000_000_000,
     };
     let resp = h

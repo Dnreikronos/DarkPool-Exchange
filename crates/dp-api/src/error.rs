@@ -30,6 +30,7 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
             | DarkPoolError::LimitMustBePositive
             | DarkPoolError::OrderSizeBelowMinimum { .. }
             | DarkPoolError::OrderPriceNotOnTick { .. }
+            | DarkPoolError::SaltInvalid
             | DarkPoolError::InvalidPair(_)),
         ) => Status::invalid_argument(e.to_string()),
         other => Status::internal(other.to_string()),

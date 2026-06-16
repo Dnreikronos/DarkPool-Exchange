@@ -10,6 +10,7 @@ use dp_settlement::{BalanceOracle, InsecureDevOracle, NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
 use dp_types::{DarkPoolError, EventType, Order, Side};
 use parking_lot::{Mutex, RwLock};
+#[cfg(test)]
 use rand::RngCore;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
@@ -68,7 +69,6 @@ pub(crate) struct Inner {
     pub(crate) secrets: Mutex<HashMap<Uuid, OrderSecrets>>,
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
-    pub(crate) salt_nonce: [u8; 32],
     pub(crate) batch_size: usize,
     /// Persistent home for periodic state snapshots. `None` disables
     /// the snapshot pipeline — recover then always falls back to full
@@ -100,8 +100,6 @@ impl Engine {
             auction_interval
         };
         let (tx, _rx) = broadcast::channel(DEFAULT_SUBSCRIBER_CAPACITY);
-        let mut salt_nonce = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut salt_nonce);
         let engine = Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(EngineState::new()),
@@ -113,7 +111,6 @@ impl Engine {
                 secrets: Mutex::new(HashMap::new()),
                 subscribers: tx,
                 auction_interval: interval,
-                salt_nonce,
                 batch_size: 8,
                 snapshot_store: RwLock::new(None),
                 snapshot_cipher: RwLock::new(None),
@@ -630,11 +627,12 @@ impl Engine {
             seq: 0,
         };
 
-        // Capture ZK witness secrets in-memory only. Salt is derived
-        // deterministically from commitment_key + order_id; trader_id is
-        // derived from commitment_key. This avoids persisting plaintext
-        // and survives the privacy canary test.
-        let nonce = &self.inner.salt_nonce;
+        // Capture ZK witness secrets in-memory only. The salt is the
+        // client-chosen blinding value carried inside the ciphertext (#217), so
+        // the engine re-derives exactly the commitment the client proved
+        // against — rather than minting a server-side salt the client cannot
+        // know (#153). `trader_id` stays bound to the verified on-chain address.
+        let salt = parse_order_salt(&decrypted.salt)?;
         // Read the trader's settlement-locked balance for the asset this leg
         // spends from the installed BalanceOracle (#213). Clone the Arc out so
         // the parking_lot read guard is not held across the await; a real
@@ -646,15 +644,13 @@ impl Engine {
             .await
             .map_err(EngineError::BalanceLookup)?;
         let secrets = derive_order_secrets(
-            order.id,
             order.trader.as_slice(),
-            &order.commitment_key,
             order.side as u8,
             order.price,
             order.size,
             balance,
             position,
-            nonce,
+            salt,
         )?;
         let commitment = secrets.commitment.to_vec();
         self.inner.secrets.lock().insert(order.id, secrets);
@@ -671,7 +667,6 @@ impl Engine {
             // Persisted verbatim for the audit log / replay; still unverified.
             _unverified_proof,
             ciphertext,
-            nonce.to_vec(),
         ) {
             Ok(seq) => order.seq = seq,
             Err(e) => {
@@ -772,7 +767,6 @@ impl Engine {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        salt_nonce: Vec<u8>,
     ) -> Result<u64, EngineError> {
         // Hash the ciphertext now, before it is moved into the event below;
         // this is the replay/spent-set key (#233).
@@ -786,7 +780,6 @@ impl Engine {
                 commitment,
                 proof,
                 ciphertext,
-                salt_nonce,
             },
         }];
 
@@ -954,32 +947,26 @@ fn leg_witness_from(
 
 /// Derive per-order ZK secrets.
 ///
-/// **Salt threat model.** `salt = SHA256("salt" || nonce || commitment_key
-/// || order_id)` is deterministic given the inputs, but the per-boot
-/// `nonce` (32 bytes from OsRng, stored only in `Inner`) prevents any
-/// party — including the client who knows both `commitment_key` and
-/// `order_id` — from reconstructing the salt. The nonce is persisted
-/// alongside each `OrderPlaced` event so recovery can recompute the
-/// commitment.
+/// **Salt source (#217).** The `salt` is the client-chosen blinding value
+/// carried inside the ciphertext, decoded by [`parse_order_salt`]. The client
+/// commits and proves the order against it, so the engine re-derives the
+/// identical commitment here — that is what makes the per-order proof
+/// verifiable at ingestion. `trader_id` stays bound to the verified on-chain
+/// address (#153), not the client-chosen `commitment_key`, so a client cannot
+/// forge another trader's identity by choosing the salt.
 // Internal helper threading the full secret-derivation inputs; the argument
 // list is intentionally flat rather than a one-off params struct.
 #[allow(clippy::too_many_arguments)]
 fn derive_order_secrets(
-    order_id: Uuid,
     trader_addr: &[u8],
-    commitment_key: &str,
     side: u8,
     price: Decimal,
     size: Decimal,
     balance: Decimal,
     position: i128,
-    nonce: &[u8; 32],
+    salt: [u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
-    // Identity is bound to the verified on-chain address, not the client-
-    // chosen commitment_key (#153). The commitment_key is retained below only
-    // as blinding entropy for the salt.
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
-    let salt = derive_salt(commitment_key, order_id, nonce);
     let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
 
     // `balance`/`position` are read from the installed BalanceOracle by the
@@ -994,21 +981,19 @@ fn derive_order_secrets(
     })
 }
 
-/// Recompute the persisted Poseidon commitment for a (commitment_key,
-/// order_id, side, price, size) tuple. Used by recovery to re-verify
-/// `OrderPlaced` events without keeping any state in memory.
+/// Recompute the persisted Poseidon commitment for a (trader_addr, side, price,
+/// size, salt) tuple. Used by recovery to re-verify `OrderPlaced` events
+/// without keeping any state in memory. The `salt` is the client's, read back
+/// from the decrypted ciphertext (#217).
 pub(crate) fn recompute_persisted_commitment(
-    order_id: Uuid,
     trader_addr: &[u8],
-    commitment_key: &str,
     side: u8,
     price: Decimal,
     size: Decimal,
-    nonce: &[u8; 32],
+    salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
-    let salt = derive_salt(commitment_key, order_id, nonce);
-    compute_poseidon_commitment(&trader_id, side, price, size, &salt)
+    compute_poseidon_commitment(&trader_id, side, price, size, salt)
 }
 
 /// SHA-256 of an order's ciphertext — the key for the replay spent-set (#233).
@@ -1021,13 +1006,16 @@ pub(crate) fn ciphertext_digest(ciphertext: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
-fn derive_salt(commitment_key: &str, order_id: Uuid, nonce: &[u8; 32]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(b"salt");
-    h.update(nonce);
-    h.update(commitment_key.as_bytes());
-    h.update(order_id.as_bytes());
-    h.finalize().into()
+/// Decode the client's `salt` (lowercase hex inside the ciphertext, #217) into
+/// the 32 raw bytes the commitment and nullifier are derived from. A malformed
+/// salt is a malformed order, surfaced to the client as `SaltInvalid` rather
+/// than an internal fault.
+pub(crate) fn parse_order_salt(salt_hex: &str) -> Result<[u8; 32], EngineError> {
+    let bytes =
+        hex::decode(salt_hex).map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
+    bytes
+        .try_into()
+        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))
 }
 
 /// Compute the Poseidon order commitment (matches the in-circuit gadget
@@ -1091,6 +1079,10 @@ pub(crate) fn build_decrypted_ciphertext(
     commitment_key: &str,
     ttl: Duration,
 ) -> (Vec<u8>, Vec<u8>) {
+    // Random per call so two otherwise-identical orders still get distinct
+    // commitments (the live client picks a fresh salt per order, #217).
+    let mut salt = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
     let d = dp_crypto::DecryptedOrder {
         trader,
         pair: pair.to_string(),
@@ -1098,6 +1090,7 @@ pub(crate) fn build_decrypted_ciphertext(
         price,
         size,
         commitment_key: commitment_key.to_string(),
+        salt: hex::encode(salt),
         ttl: ttl.as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();

@@ -33,8 +33,6 @@ pub enum EventData {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        #[serde(default)]
-        salt_nonce: Vec<u8>,
     },
     OrderCancelled {
         order_id: Uuid,
@@ -159,7 +157,6 @@ mod tests {
                     commitment: vec![1],
                     proof: vec![2],
                     ciphertext: vec![3],
-                    salt_nonce: vec![4],
                 },
                 EventType::OrderPlaced,
             ),

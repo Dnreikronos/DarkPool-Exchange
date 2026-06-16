@@ -46,6 +46,7 @@ async fn place(
         price: Decimal::from(price),
         size: Decimal::from(10),
         commitment_key: key.into(),
+        salt: "ab".repeat(32),
         ttl: Duration::from_secs(60).as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
