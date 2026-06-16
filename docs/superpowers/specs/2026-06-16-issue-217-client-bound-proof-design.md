@@ -22,7 +22,8 @@ nonce + a server-assigned `order_id`
 (`salt = SHA256("salt" ‖ nonce ‖ commitment_key ‖ order_id)`), so the client
 cannot reproduce the commitment, and a server-derived nullifier is
 non-deterministic per submission — a spent-set on it would add nothing over
-#244. Genuine nullifier binding is inherently a **client-side** construct.
+[#244](https://github.com/Dnreikronos/DarkPool-Exchange/pull/244). Genuine
+nullifier binding is inherently a **client-side** construct.
 
 There is also a second divergence: the WASM prover binds `trader_id` to the
 **commitment_key** (`dp-zk-wasm/src/lib.rs:31-35`), while the engine binds it to
@@ -59,7 +60,7 @@ ingestion**, binding it to the salt *and* the on-chain trader:
 
 ## Threat-model delta vs #153
 
-#153 moved the salt server-side to stop a client choosing it. Here the client
+\#153 moved the salt server-side to stop a client choosing it. Here the client
 chooses the salt again, but: (a) `trader_id` stays bound to the verified
 on-chain address (the actual #153 fix — unchanged), and (b) the salt is only
 blinding entropy; a client-chosen 32-byte random salt is as unguessable to

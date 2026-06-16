@@ -1011,6 +1011,13 @@ pub(crate) fn ciphertext_digest(ciphertext: &[u8]) -> [u8; 32] {
 /// salt is a malformed order, surfaced to the client as `SaltInvalid` rather
 /// than an internal fault.
 pub(crate) fn parse_order_salt(salt_hex: &str) -> Result<[u8; 32], EngineError> {
+    if salt_hex.len() != 64
+        || !salt_hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(EngineError::Validation(DarkPoolError::SaltInvalid));
+    }
     let bytes =
         hex::decode(salt_hex).map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
     bytes

@@ -44,7 +44,7 @@ pub enum DarkPoolError {
     /// client must send a well-formed blinding salt — the engine re-derives the
     /// commitment and nullifier from it (#217), so a malformed salt is a
     /// malformed order, not an internal fault.
-    #[error("invalid salt: expected 32-byte hex")]
+    #[error("invalid salt: expected 32-byte lowercase hex")]
     SaltInvalid,
 }
 

@@ -53,6 +53,10 @@ fn stub_proof() -> Vec<u8> {
 
 fn build_req(d: &DecryptedOrder) -> PlaceOrderRequest {
     let ct = serde_json::to_vec(d).unwrap();
+    build_req_from_ciphertext(ct)
+}
+
+fn build_req_from_ciphertext(ct: Vec<u8>) -> PlaceOrderRequest {
     PlaceOrderRequest {
         // Engine recomputes the canonical Poseidon commitment over decrypted
         // fields; the API only checks commitment is non-empty. Any 32-byte
@@ -179,6 +183,92 @@ async fn place_order_validation_errors() {
             .unwrap_or_else(|| panic!("{} should fail", name));
         assert_eq!(err.code(), Code::InvalidArgument, "case: {}", name);
     }
+}
+
+#[tokio::test]
+async fn place_order_missing_salt_is_invalid_argument() {
+    let h = new_handler();
+    let mut v = serde_json::to_value(valid_decrypted()).unwrap();
+    v.as_object_mut().unwrap().remove("salt");
+    let err = h
+        .place_order(Request::new(build_req_from_ciphertext(
+            serde_json::to_vec(&v).unwrap(),
+        )))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn place_order_non_string_salt_is_invalid_argument() {
+    let h = new_handler();
+    let mut v = serde_json::to_value(valid_decrypted()).unwrap();
+    v["salt"] = serde_json::json!(0);
+    let err = h
+        .place_order(Request::new(build_req_from_ciphertext(
+            serde_json::to_vec(&v).unwrap(),
+        )))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn place_order_bad_salt_hex_is_invalid_argument() {
+    let h = new_handler();
+    let mut d = valid_decrypted();
+    d.salt = "zz".repeat(32);
+    let err = h
+        .place_order(Request::new(build_req(&d)))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(err.message().contains("salt"));
+}
+
+#[tokio::test]
+async fn place_order_wrong_length_salt_is_invalid_argument() {
+    let h = new_handler();
+    let mut d = valid_decrypted();
+    d.salt = "ab".repeat(31);
+    let err = h
+        .place_order(Request::new(build_req(&d)))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(err.message().contains("salt"));
+}
+
+#[tokio::test]
+async fn place_order_empty_salt_is_invalid_argument() {
+    let h = new_handler();
+    let mut d = valid_decrypted();
+    d.salt.clear();
+    let err = h
+        .place_order(Request::new(build_req(&d)))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(err.message().contains("salt"));
+}
+
+#[tokio::test]
+async fn place_order_uppercase_salt_is_invalid_argument() {
+    let h = new_handler();
+    let mut d = valid_decrypted();
+    d.salt = "AB".repeat(32);
+    let err = h
+        .place_order(Request::new(build_req(&d)))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(err.message().contains("salt"));
 }
 
 #[tokio::test]

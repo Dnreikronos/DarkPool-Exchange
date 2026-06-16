@@ -130,6 +130,7 @@ describe('createRealSteps', () => {
     const payload = d.serialize.mock.calls[0][0]
     expect(payload.commitment_key).toBe('cc'.repeat(32))
     expect(payload.salt).toBe('dd'.repeat(32))
+    expect(payload).not.toHaveProperty('salt_hex')
     expect(payload.trader).toBe(TRADER)
   })
 

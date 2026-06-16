@@ -1,8 +1,8 @@
 // Pure builders for the real submission pipeline (#99). No React, no
-// network, no worker, everything is injected so this is node-testable.
-// The commitment key is payload-only entropy; the proof's trader binding
-// comes from the connected wallet address and the salt is carried inside the
-// encrypted payload so the engine can reproduce the proof commitment.
+// network, no worker; everything is injected so this is node-testable.
+// The connected wallet address binds the proof to the trader. The commitment
+// key is payload-only entropy, while salt is shared between the prover witness
+// and encrypted payload so the engine can reproduce the proof commitment.
 
 import type { DecryptedOrderPayload } from '@/lib/crypto'
 import type { WitnessInput } from '@/lib/prover'
