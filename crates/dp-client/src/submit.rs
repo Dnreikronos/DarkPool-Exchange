@@ -42,8 +42,8 @@ pub fn prepare_order_with_entropy(
     }
     validate_trader(&payload.trader)?;
 
-    let key_bytes = payload.commitment_key.as_bytes();
-    let trader_id_fr = derive_trader_id(key_bytes);
+    let trader_addr = parse_trader_address(&payload.trader)?;
+    let trader_id_fr = derive_trader_id(&trader_addr);
     let trader_id = scalar_to_be_bytes(trader_id_fr);
     let salt = parse_payload_salt(&payload.salt)?;
     let salt_fr = bytes_to_scalar(&salt);
@@ -78,6 +78,14 @@ fn validate_trader(trader: &str) -> Result<(), ClientError> {
         ));
     }
     Ok(())
+}
+
+fn parse_trader_address(trader: &str) -> Result<[u8; 20], ClientError> {
+    validate_trader(trader)?;
+    let bytes = hex::decode(&trader[2..])?;
+    bytes.try_into().map_err(|_| {
+        ClientError::InvalidPayload("trader must be a 0x-prefixed 20-byte address".to_string())
+    })
 }
 
 fn parse_payload_salt(salt_hex: &str) -> Result<[u8; 32], ClientError> {
@@ -146,6 +154,29 @@ mod tests {
         let b = prepare_order(&pk, &p).unwrap();
         assert_ne!(a.commitment, b.commitment);
         assert_ne!(a.salt, b.salt);
+    }
+
+    #[test]
+    fn trader_address_perturbs_commitment() {
+        let pk = fake_pubkey();
+        let a = prepare_order(&pk, &sample()).unwrap();
+        let mut p = sample();
+        p.trader = "0x1111111111111111111111111111111111111111".into();
+        let b = prepare_order(&pk, &p).unwrap();
+        assert_ne!(a.commitment, b.commitment);
+        assert_ne!(a.trader_id, b.trader_id);
+    }
+
+    #[test]
+    fn commitment_key_does_not_perturb_commitment() {
+        let pk = fake_pubkey();
+        let a = prepare_order(&pk, &sample()).unwrap();
+        let mut p = sample();
+        p.commitment_key = "different-payload-entropy".into();
+        let b = prepare_order(&pk, &p).unwrap();
+        assert_eq!(a.commitment, b.commitment);
+        assert_eq!(a.trader_id, b.trader_id);
+        assert_ne!(a.encrypted_payload, b.encrypted_payload);
     }
 
     #[test]
