@@ -638,6 +638,27 @@ async fn invalid_order_proof_is_rejected() {
 }
 
 #[tokio::test]
+async fn clear_order_proof_verifier_restores_unverified_local_mode() {
+    let (engine, _) = make_engine();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, _proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+    engine.clear_order_proof_verifier();
+
+    let order = engine
+        .place_encrypted_order(
+            commitment,
+            vec![0xAA; 32],
+            serde_json::to_vec(&d).unwrap(),
+            None,
+        )
+        .await
+        .expect("cleared verifier should allow local unverified mode");
+
+    assert_eq!(order.trader, d.trader);
+}
+
+#[tokio::test]
 async fn repeated_nullifier_is_rejected_even_with_distinct_ciphertext() {
     let (engine, _) = make_engine();
     let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();

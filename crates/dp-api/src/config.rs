@@ -616,6 +616,16 @@ mod tests {
         assert_eq!(cfg.snapshot_dir_path(), Some("/var/dp/snaps"));
     }
 
+    #[test]
+    fn order_proof_vk_path_set_returns_some() {
+        let cfg = Config::parse_from([
+            "darkpool-server",
+            "--order-proof-vk",
+            "/var/dp/commitment_vk.bin",
+        ]);
+        assert_eq!(cfg.order_proof_vk_path(), Some("/var/dp/commitment_vk.bin"));
+    }
+
     fn cfg_with_siwe(enabled: bool, secret: &str, domain: &str) -> Config {
         let mut args = vec!["darkpool-server".to_string()];
         if enabled {

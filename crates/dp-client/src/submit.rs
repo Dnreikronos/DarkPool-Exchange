@@ -1,9 +1,9 @@
 //! Orchestrates an order submission: derive trader id, decode the payload salt,
 //! compute Poseidon commitment, ECIES-encrypt the payload.
 //!
-//! The proof slot is a placeholder until per-order circuits exist; the
-//! validation layer (dp-api) only checks non-emptiness and a 64 KiB upper
-//! bound today.
+//! The proof slot is a placeholder for local development only. Production
+//! servers verify per-order Groth16 proofs and reject this placeholder unless
+//! they were started with the unsafe unverified-proof escape hatch.
 
 use crate::commitment::{
     bytes_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
@@ -12,6 +12,8 @@ use crate::encrypt::encrypt_order;
 use crate::error::ClientError;
 use crate::payload::OrderPayload;
 
+/// Development-only proof bytes accepted only by servers started with
+/// `DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true`.
 pub const PLACEHOLDER_PROOF: &[u8] = b"dp-client-v0";
 
 #[derive(Clone, Debug)]

@@ -193,8 +193,7 @@ pub(crate) struct SerializableState {
     #[serde(default)]
     pub seen_ciphertexts: HashSet<[u8; 32]>,
     /// Public nullifiers already admitted. A projection rebuilt from
-    /// `OrderPlaced` ciphertext salts and captured in snapshots.
-    #[serde(default)]
+    /// `OrderPlaced` ciphertext salts and captured in v3+ snapshots.
     pub spent_nullifiers: HashSet<[u8; 32]>,
 }
 

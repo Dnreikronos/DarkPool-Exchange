@@ -396,6 +396,19 @@ pub fn verify_proof_with_vk(
     proof_bytes: &[u8],
     publics: &OrderProofPublics,
 ) -> Result<bool, crate::ZkError> {
+    let pvk = ark_groth16::prepare_verifying_key(vk);
+    verify_proof_with_processed_vk(&pvk, proof_bytes, publics)
+}
+
+/// Verify a proof against a preprocessed canonical verifying key.
+///
+/// Use this in hot paths that verify many orders against the same key. The
+/// public inputs are still supplied by the caller in circuit order.
+pub fn verify_proof_with_processed_vk(
+    pvk: &ark_groth16::PreparedVerifyingKey<Bn254>,
+    proof_bytes: &[u8],
+    publics: &OrderProofPublics,
+) -> Result<bool, crate::ZkError> {
     let proof = ark_groth16::Proof::<Bn254>::deserialize_with_mode(
         proof_bytes,
         Compress::Yes,
@@ -403,8 +416,7 @@ pub fn verify_proof_with_vk(
     )
     .map_err(|e| crate::ZkError::Serialize(format!("deserialize proof: {e}")))?;
 
-    let pvk = ark_groth16::prepare_verifying_key(vk);
-    let valid = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &publics.as_inputs(), &proof)
+    let valid = Groth16::<Bn254>::verify_with_processed_vk(pvk, &publics.as_inputs(), &proof)
         .map_err(|e| crate::ZkError::Prove(e.to_string()))?;
 
     Ok(valid)
