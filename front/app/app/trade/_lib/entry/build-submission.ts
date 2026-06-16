@@ -1,10 +1,8 @@
 // Pure builders for the real submission pipeline (#99). No React, no
 // network, no worker — everything is injected so this is node-testable.
-// The order's blinding nonce is `commitment_key`: ONE random hex value is
-// generated per submission and threaded into BOTH the prover witness and
-// the encrypted order payload. The operator recomputes the canonical
-// Poseidon commitment from the decrypted payload, so the client never
-// sends a salt (dp-engine/src/engine.rs:487-490).
+// One commitment_key and one salt are generated per submission. The salt is
+// threaded into both the prover witness and the encrypted order payload so the
+// engine can re-derive the same commitment after decrypting.
 
 import type { DecryptedOrderPayload } from '@/lib/crypto'
 import type { WitnessInput } from '@/lib/prover'
@@ -51,6 +49,7 @@ export function buildOrderPayload(args: {
   price: string
   size: string
   commitmentKey: string
+  saltHex: string
   ttlNs: number
 }): DecryptedOrderPayload {
   return {
@@ -60,6 +59,7 @@ export function buildOrderPayload(args: {
     price: args.price,
     size: args.size,
     commitment_key: args.commitmentKey,
+    salt: args.saltHex,
     ttl: args.ttlNs,
   }
 }
@@ -119,6 +119,7 @@ export function createRealSteps(deps: RealStepDeps): StageStep[] {
           price: deps.price,
           size: deps.size,
           commitmentKey,
+          saltHex,
           ttlNs: deps.ttlNs,
         })
       },

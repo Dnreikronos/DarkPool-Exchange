@@ -6,7 +6,7 @@ use dp_aggregator::ProofAggregator;
 use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::{BalanceOracle, SettlementError, Submitter};
-use dp_types::{EventType, Side};
+use dp_types::{DarkPoolError, EventType, Side};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ use crate::test_helpers::{
     count_events, last_proof_for_batch, place_plaintext_order, place_plaintext_order_as,
     BlockingAggregator, FailingAggregator, StubAggregator, StubSubmitter, XorDecrypter,
 };
-use crate::Engine;
+use crate::{Engine, EngineError};
 
 /// Fixed snapshot cipher for tests that exercise the snapshot store. Writer
 /// and restorer engines must share this key so a sealed envelope round-trips
@@ -475,6 +475,17 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         vec![0xAB; 32],
         "engine must not echo client value"
     );
+}
+
+#[test]
+fn parse_order_salt_requires_lowercase_32_byte_hex() {
+    assert!(crate::engine::parse_order_salt(&"ab".repeat(32)).is_ok());
+    for salt in ["AB".repeat(32), "zz".repeat(32), "ab".repeat(31)] {
+        assert!(matches!(
+            crate::engine::parse_order_salt(&salt),
+            Err(EngineError::Validation(DarkPoolError::SaltInvalid))
+        ));
+    }
 }
 
 #[tokio::test]
