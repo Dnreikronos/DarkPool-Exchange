@@ -20,6 +20,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::EngineError;
+use crate::order_proof::OrderProofVerifier;
 use crate::state::{AuctionExecutedRecord, EngineState};
 use crate::subscribe::AuctionNotification;
 use crate::{DEFAULT_AUCTION_INTERVAL, DEFAULT_SUBSCRIBER_CAPACITY};
@@ -38,6 +39,7 @@ pub(crate) struct OrderSecrets {
     pub salt: [u8; 32],
     pub trader_id: [u8; 32],
     pub commitment: [u8; 32],
+    pub nullifier: [u8; 32],
     pub balance: Decimal,
     pub position: i128,
 }
@@ -48,6 +50,7 @@ impl Drop for OrderSecrets {
         self.salt.zeroize();
         self.trader_id.zeroize();
         self.commitment.zeroize();
+        self.nullifier.zeroize();
     }
 }
 
@@ -66,6 +69,7 @@ pub(crate) struct Inner {
     pub(crate) aggregator: RwLock<Arc<dyn ProofAggregator>>,
     pub(crate) submitter: RwLock<Arc<dyn Submitter>>,
     pub(crate) oracle: RwLock<Arc<dyn BalanceOracle>>,
+    pub(crate) order_proof_verifier: RwLock<Option<Arc<dyn OrderProofVerifier>>>,
     pub(crate) secrets: Mutex<HashMap<Uuid, OrderSecrets>>,
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
@@ -108,6 +112,7 @@ impl Engine {
                 aggregator: RwLock::new(Arc::new(NoopAggregator)),
                 submitter: RwLock::new(Arc::new(NoopSubmitter)),
                 oracle: RwLock::new(Arc::new(InsecureDevOracle)),
+                order_proof_verifier: RwLock::new(None),
                 secrets: Mutex::new(HashMap::new()),
                 subscribers: tx,
                 auction_interval: interval,
@@ -131,6 +136,14 @@ impl Engine {
 
     pub fn set_balance_oracle(&self, o: Arc<dyn BalanceOracle>) {
         *self.inner.oracle.write() = o;
+    }
+
+    pub fn set_order_proof_verifier(&self, v: Arc<dyn OrderProofVerifier>) {
+        *self.inner.order_proof_verifier.write() = Some(v);
+    }
+
+    pub fn clear_order_proof_verifier(&self) {
+        *self.inner.order_proof_verifier.write() = None;
     }
 
     pub fn set_decrypter(&self, d: Arc<dyn Decrypter>) {
@@ -460,32 +473,21 @@ impl Engine {
 
     /// Decrypt, validate, and book an order.
     ///
-    /// ## What is and isn't cryptographically enforced (issue #158)
+    /// ## What is cryptographically enforced (#217)
     ///
-    /// Order validity here is **operator-enforced, not proof-enforced**. The
-    /// operator decrypts the ciphertext and re-derives the canonical Poseidon
-    /// commitment over the decrypted fields (`derive_order_secrets` below);
-    /// that re-derived value — never the client's — is what gets persisted and
-    /// carried into the settlement-grade batch IVC proof.
-    ///
-    /// The per-order `proof` argument is **accepted and not verified**. It is a
-    /// placeholder (`dp-client::PLACEHOLDER_PROOF`) on the live path; we record
-    /// only its byte length for observability. A genuinely verified per-order
-    /// proof is deferred to ADR 0001 / issues #97–#98: it needs either richer
-    /// circuit public inputs (so the engine can bind the proof to the decrypted
-    /// fields) or a client-reproducible commitment, plus a one-time trusted
-    /// setup ceremony to pin a canonical VK. The sound keygen/verify primitives
-    /// for that work already exist (`dp_zk::commitment_circuit::generate_keys`
-    /// / `verify_proof_with_vk`, `dp-zk-cli setup-commitment-circuit`); the
-    /// missing piece is the binding, which the post-#153 server-derived salt
-    /// makes incompatible with the current single-public-input circuit.
+    /// The operator decrypts the ciphertext and re-derives the canonical
+    /// Poseidon commitment plus nullifier from the decrypted fields and
+    /// client-chosen salt. When a canonical order-proof verifier is installed
+    /// (the production server requires one at boot), the supplied Groth16 proof
+    /// must verify against those engine-derived public inputs. The nullifier is
+    /// also checked under the same lock that appends `OrderPlaced`, so a proof
+    /// replay cannot race two admissions through the book.
     #[tracing::instrument(
         name = "dp_engine.place_encrypted_order",
         skip(self, _client_commitment, _unverified_proof, ciphertext, caller),
         fields(
             ciphertext_bytes = ciphertext.len(),
-            // Byte length only — the proof is NOT verified (see doc comment).
-            unverified_proof_bytes = _unverified_proof.len(),
+            order_proof_bytes = _unverified_proof.len(),
         )
     )]
     pub async fn place_encrypted_order(
@@ -528,11 +530,10 @@ impl Engine {
             }
         }
 
-        // Neither the client-supplied commitment nor the per-order `proof` is
-        // verified content-wise (issue #158): the commitment is recomputed
-        // from decrypted fields below, and the proof is operator-enforced by
-        // that same re-derivation — see this method's doc comment. The fields
-        // below are the actual validity gate.
+        // Plaintext validity is checked before proof verification so malformed
+        // orders fail with precise validation errors. The proof, when a
+        // verifier is installed, is checked after the engine derives the exact
+        // commitment/nullifier public inputs from these fields.
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
@@ -652,7 +653,17 @@ impl Engine {
             position,
             salt,
         )?;
+        if let Some(verifier) = self.inner.order_proof_verifier.read().clone() {
+            let publics = dp_zk::commitment_circuit::OrderProofPublics {
+                commitment: dp_zk::pedersen::bytes_to_scalar(&secrets.commitment),
+                nullifier: dp_zk::pedersen::bytes_to_scalar(&secrets.nullifier),
+            };
+            verifier
+                .verify(&_unverified_proof, &publics)
+                .map_err(|_| EngineError::Validation(DarkPoolError::InvalidOrderProof))?;
+        }
         let commitment = secrets.commitment.to_vec();
+        let nullifier = secrets.nullifier;
         self.inner.secrets.lock().insert(order.id, secrets);
 
         // Stamp the returned order with the same seq the book copy got, so a
@@ -664,9 +675,9 @@ impl Engine {
         match self.persist_order_placed(
             order.clone(),
             commitment,
-            // Persisted verbatim for the audit log / replay; still unverified.
             _unverified_proof,
             ciphertext,
+            nullifier,
         ) {
             Ok(seq) => order.seq = seq,
             Err(e) => {
@@ -767,6 +778,7 @@ impl Engine {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
+        nullifier: [u8; 32],
     ) -> Result<u64, EngineError> {
         // Hash the ciphertext now, before it is moved into the event below;
         // this is the replay/spent-set key (#233).
@@ -812,6 +824,9 @@ impl Engine {
         if state.seen_ciphertexts.contains(&digest) {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
+        if state.spent_nullifiers.contains(&nullifier) {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         // The store stamped the monotonic seq onto the event during append;
@@ -828,6 +843,7 @@ impl Engine {
         // Record the digest only after the event is durably appended, so the
         // live spent-set and a replay rebuilt from the log stay in lockstep.
         state.seen_ciphertexts.insert(digest);
+        state.spent_nullifiers.insert(nullifier);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(assigned_seq)
     }
@@ -967,7 +983,11 @@ fn derive_order_secrets(
     salt: [u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
-    let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
+    let commitment_fr = compute_poseidon_commitment_fr(&trader_id, side, price, size, &salt)?;
+    let nullifier_fr = dp_zk::commitment_circuit::compute_nullifier_native(
+        commitment_fr,
+        dp_zk::pedersen::bytes_to_scalar(&salt),
+    );
 
     // `balance`/`position` are read from the installed BalanceOracle by the
     // caller (#213) — in the asset this leg spends (#170) — and threaded in
@@ -975,7 +995,8 @@ fn derive_order_secrets(
     Ok(OrderSecrets {
         salt,
         trader_id,
-        commitment,
+        commitment: dp_zk::fr_to_bytes32(commitment_fr),
+        nullifier: dp_zk::fr_to_bytes32(nullifier_fr),
         balance,
         position,
     })
@@ -1038,17 +1059,23 @@ pub(crate) fn compute_poseidon_commitment(
     size: Decimal,
     salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
-    use ark_ff::{BigInteger, PrimeField};
+    Ok(dp_zk::fr_to_bytes32(compute_poseidon_commitment_fr(
+        trader_id, side, price, size, salt,
+    )?))
+}
+
+fn compute_poseidon_commitment_fr(
+    trader_id: &[u8; 32],
+    side: u8,
+    price: Decimal,
+    size: Decimal,
+    salt: &[u8; 32],
+) -> Result<ark_bn254::Fr, EngineError> {
     let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
     let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
     let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
         .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
-    let fr = dp_zk::commit_native(&input);
-    let bytes = fr.into_bigint().to_bytes_be();
-    let mut out = [0u8; 32];
-    let take = bytes.len().min(32);
-    out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
-    Ok(out)
+    Ok(dp_zk::commit_native(&input))
 }
 
 pub(crate) fn record_to_notification(rec: &AuctionExecutedRecord) -> AuctionNotification {

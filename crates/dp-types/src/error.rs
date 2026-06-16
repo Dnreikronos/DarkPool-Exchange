@@ -46,6 +46,10 @@ pub enum DarkPoolError {
     /// malformed order, not an internal fault.
     #[error("invalid salt: expected 32-byte lowercase hex")]
     SaltInvalid,
+    /// The per-order Groth16 proof does not verify against the decrypted order
+    /// fields and client salt under the operator-pinned canonical verifying key.
+    #[error("invalid order proof")]
+    InvalidOrderProof,
 }
 
 #[cfg(test)]

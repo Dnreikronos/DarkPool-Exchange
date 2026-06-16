@@ -35,6 +35,7 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
             | DarkPoolError::OrderSizeBelowMinimum { .. }
             | DarkPoolError::OrderPriceNotOnTick { .. }
             | DarkPoolError::SaltInvalid
+            | DarkPoolError::InvalidOrderProof
             | DarkPoolError::InvalidPair(_)),
         ) => Status::invalid_argument(e.to_string()),
         other => Status::internal(other.to_string()),
@@ -95,6 +96,7 @@ mod tests {
                 tick: "0.01".into(),
             },
             DarkPoolError::SaltInvalid,
+            DarkPoolError::InvalidOrderProof,
             DarkPoolError::InvalidPair("bad".into()),
         ] {
             let s = engine_error_to_status(EngineError::Validation(err));

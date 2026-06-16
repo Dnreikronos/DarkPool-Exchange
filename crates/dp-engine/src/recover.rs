@@ -434,6 +434,11 @@ impl Engine {
                     decrypted.size,
                     &salt,
                 )?;
+                let nullifier =
+                    dp_zk::fr_to_bytes32(dp_zk::commitment_circuit::compute_nullifier_native(
+                        dp_zk::pedersen::bytes_to_scalar(&recomputed),
+                        dp_zk::pedersen::bytes_to_scalar(&salt),
+                    ));
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
                         order_id: *order_id,
@@ -489,6 +494,7 @@ impl Engine {
                 state
                     .seen_ciphertexts
                     .insert(crate::engine::ciphertext_digest(ciphertext));
+                state.spent_nullifiers.insert(nullifier);
             }
             EventData::OrderCancelled { .. } | EventData::OrderExpired { .. } => {
                 self.inner.state.lock().book.apply(ev);

@@ -1,6 +1,7 @@
 mod batch;
 mod engine;
 mod error;
+mod order_proof;
 mod recover;
 mod snapshot;
 mod state;
@@ -15,6 +16,7 @@ mod tests;
 
 pub use engine::Engine;
 pub use error::EngineError;
+pub use order_proof::{Groth16OrderProofVerifier, OrderProofVerifier};
 pub use snapshot::{SnapshotConfig, SnapshotError};
 pub use state::{PairConfig, PairStatus, PendingBatch};
 pub use subscribe::AuctionNotification;

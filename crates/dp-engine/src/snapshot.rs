@@ -327,6 +327,7 @@ mod tests {
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
             seen_ciphertexts: Default::default(),
+            spent_nullifiers: Default::default(),
         }
     }
 
