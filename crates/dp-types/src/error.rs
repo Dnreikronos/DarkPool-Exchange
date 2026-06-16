@@ -35,6 +35,11 @@ pub enum DarkPoolError {
     CannotSuspendDelistedPair(String),
     #[error("trader address mismatch: expected {expected}, found {found}")]
     TraderAddressMismatch { expected: String, found: String },
+    /// The same encrypted order payload was submitted more than once. ECIES is
+    /// randomized, so a byte-identical ciphertext is a replay of a captured
+    /// submission, not a fresh order (#233).
+    #[error("duplicate order: this encrypted payload was already submitted")]
+    DuplicateOrder,
 }
 
 #[cfg(test)]

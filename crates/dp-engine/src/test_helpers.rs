@@ -266,6 +266,27 @@ impl Decrypter for XorDecrypter {
     }
 }
 
+/// Counts `decrypt` calls so a test can prove a path short-circuits *before*
+/// decryption (e.g. the #233 replay early-out). Parses JSON straight from the
+/// ciphertext like `NoopDecrypter`, so plaintext-JSON fixtures work unchanged.
+#[derive(Default)]
+pub struct CountingDecrypter {
+    pub calls: AtomicU32,
+}
+
+impl Decrypter for CountingDecrypter {
+    fn decrypt<'a>(
+        &'a self,
+        ciphertext: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<DecryptedOrder, CryptoError>> + Send + 'a>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            let order: DecryptedOrder = serde_json::from_slice(ciphertext)?;
+            Ok(order)
+        })
+    }
+}
+
 // --- Helpers ---
 
 pub fn count_events(store: &dyn Store, ty: EventType) -> usize {
