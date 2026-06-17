@@ -14,6 +14,7 @@ use dp_api::ratelimit::{RateLimitCore, RateLimitLayer, TrustedProxies};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
 use dp_api::tls;
+use dp_api::validation::PLACE_ORDER_BODY_LIMIT;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
     SnapshotCipher,
@@ -496,7 +497,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         builder
             .layer(grpc_auth)
             .layer(grpc_rl)
-            .add_service(DarkPoolServiceServer::new(handler))
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
             .serve_with_shutdown(grpc_addr, async move { grpc_cancel.cancelled().await })
             .await
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
