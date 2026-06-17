@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
+use alloy_network::{Ethereum, EthereumWallet, NetworkWallet, ReceiptResponse};
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::{PendingTransactionBuilder, Provider};
 use alloy_rpc_types::BlockNumberOrTag;
@@ -157,6 +157,7 @@ where
                 let nonce = self
                     .read_provider
                     .get_transaction_count(sender)
+                    .pending()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
@@ -206,6 +207,9 @@ where
                         .get_receipt()
                         .await
                         .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", receipt.transaction_hash))
             }
@@ -240,6 +244,7 @@ where
                 let nonce_a = self
                     .read_provider
                     .get_transaction_count(sender)
+                    .pending()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let latest_block = self
@@ -280,13 +285,20 @@ where
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let session_tx_hash = *session_pending.tx_hash();
-                let _session_receipt = PendingTransactionBuilder::new(
+                let session_receipt = PendingTransactionBuilder::new(
                     self.read_provider.root().clone(),
                     session_tx_hash,
                 )
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                session_receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+
+                let settle_nonce = nonce_a
+                    .checked_add(1)
+                    .ok_or_else(|| SettlementError::Rpc("operator nonce overflow".into()))?;
 
                 // settleAuction: replay the matches array. The contract
                 // recomputes the Poseidon settlement chain over it and reverts
@@ -298,7 +310,7 @@ where
                         sol_matches,
                     )
                     .from(sender)
-                    .nonce(nonce_a + 1)
+                    .nonce(settle_nonce)
                     .gas(self.gas_limit)
                     .max_fee_per_gas(fee_cap)
                     .max_priority_fee_per_gas(tip)
@@ -317,6 +329,9 @@ where
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                settle_receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", settle_receipt.transaction_hash))
             }
