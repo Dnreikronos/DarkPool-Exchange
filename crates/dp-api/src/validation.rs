@@ -14,6 +14,11 @@ use crate::pb::PlaceOrderRequest;
 pub const MAX_PROOF_BYTES: usize = 64 * 1024;
 pub const MAX_CIPHERTEXT_BYTES: usize = 128 * 1024;
 
+// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON
+// envelope. Also caps the gRPC decode frame before prost allocates and
+// decodes an oversized PlaceOrder request.
+pub const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
+
 pub const MSG_COMMITMENT_REQUIRED: &str = "commitment is required";
 pub const MSG_PROOF_REQUIRED: &str = "proof is required";
 pub const MSG_PROOF_TOO_LARGE: &str = "proof exceeds max size";

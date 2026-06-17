@@ -35,7 +35,7 @@ use crate::pb::{
 use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
-use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use crate::validation::{validate_pair_known, PLACE_ORDER_BODY_LIMIT};
 use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
 pub type SharedHandler = Arc<ApiHandler>;
@@ -51,10 +51,6 @@ impl MakeRequestId for MakeRequestUlid {
         Some(RequestId::new(HeaderValue::from_str(&id).unwrap()))
     }
 }
-
-// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
-// Rejects oversized requests before JSON parse + base64 decode burn CPU.
-const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
 
 pub fn router(handler: SharedHandler) -> Router {
     let place_order =
