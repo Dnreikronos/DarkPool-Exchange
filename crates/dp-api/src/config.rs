@@ -233,6 +233,25 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_ETH_RPC", default_value = "")]
     pub eth_rpc: String,
 
+    /// Private transaction RPC used for signed settlement submissions.
+    /// `DARKPOOL_ETH_RPC` remains the normal read RPC for chain state and the
+    /// balance oracle; settlement writes carry plaintext cleared matches in
+    /// calldata, so production operators must route them through a private tx
+    /// endpoint (Flashbots Protect, MEV-Share, or a builder private RPC).
+    #[arg(long, env = "DARKPOOL_SETTLEMENT_PRIVATE_RPC", default_value = "")]
+    pub settlement_private_rpc: String,
+
+    /// Local/dev escape hatch that lets signed settlement use
+    /// `DARKPOOL_ETH_RPC` directly. Never enable for value-bearing
+    /// deployments: public mempool observers can see the full cleared book
+    /// before the settlement block lands.
+    #[arg(
+        long,
+        env = "DARKPOOL_ALLOW_PUBLIC_SETTLEMENT",
+        default_value = "false"
+    )]
+    pub allow_public_settlement: bool,
+
     #[arg(long, env = "DARKPOOL_CONTRACT_ADDR", default_value = "")]
     pub contract_addr: String,
 
@@ -338,6 +357,10 @@ impl Config {
         opt(&self.eth_rpc)
     }
 
+    pub fn settlement_private_rpc_url(&self) -> Option<&str> {
+        opt(&self.settlement_private_rpc)
+    }
+
     pub fn contract_address(&self) -> Option<&str> {
         opt(&self.contract_addr)
     }
@@ -384,6 +407,39 @@ impl Config {
                     .into(),
             );
         }
+        Ok(())
+    }
+
+    /// Fail closed when signed settlement would submit cleartext match calldata
+    /// to a public RPC. `DARKPOOL_ETH_RPC` is still required for chain reads and
+    /// balance-oracle calls; signed writes must use a private transaction RPC
+    /// unless the operator explicitly opts into public submission for local dev.
+    pub fn validate_settlement_transport(&self) -> Result<(), String> {
+        if self.settlement_private_rpc_url().is_some() && self.eth_rpc_url().is_none() {
+            return Err(
+                "DARKPOOL_SETTLEMENT_PRIVATE_RPC is set but DARKPOOL_ETH_RPC is missing. \
+                 Set DARKPOOL_ETH_RPC for chain reads and balance-oracle calls."
+                    .into(),
+            );
+        }
+
+        let signed_settlement_enabled =
+            self.eth_rpc_url().is_some() && self.signer_key_uri_str().is_some();
+        if !signed_settlement_enabled {
+            return Ok(());
+        }
+
+        if self.settlement_private_rpc_url().is_none() && !self.allow_public_settlement {
+            return Err(
+                "DARKPOOL_ETH_RPC and DARKPOOL_SIGNER_KEY_URI enable signed settlement, but \
+                 DARKPOOL_SETTLEMENT_PRIVATE_RPC is not set. submitBatch/settleAuction calldata \
+                 contains the full cleared book, so settlement must use a private transaction \
+                 endpoint (Flashbots Protect, MEV-Share, or builder private RPC). For local \
+                 dev only, set DARKPOOL_ALLOW_PUBLIC_SETTLEMENT=true."
+                    .into(),
+            );
+        }
+
         Ok(())
     }
 
