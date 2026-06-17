@@ -157,6 +157,7 @@ where
                 let nonce = self
                     .read_provider
                     .get_transaction_count(sender)
+                    .pending()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
@@ -240,6 +241,7 @@ where
                 let nonce_a = self
                     .read_provider
                     .get_transaction_count(sender)
+                    .pending()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let latest_block = self
