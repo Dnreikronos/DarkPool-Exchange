@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
 use alloy_primitives::{Address, Bytes};
-use alloy_provider::Provider;
+use alloy_provider::{PendingTransactionBuilder, Provider};
 use alloy_rpc_types::BlockNumberOrTag;
 use tracing::Instrument;
 
@@ -15,8 +15,22 @@ use crate::signer::TxSigner;
 use crate::submitter::Submitter;
 use crate::{SettlementError, SubmitBatchParams};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettlementTxTransport {
+    PrivateRpc,
+    PublicMempool,
+}
+
+impl SettlementTxTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PrivateRpc => "private_rpc",
+            Self::PublicMempool => "public_mempool",
+        }
+    }
+}
+
 pub struct EthSubmitterConfig {
-    pub rpc_url: String,
     /// Operator transaction-signing backend. Constructed via
     /// `dp_settlement::signer::from_uri` at boot so the raw private key
     /// stays inside the adapter (KMS-backed signers never expose it at
@@ -27,27 +41,42 @@ pub struct EthSubmitterConfig {
     pub contract_address: String,
     pub chain_id: u64,
     pub gas_limit: Option<u64>,
+    pub tx_transport: SettlementTxTransport,
 }
 
-pub struct EthSubmitter<P> {
-    provider: P,
+pub struct EthSubmitter<ReadP, SubmitP = ReadP> {
+    read_provider: ReadP,
+    submit_provider: SubmitP,
     wallet: EthereumWallet,
     contract: Address,
     chain_id: u64,
     gas_limit: u64,
+    tx_transport: SettlementTxTransport,
 }
 
-impl<P: Provider + Send + Sync> EthSubmitter<P> {
+impl<P: Provider + Clone + Send + Sync> EthSubmitter<P> {
     pub fn new(provider: P, config: &EthSubmitterConfig) -> Result<Self, SettlementError> {
+        Self::with_submit_provider(provider.clone(), provider, config)
+    }
+}
+
+impl<ReadP: Provider + Send + Sync, SubmitP: Provider + Send + Sync> EthSubmitter<ReadP, SubmitP> {
+    pub fn with_submit_provider(
+        read_provider: ReadP,
+        submit_provider: SubmitP,
+        config: &EthSubmitterConfig,
+    ) -> Result<Self, SettlementError> {
         let wallet = config.signer.wallet();
         let contract = Address::from_str(&config.contract_address)
             .map_err(|e| SettlementError::Rpc(e.to_string()))?;
         Ok(Self {
-            provider,
+            read_provider,
+            submit_provider,
             wallet,
             contract,
             chain_id: config.chain_id,
             gas_limit: config.gas_limit.unwrap_or(500_000),
+            tx_transport: config.tx_transport,
         })
     }
 
@@ -82,45 +111,57 @@ fn build_sol_matches(
 /// unit tests can verify the span's fields without standing up a real
 /// alloy `Provider`. Field names follow the OTel HTTP / RPC
 /// conventions where it makes sense.
-fn build_submit_span(params: &SubmitBatchParams) -> tracing::Span {
+fn build_submit_span(
+    params: &SubmitBatchParams,
+    tx_transport: SettlementTxTransport,
+) -> tracing::Span {
     tracing::info_span!(
         "dp_settlement.eth_submit",
         batch_id = %params.batch_id,
         auction_id = %params.auction_id,
         match_count = params.matches.len(),
+        tx_transport = tx_transport.as_str(),
     )
 }
 
 #[cfg(feature = "hypernova")]
-fn build_session_span(params: &crate::SubmitSessionParams) -> tracing::Span {
+fn build_session_span(
+    params: &crate::SubmitSessionParams,
+    tx_transport: SettlementTxTransport,
+) -> tracing::Span {
     tracing::info_span!(
         "dp_settlement.eth_submit_session",
         session_id = %params.session_id,
         auction_id = %params.auction_id,
         n_steps = params.n_steps,
         match_count = params.matches.len(),
+        tx_transport = tx_transport.as_str(),
     )
 }
 
-impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
+impl<ReadP, SubmitP> Submitter for EthSubmitter<ReadP, SubmitP>
+where
+    ReadP: Provider + Send + Sync + 'static,
+    SubmitP: Provider + Send + Sync + 'static,
+{
     fn submit<'a>(
         &'a self,
         params: &'a SubmitBatchParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
-        let span = build_submit_span(params);
+        let span = build_submit_span(params, self.tx_transport);
         Box::pin(
             async move {
                 let sol_matches = build_sol_matches(params)?;
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
                 let nonce = self
-                    .provider
+                    .read_provider
                     .get_transaction_count(sender)
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 let latest_block = self
-                    .provider
+                    .read_provider
                     .get_block_by_number(BlockNumberOrTag::Latest)
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?
@@ -131,13 +172,13 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 })?;
 
                 let tip = self
-                    .provider
+                    .read_provider
                     .get_max_priority_fee_per_gas()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let fee_cap = u128::from(base_fee) * 2 + tip;
 
-                let contract = DarkPool::new(self.contract, &self.provider);
+                let contract = DarkPool::new(self.contract, &self.submit_provider);
                 let call = contract
                     .submitBatch(
                         uuid_to_bytes32(params.batch_id),
@@ -153,13 +194,18 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     .max_priority_fee_per_gas(tip)
                     .chain_id(self.chain_id);
 
-                let receipt = call
-                    .send()
-                    .await
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
-                    .get_receipt()
+                let pending = self
+                    .submit_provider
+                    .send_transaction(call.into_transaction_request())
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let tx_hash = *pending.tx_hash();
+
+                let receipt =
+                    PendingTransactionBuilder::new(self.read_provider.root().clone(), tx_hash)
+                        .get_receipt()
+                        .await
+                        .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", receipt.transaction_hash))
             }
@@ -172,7 +218,7 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
         &'a self,
         params: &'a crate::SubmitSessionParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, SettlementError>> + Send + 'a>> {
-        let span = build_session_span(params);
+        let span = build_session_span(params, self.tx_transport);
         Box::pin(
             async move {
                 let sol_matches = params
@@ -187,17 +233,17 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                 }
 
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
-                let contract = DarkPool::new(self.contract, &self.provider);
+                let contract = DarkPool::new(self.contract, &self.submit_provider);
 
                 // submitSession: commits the IVC proof and its final state; the
                 // matches are bound by settleAuction recomputing zN[3] from them.
                 let nonce_a = self
-                    .provider
+                    .read_provider
                     .get_transaction_count(sender)
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let latest_block = self
-                    .provider
+                    .read_provider
                     .get_block_by_number(BlockNumberOrTag::Latest)
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?
@@ -206,7 +252,7 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     SettlementError::Rpc("chain does not support EIP-1559".into())
                 })?;
                 let tip = self
-                    .provider
+                    .read_provider
                     .get_max_priority_fee_per_gas()
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
@@ -228,13 +274,19 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     .max_priority_fee_per_gas(tip)
                     .chain_id(self.chain_id);
 
-                let _session_receipt = session_call
-                    .send()
-                    .await
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
-                    .get_receipt()
+                let session_pending = self
+                    .submit_provider
+                    .send_transaction(session_call.into_transaction_request())
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let session_tx_hash = *session_pending.tx_hash();
+                let _session_receipt = PendingTransactionBuilder::new(
+                    self.read_provider.root().clone(),
+                    session_tx_hash,
+                )
+                .get_receipt()
+                .await
+                .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 // settleAuction: replay the matches array. The contract
                 // recomputes the Poseidon settlement chain over it and reverts
@@ -252,13 +304,19 @@ impl<P: Provider + Send + Sync + 'static> Submitter for EthSubmitter<P> {
                     .max_priority_fee_per_gas(tip)
                     .chain_id(self.chain_id);
 
-                let settle_receipt = settle_call
-                    .send()
-                    .await
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?
-                    .get_receipt()
+                let settle_pending = self
+                    .submit_provider
+                    .send_transaction(settle_call.into_transaction_request())
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let settle_tx_hash = *settle_pending.tx_hash();
+                let settle_receipt = PendingTransactionBuilder::new(
+                    self.read_provider.root().clone(),
+                    settle_tx_hash,
+                )
+                .get_receipt()
+                .await
+                .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", settle_receipt.transaction_hash))
             }
@@ -326,7 +384,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let params = test_params(vec![test_match(), test_match()]);
-        let span = build_submit_span(&params);
+        let span = build_submit_span(&params, SettlementTxTransport::PrivateRpc);
         let metadata = span.metadata().expect("subscriber attached, span enabled");
         // The span name is the operator/collector lookup key; assert
         // it explicitly so a rename surfaces here, not in a Jaeger UI
@@ -336,5 +394,6 @@ mod tests {
         assert!(fields.contains(&"batch_id"), "fields: {fields:?}");
         assert!(fields.contains(&"auction_id"), "fields: {fields:?}");
         assert!(fields.contains(&"match_count"), "fields: {fields:?}");
+        assert!(fields.contains(&"tx_transport"), "fields: {fields:?}");
     }
 }

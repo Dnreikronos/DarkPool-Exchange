@@ -26,6 +26,8 @@ fn clear_env() {
         "DARKPOOL_ZK_BATCH_SIZE",
         "DARKPOOL_SUBMIT_TIMEOUT",
         "DARKPOOL_ETH_RPC",
+        "DARKPOOL_SETTLEMENT_PRIVATE_RPC",
+        "DARKPOOL_ALLOW_PUBLIC_SETTLEMENT",
         "DARKPOOL_CONTRACT_ADDR",
         "DARKPOOL_CHAIN_ID",
         "DARKPOOL_SUBMIT_GAS",
@@ -102,6 +104,8 @@ fn optional_accessors_empty_by_default() {
     assert!(cfg.aggregator_bin_path().is_none());
     assert!(cfg.zk_proving_key_dir().is_none());
     assert!(cfg.eth_rpc_url().is_none());
+    assert!(cfg.settlement_private_rpc_url().is_none());
+    assert!(!cfg.allow_public_settlement);
     assert!(cfg.contract_address().is_none());
 }
 
@@ -112,12 +116,88 @@ fn optional_accessors_return_values() {
     std::env::set_var("DARKPOOL_EVENT_DB", "postgres://host/db");
     std::env::set_var("DARKPOOL_EVENT_LOG", "/tmp/events.log");
     std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    std::env::set_var(
+        "DARKPOOL_SETTLEMENT_PRIVATE_RPC",
+        "https://rpc.flashbots.net/fast",
+    );
     std::env::set_var("DARKPOOL_CONTRACT_ADDR", "0xabc");
     let cfg = Config::try_parse_from(["bin"]).unwrap();
     assert_eq!(cfg.event_db_url(), Some("postgres://host/db"));
     assert_eq!(cfg.event_log_path(), Some("/tmp/events.log"));
     assert_eq!(cfg.eth_rpc_url(), Some("http://localhost:8545"));
+    assert_eq!(
+        cfg.settlement_private_rpc_url(),
+        Some("https://rpc.flashbots.net/fast")
+    );
     assert_eq!(cfg.contract_address(), Some("0xabc"));
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn settlement_transport_allows_noop_without_signer() {
+    clear_env();
+    std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.validate_settlement_transport().is_ok());
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn settlement_transport_rejects_signed_public_rpc_by_default() {
+    clear_env();
+    std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    std::env::set_var("DARKPOOL_SIGNER_KEY_URI", "file:/etc/dp/eth.hex");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    let err = cfg.validate_settlement_transport().unwrap_err();
+    assert!(
+        err.contains("DARKPOOL_SETTLEMENT_PRIVATE_RPC"),
+        "msg: {err}"
+    );
+    assert!(err.contains("cleared book"), "msg: {err}");
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn settlement_transport_allows_private_rpc() {
+    clear_env();
+    std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    std::env::set_var(
+        "DARKPOOL_SETTLEMENT_PRIVATE_RPC",
+        "https://rpc.flashbots.net/fast",
+    );
+    std::env::set_var("DARKPOOL_SIGNER_KEY_URI", "file:/etc/dp/eth.hex");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.validate_settlement_transport().is_ok());
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn settlement_transport_allows_explicit_public_dev_override() {
+    clear_env();
+    std::env::set_var("DARKPOOL_ETH_RPC", "http://localhost:8545");
+    std::env::set_var("DARKPOOL_SIGNER_KEY_URI", "file:/etc/dp/eth.hex");
+    std::env::set_var("DARKPOOL_ALLOW_PUBLIC_SETTLEMENT", "true");
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    assert!(cfg.allow_public_settlement);
+    assert!(cfg.validate_settlement_transport().is_ok());
+    clear_env();
+}
+
+#[test]
+#[serial]
+fn settlement_transport_private_rpc_requires_read_rpc() {
+    clear_env();
+    std::env::set_var(
+        "DARKPOOL_SETTLEMENT_PRIVATE_RPC",
+        "https://rpc.flashbots.net/fast",
+    );
+    let cfg = Config::try_parse_from(["bin"]).unwrap();
+    let err = cfg.validate_settlement_transport().unwrap_err();
+    assert!(err.contains("DARKPOOL_ETH_RPC"), "msg: {err}");
     clear_env();
 }
 

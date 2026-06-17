@@ -46,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     cfg.validate_admin_auth()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_settlement_transport()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
     // Resolve the TLS posture up-front: half-configured TLS (cert
     // without key, etc.) must surface at boot, not when the first
@@ -263,29 +265,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "DARKPOOL_ETH_RPC and DARKPOOL_SIGNER_KEY_URI are set but \
                  DARKPOOL_CONTRACT_ADDR is missing — cannot build EthSubmitter",
             )?;
+            let (settlement_rpc, tx_transport) =
+                if let Some(private_rpc) = cfg.settlement_private_rpc_url() {
+                    (
+                        private_rpc,
+                        dp_settlement::SettlementTxTransport::PrivateRpc,
+                    )
+                } else {
+                    warn!(
+                        "DARKPOOL_ALLOW_PUBLIC_SETTLEMENT=true — settlement calldata will be \
+                         sent through DARKPOOL_ETH_RPC and may expose the full cleared book in \
+                         the public mempool. Local/dev only."
+                    );
+                    (rpc, dp_settlement::SettlementTxTransport::PublicMempool)
+                };
 
-            let provider = alloy_provider::ProviderBuilder::new()
+            let read_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            let submit_provider = alloy_provider::ProviderBuilder::new()
                 .wallet(signer.wallet())
-                .connect_http(
-                    rpc.parse()
-                        .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
-                );
+                .connect_http(settlement_rpc.parse().map_err(|e| {
+                    if tx_transport == dp_settlement::SettlementTxTransport::PrivateRpc {
+                        format!("bad DARKPOOL_SETTLEMENT_PRIVATE_RPC URL: {e}")
+                    } else {
+                        format!("bad DARKPOOL_ETH_RPC URL: {e}")
+                    }
+                })?);
 
             let submitter_cfg = dp_settlement::EthSubmitterConfig {
-                rpc_url: rpc.to_string(),
                 signer,
                 contract_address: contract_addr.to_string(),
                 chain_id: cfg.chain_id,
                 gas_limit: Some(cfg.submit_gas),
+                tx_transport,
             };
 
-            let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
+            let submitter = dp_settlement::EthSubmitter::with_submit_provider(
+                read_provider,
+                submit_provider,
+                &submitter_cfg,
+            )?;
             engine.set_submitter(Arc::new(submitter));
 
             info!(
-                rpc = %rpc,
+                read_rpc = %rpc,
                 contract = %contract_addr,
                 chain_id = cfg.chain_id,
+                tx_transport = tx_transport.as_str(),
                 "batch submitter: on-chain (EthSubmitter)"
             );
 
