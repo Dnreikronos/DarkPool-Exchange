@@ -1,12 +1,15 @@
 # dp-zk
 
 Zero-knowledge batch-proof primitives for DarkPool's auction pipeline.
-Proves the validity of a batch of matched-pair fills (crossing,
-solvency, position-limit, trader-id binding) without revealing trader
-identities, balances, salts, or pre-trade positions.
+Proves the validity of a batch of matched-pair fills (crossing, uniform
+settlement price, admitted-set membership, solvency, position-limit,
+trader-id binding) without revealing trader identities, balances, salts, or
+pre-trade positions.
 
-See [`CIRCUIT.md`](./CIRCUIT.md) for the public-input layout and the
-constraint-family table.
+This crate does not prove full matching fairness. Volume-maximising price
+selection, completeness/no-censorship, and price-time priority are implemented
+by the off-circuit matcher and are auditable from the event log; they are not
+constraints in the current circuit. See [`CIRCUIT.md`](./CIRCUIT.md).
 
 ## Layout
 

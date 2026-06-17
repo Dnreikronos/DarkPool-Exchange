@@ -8,7 +8,9 @@
 //! recomputes the identical root from the public `OrderPlaced` log and checks
 //! it against the proof-bound chain, so a semi-trusted operator cannot match
 //! an order that was never publicly admitted, nor lie about the admitted input
-//! set, without detection.
+//! set, without detection. This is a subset binding only: it does not prove
+//! that every admitted order that should cross was matched, nor that the
+//! off-circuit matcher honored priority.
 //!
 //! The tree is *canonical*: leaves are sorted ascending by field value and the
 //! frontier is padded to `1 << MERKLE_DEPTH` with the empty leaf, so the

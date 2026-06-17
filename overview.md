@@ -8,12 +8,12 @@
 
 ZK Dark Pool DEX is a privacy-preserving decentralized exchange where all orders are hidden from external observers until the moment of settlement. Traders encrypt their orders to the engine operator's public key and submit cryptographic proofs that their orders are valid — sufficient collateral, correct format, within position limits — without revealing the pair, price, or size to any on-chain observer.
 
-The operator decrypts and matches orders in cleartext, but generates a ZK proof that the matching was executed correctly — no front-running, no favoritism. Privacy is guaranteed against the outside world; the operator is semi-trusted.
+The operator decrypts and matches orders in cleartext, then generates a ZK proof that the settled fills are valid, price at one crossing clearing price, and belong to the admitted order set. Privacy is guaranteed against the outside world; the operator is semi-trusted.
 
 **Three core design goals:**
 - **Pre-trade privacy:** no order data is visible on-chain before settlement. External observers see only commitments.
-- **Post-trade verifiability:** every matched trade is accompanied by a ZK proof that the settlement was computed correctly.
-- **Fair execution via batch auction:** orders are collected over a fixed time window and matched in periodic batch auctions, eliminating temporal advantage between participants within the same batch.
+- **Post-trade verifiability:** every matched trade is accompanied by a ZK proof that the fill is valid and bound to the admitted input set.
+- **Fair execution via batch auction:** orders are collected over a fixed time window and matched by deterministic off-circuit batch-auction logic.
 
 The target audience is protocols and institutions that need MEV protection and order confidentiality — hedge funds, market makers, and DeFi protocols building on top of privacy layers.
 
@@ -35,11 +35,11 @@ The matching engine operator is **semi-trusted**:
 
 - The trader encrypts the full order (pair, side, price, size) to the operator's public key before submission.
 - The operator decrypts and matches orders in cleartext internally.
-- The operator generates a ZK proof that the batch auction was executed correctly: the clearing price is fair, no orders were dropped or reordered maliciously, and all fills are valid.
-- The operator **can** see order contents but **cannot** tamper with matching without the proof failing on-chain verification.
+- The operator generates a ZK proof that settled fills are valid, use a uniform crossing price, and are members of the admitted order set.
+- The operator **can** see order contents. The current proof does not enforce volume-maximizing price selection, complete matching of every eligible order, or price-time priority; those properties are enforced by the Rust matcher and can be audited from the event log, but a malicious operator can deviate without this proof failing.
 - Privacy is against **external observers** (other traders, on-chain watchers, MEV bots), not against the operator itself.
 
-This mirrors how institutional dark pools work in traditional finance, where the venue operator sees order flow but is bound by regulation (and in our case, by cryptographic proof) to execute fairly.
+This mirrors how institutional dark pools work in traditional finance, where the venue operator sees order flow and remains part of the trust model. In this implementation, cryptography constrains settlement validity, while fairness of the matching policy is an auditable off-circuit invariant rather than a circuit-enforced one.
 
 ---
 
@@ -58,12 +58,12 @@ An order passes through five discrete phases before funds change hands:
 ### 2.2 Matching Rules
 
 - **Batch auction model:** orders are collected over a configurable time window (default: 5 seconds). At the end of each window, a clearing price is computed and all crossing orders execute at that single price.
-- No temporal advantage within a batch — all orders in the same auction round are treated equally regardless of arrival time.
+- Fill allocation within a batch follows deterministic price-time priority: better price first, then the event-store sequence number (`seq`).
 - Partial fills are supported; residual quantity carries over to the next auction round.
 - Orders expire after a configurable TTL (default: 10 minutes).
 - Self-match prevention: orders from the same trader cannot match.
 - Minimum order size enforced at the circuit level, not in the engine.
-- Clearing price is computed as the price that maximizes matched volume.
+- Clearing price is computed off-circuit as the price that maximizes matched volume.
 
 ### 2.3 Settlement Rules
 
@@ -85,7 +85,7 @@ Price emerges from the protocol itself via the batch auction mechanism:
 ### 2.5 Privacy Guarantees
 
 - An external observer cannot determine the price or size of any pending order from on-chain data.
-- The matching engine operator **can** see order contents (decrypted from the encrypted payload) but is cryptographically bound to execute the auction correctly via ZK proofs.
+- The matching engine operator **can** see order contents (decrypted from the encrypted payload). ZK proofs bind settlement validity and admitted-set membership, but not the full fairness of the off-circuit matching algorithm.
 - Post-settlement, trade amounts and the clearing price are revealed but individual orders are unlinkable to wallet addresses without additional information.
 
 ---

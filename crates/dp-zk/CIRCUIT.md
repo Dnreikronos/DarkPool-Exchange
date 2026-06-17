@@ -28,7 +28,7 @@ uses `2^58`.
 | 1 | Side bit-form               | All rows     | `side * (1 - side) == 0` per leg.                   |
 | 2 | Opposite sides              | Active rows  | `(bid_side + ask_side - 1) * is_active == 0`.       |
 | 3 | Crossing                    | Active rows  | `bid_lp - match_price` and `match_price - ask_lp` non-negative via 60-bit range. |
-| 3b| Uniform clearing price      | Active rows  | `(match_price - clearing_price) * is_active == 0` — every active row settles at the single auction clearing price (#163). |
+| 3b| Uniform clearing price      | Active rows  | `(match_price - clearing_price) * is_active == 0` — every active row settles at the single auction clearing price (#163). This proves uniformity only; it does not prove the price maximizes matched volume. |
 | 4 | Min-size, min-price         | All / active | 60-bit ranges on `size`, `price`; diff to floors gated by `is_active`. |
 | 5 | Leg commitment binding      | All rows     | In-circuit Poseidon over `(trader_id, side, lp, size, salt)` reconstructs the commitment, accumulated into `commitments_root`. |
 | 5b| Input-completeness membership (IVC step circuit, #157) | Active rows | Each active leg's reconstructed commitment is proven a leaf of the round's admitted-set Merkle root: `(merkle_root(leg_commit, path) - admitted_root) * is_active == 0`. Ties every settled order to the publicly admitted input set. |
@@ -78,11 +78,23 @@ no off-log order was matched and the operator did not misrepresent the
 admitted set.
 
 **Scope boundary.** This binds *matched ⊆ admitted set* (no injection) and
-makes the input set transparent. It does **not** force the operator to match
-*every* crossing order — full maximal-matching is prohibitively expensive in
-circuit. Censorship-by-omission (declining to match an order that crosses)
-therefore remains detectable only by an external observer comparing the
-public book against the clearing price, not enforced by the proof.
+makes the input set transparent. It does **not** prove the full fairness of the
+off-circuit auction:
+
+- **No volume-maximisation proof.** The circuit checks `bid_limit >=
+  clearing_price >= ask_limit` for each supplied fill and checks that every
+  active row uses the same `clearing_price`. It does not scan the admitted
+  order book to prove this price maximizes matched volume.
+- **No completeness / no-censorship proof.** Extra admitted orders may remain
+  unmatched. Full maximal-matching is prohibitively expensive in this circuit,
+  so censorship-by-omission remains detectable only by an external observer
+  comparing the public book against the clearing price.
+- **No price-time priority proof.** The matcher uses `seq` off-circuit, but
+  `seq` is not a witness or public input here, so the proof cannot show that
+  higher-priority eligible orders were filled before lower-priority orders.
+
+Those properties are enforced by `dp-auction` and are replayable from the
+event log, but they are not cryptographic constraints of the current proof.
 
 ## Poseidon vs. Pedersen
 
