@@ -14,6 +14,7 @@ use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::pb::{ListPairsRequest, PlaceOrderRequest};
 use dp_api::ratelimit::RateLimitLayer;
 use dp_api::rest;
+use dp_api::validation::PLACE_ORDER_BODY_LIMIT;
 use dp_engine::Engine;
 use dp_event::MemStore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -45,7 +46,10 @@ async fn grpc_server_accepts_real_client() {
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
     let server_task = tokio::spawn(async move {
         Server::builder()
-            .add_service(DarkPoolServiceServer::new(handler))
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
             .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
             .await
             .expect("grpc server");
@@ -102,6 +106,68 @@ async fn grpc_server_accepts_real_client() {
 }
 
 #[tokio::test]
+async fn grpc_place_order_rejects_oversized_frame_before_validation() {
+    let handler = new_handler();
+    let (listener, addr) = bind_local().await;
+    let cancel = CancellationToken::new();
+
+    let server_cancel = cancel.clone();
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+    let server_task = tokio::spawn(async move {
+        Server::builder()
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
+            .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
+            .await
+            .expect("grpc server");
+    });
+
+    let endpoint = format!("http://{}", addr);
+    let channel = {
+        let mut last_err: Option<tonic::transport::Error> = None;
+        let mut ch = None;
+        for _ in 0..50 {
+            match Channel::from_shared(endpoint.clone())
+                .unwrap()
+                .connect()
+                .await
+            {
+                Ok(c) => {
+                    ch = Some(c);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        }
+        ch.unwrap_or_else(|| panic!("connect: {:?}", last_err))
+    };
+
+    let mut client = DarkPoolServiceClient::new(channel);
+    let err = client
+        .place_order(PlaceOrderRequest {
+            commitment: vec![0],
+            proof: vec![0; PLACE_ORDER_BODY_LIMIT + 1],
+            encrypted_payload: vec![0],
+        })
+        .await
+        .expect_err("oversized PlaceOrder frame should fail in tonic decode");
+
+    assert_eq!(err.code(), tonic::Code::OutOfRange);
+    assert!(
+        err.message().contains("decoded message length too large"),
+        "unexpected error: {err:?}",
+    );
+
+    cancel.cancel();
+    server_task.await.expect("join grpc task");
+}
+
+#[tokio::test]
 async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
     // Mirrors main.rs wiring: tonic Server with auth + rate-limit tower layers.
     // Ensures middleware regressions surface in integration, not just unit tests.
@@ -119,7 +185,10 @@ async fn grpc_server_with_layers_enforces_auth_and_ratelimit() {
         Server::builder()
             .layer(auth)
             .layer(rl)
-            .add_service(DarkPoolServiceServer::new(handler))
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
             .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
             .await
             .expect("grpc server");
