@@ -107,6 +107,26 @@ fn build_sol_matches(
     params.matches.iter().map(settlement_match_to_sol).collect()
 }
 
+async fn pending_nonce<P>(provider: &P, sender: Address) -> Result<u64, SettlementError>
+where
+    P: Provider + Send + Sync,
+{
+    provider
+        .get_transaction_count(sender)
+        .pending()
+        .await
+        .map_err(|e| SettlementError::Rpc(e.to_string()))
+}
+
+fn ensure_settlement_success<R>(receipt: &R) -> Result<(), SettlementError>
+where
+    R: ReceiptResponse,
+{
+    receipt
+        .ensure_success()
+        .map_err(|e| SettlementError::Rpc(e.to_string()))
+}
+
 /// Build the tracing span for a single `submit` call. Extracted so
 /// unit tests can verify the span's fields without standing up a real
 /// alloy `Provider`. Field names follow the OTel HTTP / RPC
@@ -154,12 +174,7 @@ where
                 let sol_matches = build_sol_matches(params)?;
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
-                let nonce = self
-                    .read_provider
-                    .get_transaction_count(sender)
-                    .pending()
-                    .await
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let nonce = pending_nonce(&self.submit_provider, sender).await?;
 
                 let latest_block = self
                     .read_provider
@@ -207,9 +222,7 @@ where
                         .get_receipt()
                         .await
                         .map_err(|e| SettlementError::Rpc(e.to_string()))?;
-                receipt
-                    .ensure_success()
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                ensure_settlement_success(&receipt)?;
 
                 Ok(format!("{:#x}", receipt.transaction_hash))
             }
@@ -241,12 +254,7 @@ where
 
                 // submitSession: commits the IVC proof and its final state; the
                 // matches are bound by settleAuction recomputing zN[3] from them.
-                let nonce_a = self
-                    .read_provider
-                    .get_transaction_count(sender)
-                    .pending()
-                    .await
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                let nonce_a = pending_nonce(&self.submit_provider, sender).await?;
                 let latest_block = self
                     .read_provider
                     .get_block_by_number(BlockNumberOrTag::Latest)
@@ -292,9 +300,7 @@ where
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
-                session_receipt
-                    .ensure_success()
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                ensure_settlement_success(&session_receipt)?;
 
                 let settle_nonce = nonce_a
                     .checked_add(1)
@@ -329,9 +335,7 @@ where
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
-                settle_receipt
-                    .ensure_success()
-                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                ensure_settlement_success(&settle_receipt)?;
 
                 Ok(format!("{:#x}", settle_receipt.transaction_hash))
             }
@@ -344,9 +348,72 @@ where
 mod tests {
     use super::*;
     use crate::SettlementMatch;
-    use alloy_primitives::{address, U256};
+    use alloy_primitives::{address, BlockHash, TxHash, B256, U256};
     use rust_decimal::Decimal;
     use uuid::Uuid;
+
+    struct TestReceipt {
+        status: bool,
+        tx_hash: TxHash,
+    }
+
+    impl ReceiptResponse for TestReceipt {
+        fn contract_address(&self) -> Option<Address> {
+            None
+        }
+
+        fn status(&self) -> bool {
+            self.status
+        }
+
+        fn block_hash(&self) -> Option<BlockHash> {
+            None
+        }
+
+        fn block_number(&self) -> Option<u64> {
+            None
+        }
+
+        fn transaction_hash(&self) -> TxHash {
+            self.tx_hash
+        }
+
+        fn transaction_index(&self) -> Option<u64> {
+            None
+        }
+
+        fn gas_used(&self) -> u64 {
+            0
+        }
+
+        fn effective_gas_price(&self) -> u128 {
+            0
+        }
+
+        fn blob_gas_used(&self) -> Option<u64> {
+            None
+        }
+
+        fn blob_gas_price(&self) -> Option<u128> {
+            None
+        }
+
+        fn from(&self) -> Address {
+            Address::ZERO
+        }
+
+        fn to(&self) -> Option<Address> {
+            None
+        }
+
+        fn cumulative_gas_used(&self) -> u64 {
+            0
+        }
+
+        fn state_root(&self) -> Option<B256> {
+            None
+        }
+    }
 
     fn test_match() -> SettlementMatch {
         SettlementMatch {
@@ -410,5 +477,51 @@ mod tests {
         assert!(fields.contains(&"auction_id"), "fields: {fields:?}");
         assert!(fields.contains(&"match_count"), "fields: {fields:?}");
         assert!(fields.contains(&"tx_transport"), "fields: {fields:?}");
+    }
+
+    #[tokio::test]
+    async fn pending_nonce_reads_submit_provider() {
+        use alloy_provider::ProviderBuilder;
+        use alloy_transport::mock::Asserter;
+
+        let read_nonce = Asserter::new();
+        let submit_nonce = Asserter::new();
+        read_nonce.push_success(&alloy_primitives::U64::from(7));
+        submit_nonce.push_success(&alloy_primitives::U64::from(42));
+
+        let _read_provider = ProviderBuilder::new().connect_mocked_client(read_nonce.clone());
+        let submit_provider = ProviderBuilder::new().connect_mocked_client(submit_nonce.clone());
+
+        let nonce = pending_nonce(
+            &submit_provider,
+            address!("0x0000000000000000000000000000000000000042"),
+        )
+        .await
+        .expect("pending nonce");
+
+        assert_eq!(nonce, 42);
+        assert_eq!(submit_nonce.read_q().len(), 0);
+        assert_eq!(read_nonce.read_q().len(), 1);
+    }
+
+    #[test]
+    fn ensure_settlement_success_rejects_failed_receipt() {
+        let receipt = TestReceipt {
+            status: false,
+            tx_hash: TxHash::with_last_byte(0x42),
+        };
+
+        let err = ensure_settlement_success(&receipt).expect_err("failed receipt");
+        assert!(matches!(err, SettlementError::Rpc(msg) if msg.contains("failed")));
+    }
+
+    #[test]
+    fn ensure_settlement_success_accepts_successful_receipt() {
+        let receipt = TestReceipt {
+            status: true,
+            tx_hash: TxHash::with_last_byte(0x42),
+        };
+
+        ensure_settlement_success(&receipt).expect("successful receipt");
     }
 }
