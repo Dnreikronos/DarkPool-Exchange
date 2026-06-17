@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use dp_settlement::{
     BatchSink, DarkPool, EthSubmitter, EthSubmitterConfig, LocalTxSigner, SettlementError,
-    SettlementMatch, SubmitBatchParams, Submitter, TxSigner, Watcher,
+    SettlementMatch, SettlementTxTransport, SubmitBatchParams, Submitter, TxSigner, Watcher,
 };
 
 const ANVIL_KEY_0_HEX: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -257,6 +257,7 @@ async fn settles_batch_end_to_end() {
         contract_address: pool_addr.to_string(),
         chain_id: ANVIL_CHAIN_ID,
         gas_limit: Some(2_000_000),
+        tx_transport: SettlementTxTransport::PublicMempool,
     };
     let submitter = EthSubmitter::new(http_provider, &config).expect("submitter");
 
@@ -421,6 +422,7 @@ async fn settles_batch_six_decimal_quote() {
         contract_address: pool_addr.to_string(),
         chain_id: ANVIL_CHAIN_ID,
         gas_limit: Some(2_000_000),
+        tx_transport: SettlementTxTransport::PublicMempool,
     };
     // Clone the provider into the submitter so `pool` (borrowing `http_provider`)
     // stays alive for the post-settlement balance reads below.

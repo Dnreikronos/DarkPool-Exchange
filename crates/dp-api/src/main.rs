@@ -277,6 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 contract_address: contract_addr.to_string(),
                 chain_id: cfg.chain_id,
                 gas_limit: Some(cfg.submit_gas),
+                tx_transport: dp_settlement::SettlementTxTransport::PublicMempool,
             };
 
             let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
