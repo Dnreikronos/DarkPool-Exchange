@@ -2429,6 +2429,7 @@ dependencies = [
  "arc-swap",
  "ark-bn254",
  "ark-ff 0.5.0",
+ "ark-groth16",
  "bincode",
  "chrono",
  "criterion",

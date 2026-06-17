@@ -1,9 +1,9 @@
 //! Client-side order construction for the DarkPool Exchange.
 //!
 //! Ships an ECIES-encrypted order payload, a Poseidon commitment for local
-//! record-keeping, and a placeholder proof. Per-order ZK proofs are out of
-//! scope — the engine runs batch-level proofs after auction matching, and
-//! recomputes its own commitment server-side.
+//! record-keeping, and a development-only placeholder proof. Production
+//! submissions must use the frontend or another caller that supplies the real
+//! per-order Groth16 proof accepted by the engine.
 
 pub mod commitment;
 pub mod encoding;

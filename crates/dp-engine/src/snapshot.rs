@@ -14,7 +14,10 @@ use crate::state::SerializableState;
 /// with [`SnapshotError::BadMagic`] — a stray `DPS1` (plaintext) envelope is
 /// treated as corrupt and the recover path falls back to event replay.
 const MAGIC: &[u8; 4] = b"DPS2";
-const ENVELOPE_VERSION: u32 = 2;
+// Version 3 adds the persistent spent-nullifier projection. Older encrypted
+// snapshots may contain live orders without their replay keys, so they must be
+// rejected and rebuilt from the event log instead of deserializing with defaults.
+const ENVELOPE_VERSION: u32 = 3;
 /// Bytes bound into the AEAD tag as associated data: `magic || version || seq`.
 /// Binding the seq stops a sealed blob from being relabeled under another seq.
 const AAD_LEN: usize = 4 /* magic */ + 4 /* version */ + 8 /* seq */;
@@ -327,6 +330,7 @@ mod tests {
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
             seen_ciphertexts: Default::default(),
+            spent_nullifiers: Default::default(),
         }
     }
 
@@ -410,6 +414,18 @@ mod tests {
         let err = decode_envelope(&env, &c).unwrap_err();
         assert!(
             matches!(err, SnapshotError::UnsupportedVersion(v) if v == bad_ver),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn rejects_pre_nullifier_snapshot_version() {
+        let c = test_cipher();
+        let mut env = encode_envelope(&empty_state(), 1, &c).unwrap();
+        env[4..8].copy_from_slice(&2u32.to_be_bytes());
+        let err = decode_envelope(&env, &c).unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::UnsupportedVersion(2)),
             "got {err:?}",
         );
     }

@@ -25,12 +25,10 @@ pub const MSG_INVALID_API_KEY: &str = "invalid api key";
 pub const MSG_MISSING_METADATA: &str = "missing metadata";
 pub const MSG_RATE_LIMIT_EXCEEDED: &str = "rate limit exceeded";
 
-/// Bounds-check the proof field. This is a payload-size / non-empty guard
-/// ONLY — it performs **no cryptographic verification** (issue #158). The
-/// per-order proof is accepted unverified; order validity is operator-enforced
-/// by re-deriving the commitment from the decrypted payload in
-/// `Engine::place_encrypted_order`. A verified per-order proof is deferred to
-/// ADR 0001 / issues #97-#98.
+/// Bounds-check the proof field before the encrypted payload reaches the
+/// engine. Cryptographic verification happens after decryption in
+/// `Engine::place_encrypted_order`, where the operator derives the proof's
+/// commitment/nullifier public inputs from plaintext order fields.
 pub fn validate_proof(proof: &[u8]) -> Result<(), Status> {
     if proof.is_empty() {
         return Err(Status::invalid_argument(MSG_PROOF_REQUIRED));

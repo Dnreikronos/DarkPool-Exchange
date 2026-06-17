@@ -18,7 +18,7 @@ use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
     SnapshotCipher,
 };
-use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
+use dp_engine::{Engine, Groth16OrderProofVerifier, PairConfig, PairStatus, SnapshotConfig};
 use dp_event::{
     FileSnapshotStore, FileStore, MemSnapshotStore, MemStore, PgSnapshotStore, PgStore,
     SnapshotStore, Store,
@@ -109,6 +109,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
     engine.set_snapshot_store(snapshot_store.clone());
+
+    if let Some(path) = cfg.order_proof_vk_path() {
+        let verifier = Groth16OrderProofVerifier::from_file(path)?;
+        engine.set_order_proof_verifier(Arc::new(verifier));
+        info!(path = %path, "order proof verifier: canonical VK loaded");
+    } else if cfg.allow_unverified_order_proofs {
+        warn!(
+            "DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true — per-order proofs will not be \
+             cryptographically verified. Local/dev only; do not use in production."
+        );
+    } else {
+        return Err(
+            "DARKPOOL_ORDER_PROOF_VK must point to commitment_vk.bin. To run an unsafe local \
+             fixture without per-order proof verification, set \
+             DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true."
+                .into(),
+        );
+    }
 
     // Snapshot-at-rest encryption (#203). A snapshot store without a cipher
     // would persist cleartext order data (trader / price / size), so fail

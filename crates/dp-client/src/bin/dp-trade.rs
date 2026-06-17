@@ -120,6 +120,9 @@ async fn run() -> Result<(), ClientError> {
     print_submission(&sub, args.output);
 
     if let Some(server) = args.server {
+        eprintln!(
+            "warning: dp-trade sends a development placeholder proof; production servers reject it unless DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true"
+        );
         submit_http(&server, args.api_key.as_deref(), &sub).await?;
     }
 

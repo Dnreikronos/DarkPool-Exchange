@@ -38,6 +38,37 @@ fn dec(n: i64) -> Decimal {
     Decimal::new(n, 0)
 }
 
+fn order_proof_fixture(d: &DecryptedOrder) -> (Vec<u8>, Vec<u8>, crate::Groth16OrderProofVerifier) {
+    use ark_bn254::Fr;
+    use dp_zk::commitment_circuit::{
+        generate_keys, prove_with_key, serialize_vk, CommitmentPreimageCircuit,
+    };
+    use dp_zk::encoding::decimal_to_scalar;
+    use dp_zk::pedersen::{bytes_to_scalar, derive_trader_id};
+    use rand::SeedableRng;
+
+    let mut setup_rng = rand::rngs::StdRng::from_seed([217u8; 32]);
+    let (pk, vk) = generate_keys(&mut setup_rng).unwrap();
+    let vk_bytes = serialize_vk(&vk).unwrap();
+    let verifier = crate::Groth16OrderProofVerifier::from_bytes(&vk_bytes).unwrap();
+
+    let salt = crate::engine::parse_order_salt(&d.salt).unwrap();
+    let circuit = CommitmentPreimageCircuit {
+        trader_id: derive_trader_id(d.trader.as_slice()).unwrap(),
+        trader_addr: bytes_to_scalar(d.trader.as_slice()),
+        side: Fr::from(d.side as u8 as u64),
+        limit_price: decimal_to_scalar(d.price).unwrap(),
+        size: decimal_to_scalar(d.size).unwrap(),
+        salt: bytes_to_scalar(&salt),
+    };
+
+    let mut prove_rng = rand::rngs::StdRng::from_seed([99u8; 32]);
+    let (publics, proof) = prove_with_key(&pk, &circuit, &mut prove_rng).unwrap();
+    let commitment = dp_zk::fr_to_bytes32(publics.commitment).to_vec();
+
+    (commitment, proof, verifier)
+}
+
 fn register_btc_usd(engine: &Engine) {
     engine.register_pair_without_event("BTC-USD".into(), crate::state::PairConfig::default());
 }
@@ -567,6 +598,134 @@ async fn place_encrypted_order_accepts_matching_caller() {
         .await
         .expect("matching caller should succeed");
     assert_eq!(order.trader, Address::ZERO);
+}
+
+#[tokio::test]
+async fn verified_order_proof_is_admitted() {
+    let (engine, _) = make_engine();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+
+    let order = engine
+        .place_encrypted_order(commitment, proof, serde_json::to_vec(&d).unwrap(), None)
+        .await
+        .expect("valid proof should admit order");
+    assert_eq!(order.trader, d.trader);
+}
+
+#[tokio::test]
+async fn invalid_order_proof_is_rejected() {
+    let (engine, store) = make_engine();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, _proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+
+    let err = engine
+        .place_encrypted_order(
+            commitment,
+            vec![0xAA; 32],
+            serde_json::to_vec(&d).unwrap(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::InvalidOrderProof)
+    ));
+    assert_eq!(count_events(store.as_ref(), EventType::OrderPlaced), 0);
+}
+
+#[tokio::test]
+async fn clear_order_proof_verifier_restores_unverified_local_mode() {
+    let (engine, _) = make_engine();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, _proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+    engine.clear_order_proof_verifier();
+
+    let order = engine
+        .place_encrypted_order(
+            commitment,
+            vec![0xAA; 32],
+            serde_json::to_vec(&d).unwrap(),
+            None,
+        )
+        .await
+        .expect("cleared verifier should allow local unverified mode");
+
+    assert_eq!(order.trader, d.trader);
+}
+
+#[tokio::test]
+async fn repeated_nullifier_is_rejected_even_with_distinct_ciphertext() {
+    let (engine, _) = make_engine();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+
+    engine
+        .place_encrypted_order(
+            commitment.clone(),
+            proof.clone(),
+            serde_json::to_vec(&d).unwrap(),
+            None,
+        )
+        .await
+        .expect("first order admitted");
+
+    let err = engine
+        .place_encrypted_order(
+            commitment,
+            proof,
+            serde_json::to_string_pretty(&d).unwrap().into_bytes(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::DuplicateOrder)
+    ));
+}
+
+#[tokio::test]
+async fn repeated_nullifier_is_rejected_after_recovery() {
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    engine
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .unwrap();
+    let d: DecryptedOrder = serde_json::from_slice(&sample_order_ciphertext()).unwrap();
+    let (commitment, proof, verifier) = order_proof_fixture(&d);
+    engine.set_order_proof_verifier(Arc::new(verifier));
+    engine
+        .place_encrypted_order(
+            commitment.clone(),
+            proof.clone(),
+            serde_json::to_vec(&d).unwrap(),
+            None,
+        )
+        .await
+        .expect("first order admitted");
+
+    let recovered = Engine::new(store, Duration::from_millis(50));
+    recovered.recover().await.expect("recover");
+
+    let err = recovered
+        .place_encrypted_order(
+            commitment,
+            proof,
+            serde_json::to_string_pretty(&d).unwrap().into_bytes(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::DuplicateOrder)
+    ));
 }
 
 /// #233: a replayed ciphertext is rejected on a live engine, and the cheap
@@ -1442,7 +1601,13 @@ mod delist_toctou {
         engine.delist_pair("BTC-USD").unwrap();
 
         let err = engine
-            .persist_order_placed(dummy_order("BTC-USD"), vec![0u8; 32], vec![], vec![1, 2, 3])
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                [1u8; 32],
+            )
             .unwrap_err();
         assert!(
             matches!(
@@ -1471,7 +1636,13 @@ mod delist_toctou {
         engine.suspend_pair("BTC-USD").unwrap();
 
         let err = engine
-            .persist_order_placed(dummy_order("BTC-USD"), vec![0u8; 32], vec![], vec![1, 2, 3])
+            .persist_order_placed(
+                dummy_order("BTC-USD"),
+                vec![0u8; 32],
+                vec![],
+                vec![1, 2, 3],
+                [1u8; 32],
+            )
             .unwrap_err();
         assert!(matches!(
             err,
@@ -1487,7 +1658,13 @@ mod delist_toctou {
     async fn persist_rejects_when_pair_unregistered() {
         let (engine, _store) = make_engine();
         let err = engine
-            .persist_order_placed(dummy_order("DOGE/USDC"), vec![0u8; 32], vec![], vec![])
+            .persist_order_placed(
+                dummy_order("DOGE/USDC"),
+                vec![0u8; 32],
+                vec![],
+                vec![],
+                [1u8; 32],
+            )
             .unwrap_err();
         assert!(matches!(
             err,
