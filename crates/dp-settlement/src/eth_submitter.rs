@@ -296,6 +296,10 @@ where
                     .ensure_success()
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
+                let settle_nonce = nonce_a
+                    .checked_add(1)
+                    .ok_or_else(|| SettlementError::Rpc("operator nonce overflow".into()))?;
+
                 // settleAuction: replay the matches array. The contract
                 // recomputes the Poseidon settlement chain over it and reverts
                 // unless it equals the proof's z_n[3] (#209).
@@ -306,7 +310,7 @@ where
                         sol_matches,
                     )
                     .from(sender)
-                    .nonce(nonce_a + 1)
+                    .nonce(settle_nonce)
                     .gas(self.gas_limit)
                     .max_fee_per_gas(fee_cap)
                     .max_priority_fee_per_gas(tip)
