@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
+use alloy_network::{Ethereum, EthereumWallet, NetworkWallet, ReceiptResponse};
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::{PendingTransactionBuilder, Provider};
 use alloy_rpc_types::BlockNumberOrTag;
@@ -207,6 +207,9 @@ where
                         .get_receipt()
                         .await
                         .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", receipt.transaction_hash))
             }
@@ -282,13 +285,16 @@ where
                     .await
                     .map_err(|e| SettlementError::Rpc(e.to_string()))?;
                 let session_tx_hash = *session_pending.tx_hash();
-                let _session_receipt = PendingTransactionBuilder::new(
+                let session_receipt = PendingTransactionBuilder::new(
                     self.read_provider.root().clone(),
                     session_tx_hash,
                 )
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                session_receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 // settleAuction: replay the matches array. The contract
                 // recomputes the Poseidon settlement chain over it and reverts
@@ -319,6 +325,9 @@ where
                 .get_receipt()
                 .await
                 .map_err(|e| SettlementError::Rpc(e.to_string()))?;
+                settle_receipt
+                    .ensure_success()
+                    .map_err(|e| SettlementError::Rpc(e.to_string()))?;
 
                 Ok(format!("{:#x}", settle_receipt.transaction_hash))
             }
