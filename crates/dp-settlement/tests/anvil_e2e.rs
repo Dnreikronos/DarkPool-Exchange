@@ -252,7 +252,6 @@ async fn settles_batch_end_to_end() {
     let tx_signer: Arc<dyn TxSigner> =
         Arc::new(LocalTxSigner::from_hex(ANVIL_KEY_0_HEX).expect("local signer"));
     let config = EthSubmitterConfig {
-        rpc_url: anvil.endpoint(),
         signer: tx_signer,
         contract_address: pool_addr.to_string(),
         chain_id: ANVIL_CHAIN_ID,
@@ -417,7 +416,6 @@ async fn settles_batch_six_decimal_quote() {
     let tx_signer: Arc<dyn TxSigner> =
         Arc::new(LocalTxSigner::from_hex(ANVIL_KEY_0_HEX).expect("local signer"));
     let config = EthSubmitterConfig {
-        rpc_url: anvil.endpoint(),
         signer: tx_signer,
         contract_address: pool_addr.to_string(),
         chain_id: ANVIL_CHAIN_ID,

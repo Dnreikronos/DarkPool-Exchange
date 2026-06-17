@@ -280,7 +280,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     (rpc, dp_settlement::SettlementTxTransport::PublicMempool)
                 };
 
-            let provider = alloy_provider::ProviderBuilder::new()
+            let read_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            let submit_provider = alloy_provider::ProviderBuilder::new()
                 .wallet(signer.wallet())
                 .connect_http(settlement_rpc.parse().map_err(|e| {
                     if tx_transport == dp_settlement::SettlementTxTransport::PrivateRpc {
@@ -291,7 +295,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 })?);
 
             let submitter_cfg = dp_settlement::EthSubmitterConfig {
-                rpc_url: settlement_rpc.to_string(),
                 signer,
                 contract_address: contract_addr.to_string(),
                 chain_id: cfg.chain_id,
@@ -299,7 +302,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 tx_transport,
             };
 
-            let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
+            let submitter = dp_settlement::EthSubmitter::with_submit_provider(
+                read_provider,
+                submit_provider,
+                &submitter_cfg,
+            )?;
             engine.set_submitter(Arc::new(submitter));
 
             info!(
