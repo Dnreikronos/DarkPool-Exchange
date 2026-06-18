@@ -98,8 +98,9 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_RATE_STALE_AFTER", default_value = "10m", value_parser = parse_duration)]
     pub rate_stale_after: Duration,
 
-    /// Per-request handler timeout applied to REST and gRPC calls. REST
-    /// streaming responses are guarded separately by the SSE stream cap.
+    /// Per-request handler timeout applied to REST and gRPC calls. Also caps
+    /// gRPC auction stream lifetime; REST streaming responses are guarded
+    /// separately by the SSE stream cap.
     #[arg(long, env = "DARKPOOL_REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub request_timeout: Duration,
 

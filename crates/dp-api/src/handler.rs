@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::time::Duration;
 
 use dp_engine::AuctionNotification;
 use dp_engine::Engine;
@@ -61,11 +62,20 @@ fn map_broadcast_item(
 #[derive(Clone)]
 pub struct ApiHandler {
     pub engine: Engine,
+    auction_stream_timeout: Option<Duration>,
 }
 
 impl ApiHandler {
     pub fn new(engine: Engine) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            auction_stream_timeout: None,
+        }
+    }
+
+    pub fn with_auction_stream_timeout(mut self, timeout: Duration) -> Self {
+        self.auction_stream_timeout = Some(timeout);
+        self
     }
 }
 
@@ -215,7 +225,14 @@ impl DarkPoolService for ApiHandler {
         let rx = self.engine.subscribe();
         let stream =
             BroadcastStream::new(rx).filter_map(move |item| map_broadcast_item(&pair, item));
-        Ok(Response::new(Box::pin(stream)))
+        let stream: Self::StreamAuctionsStream = match self.auction_stream_timeout {
+            Some(timeout) => Box::pin(futures_util::StreamExt::take_until(
+                stream,
+                tokio::time::sleep(timeout),
+            )),
+            None => Box::pin(stream),
+        };
+        Ok(Response::new(stream))
     }
 
     async fn list_pairs(

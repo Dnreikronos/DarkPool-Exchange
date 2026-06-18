@@ -482,7 +482,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth = AuthLayer::from_core(auth_core.clone());
     let ratelimit = RateLimitLayer::from_core(rl_core.clone());
 
-    let handler = ApiHandler::new(engine.clone());
+    let handler = ApiHandler::new(engine.clone()).with_auction_stream_timeout(request_timeout);
     let admin_handler = AdminApiHandler::new(engine.clone());
     let key_admin_handler = KeyAdminHandler::new(multi.clone());
     let shared = Arc::new(handler.clone());
