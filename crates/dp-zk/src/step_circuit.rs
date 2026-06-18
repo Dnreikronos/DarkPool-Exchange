@@ -1252,6 +1252,21 @@ mod tests {
         );
     }
 
+    /// Scope boundary for #223: the circuit accepts any uniform clearing price
+    /// inside each supplied pair's limit interval.
+    #[test]
+    fn step_accepts_uniform_price_inside_limits() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(96), Decimal::from(96));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "uniform crossing price inside every matched pair's limits must satisfy"
+        );
+    }
+
     // ── Input-completeness membership (#157) ─────────────────────────────────
 
     #[test]
@@ -1274,11 +1289,10 @@ mod tests {
         );
     }
 
-    /// The engine's real case: the admitted set is the full live book, a
-    /// superset of the matched legs. Membership still holds for every settled
-    /// leg.
+    /// Scope boundary for #223: membership proves every settled leg came from
+    /// the admitted set, but it does not prove every admitted order was matched.
     #[test]
-    fn step_accepts_admitted_superset() {
+    fn step_accepts_admitted_superset_without_completeness_check() {
         let (w, prices, sizes) = sample_witness();
         let base = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let mut admitted: Vec<Fr> = base
@@ -1298,7 +1312,7 @@ mod tests {
         let (satisfied, _) = run_step(&circuit, z_0, ext);
         assert!(
             satisfied,
-            "matched legs must be members of the larger admitted set"
+            "extra admitted-but-unmatched orders are outside the circuit's completeness constraints"
         );
     }
 
