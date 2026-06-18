@@ -26,6 +26,9 @@ use crate::subscribe::AuctionNotification;
 use crate::{DEFAULT_AUCTION_INTERVAL, DEFAULT_SUBSCRIBER_CAPACITY};
 
 pub(crate) const MAX_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+pub const MAX_ENCRYPTED_PAYLOAD_BYTES: usize = 128 * 1024;
+pub const MAX_ACTIVE_ORDERS_PER_TRADER: usize = 128;
+pub const MAX_ACTIVE_ORDERS: usize = 16 * 1024;
 
 /// Per-order ZK witness secrets. NEVER persisted to the event store — held
 /// only in memory. Lost on restart; orphan-recovery falls back to a noop
@@ -57,11 +60,12 @@ impl Drop for OrderSecrets {
 /// Lock-ordering invariant for [`Inner`]:
 ///
 /// **secrets → state.** When both must be held, acquire `secrets` first,
-/// then `state`. The only path that holds both is
-/// [`Engine::prune_dead_secrets`]; everywhere else either holds them
-/// briefly and sequentially (e.g. `cancel_order` releases `state` before
-/// calling `drop_secret`) or holds only one. Acquiring them in the
-/// reverse order will deadlock against `prune_dead_secrets`.
+/// then `state`. The paths that hold both are [`Engine::prune_dead_secrets`]
+/// and the atomic order-admission insert in [`Engine::persist_order_placed`].
+/// Everywhere else either holds them briefly and sequentially (e.g.
+/// `cancel_order` releases `state` before calling `drop_secret`) or holds only
+/// one. Acquiring them in the reverse order will deadlock against
+/// `prune_dead_secrets`.
 pub(crate) struct Inner {
     pub(crate) state: Mutex<EngineState>,
     pub(crate) store: Arc<dyn Store>,
@@ -497,6 +501,14 @@ impl Engine {
         ciphertext: Vec<u8>,
         caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
+        if ciphertext.len() > MAX_ENCRYPTED_PAYLOAD_BYTES {
+            return Err(EngineError::Validation(
+                DarkPoolError::EncryptedPayloadTooLarge {
+                    max: MAX_ENCRYPTED_PAYLOAD_BYTES,
+                },
+            ));
+        }
+
         // Cheap replay shed (#233): a byte-identical ciphertext is a replay of a
         // captured submission (ECIES is randomized), so reject it before the
         // ECIES decrypt + commitment derivation every admitted order pays. This
@@ -664,28 +676,47 @@ impl Engine {
         }
         let commitment = secrets.commitment.to_vec();
         let nullifier = secrets.nullifier;
-        self.inner.secrets.lock().insert(order.id, secrets);
 
         // Stamp the returned order with the same seq the book copy got, so a
         // caller inspecting the result sees the real priority key, not 0.
-        // If persistence rejects (e.g. the in-lock pair-status re-check fails
-        // because a delist/suspend raced in — issue #162), the order never
-        // enters the book, so drop the witness secret we just stashed rather
-        // than leak it until the next `prune_dead_secrets` sweep.
+        // `persist_order_placed` stores the witness secret atomically with the
+        // book insert, so a racing tick can never observe a booked order without
+        // its in-memory ZK witness.
         match self.persist_order_placed(
             order.clone(),
+            secrets,
             commitment,
             _unverified_proof,
             ciphertext,
             nullifier,
         ) {
             Ok(seq) => order.seq = seq,
-            Err(e) => {
-                self.drop_secret(order.id);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         }
         Ok(order)
+    }
+
+    fn ensure_order_capacity(
+        state: &EngineState,
+        trader: alloy_primitives::Address,
+    ) -> Result<(), EngineError> {
+        if state.book.active_order_count() >= MAX_ACTIVE_ORDERS {
+            return Err(EngineError::Validation(
+                DarkPoolError::OrderBookCapacityExceeded {
+                    max: MAX_ACTIVE_ORDERS,
+                },
+            ));
+        }
+        if state.book.active_order_count_for_trader(trader.as_slice())
+            >= MAX_ACTIVE_ORDERS_PER_TRADER
+        {
+            return Err(EngineError::Validation(
+                DarkPoolError::TooManyRestingOrdersForTrader {
+                    max: MAX_ACTIVE_ORDERS_PER_TRADER,
+                },
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn build_batch_witness(
@@ -775,6 +806,7 @@ impl Engine {
     pub(crate) fn persist_order_placed(
         &self,
         mut order: Order,
+        secrets: OrderSecrets,
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
@@ -795,6 +827,7 @@ impl Engine {
             },
         }];
 
+        let mut secrets_guard = self.inner.secrets.lock();
         let mut state = self.inner.state.lock();
         // Re-validate the pair status under the *same* lock that does the
         // append + insert. The status check in `place_encrypted_order` runs
@@ -827,6 +860,7 @@ impl Engine {
         if state.spent_nullifiers.contains(&nullifier) {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
+        Self::ensure_order_capacity(&state, order.trader)?;
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         // The store stamped the monotonic seq onto the event during append;
@@ -839,7 +873,9 @@ impl Engine {
             Side::Buy => "buy",
             Side::Sell => "sell",
         };
+        let order_id = order.id;
         state.book.insert_order(order);
+        secrets_guard.insert(order_id, secrets);
         // Record the digest only after the event is durably appended, so the
         // live spent-set and a replay rebuilt from the log stay in lockstep.
         state.seen_ciphertexts.insert(digest);

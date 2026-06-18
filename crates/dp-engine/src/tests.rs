@@ -1591,6 +1591,17 @@ mod delist_toctou {
         }
     }
 
+    fn dummy_secrets() -> crate::engine::OrderSecrets {
+        crate::engine::OrderSecrets {
+            salt: [1u8; 32],
+            trader_id: [2u8; 32],
+            commitment: [3u8; 32],
+            nullifier: [4u8; 32],
+            balance: dec(1_000),
+            position: 0,
+        }
+    }
+
     // Simulates the lost race: the order passed its earlier `Active` check,
     // but by the time `persist_order_placed` takes the lock the pair has been
     // delisted. The in-lock re-check must reject and insert nothing.
@@ -1603,6 +1614,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("BTC-USD"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
@@ -1638,6 +1650,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("BTC-USD"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
@@ -1660,6 +1673,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("DOGE/USDC"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![],
