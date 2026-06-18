@@ -45,6 +45,7 @@ pub struct InlineFoldingAggregator {
     params: Arc<HyperNovaPublicParams>,
     state: Arc<Mutex<HashMap<String, IvcRoundState>>>,
     batch_size: usize,
+    settlement_domain: Fr,
     /// How many rounds to fold before `finalize` is expected.  Currently
     /// informational; callers decide when to finalize.
     #[allow(dead_code)]
@@ -60,10 +61,25 @@ impl InlineFoldingAggregator {
     ///   when generating `params`.
     /// * `finalize_every` — advisory cadence (in rounds) for finalization.
     pub fn new(params: Arc<HyperNovaPublicParams>, batch_size: usize, finalize_every: u64) -> Self {
+        Self::new_with_settlement_domain(params, batch_size, finalize_every, Fr::zero())
+    }
+
+    /// Create a new aggregator with a deployment-specific settlement domain.
+    ///
+    /// The domain must match `DarkPool.settlementDomain()` for the target
+    /// contract. It seeds `z_0[3]`, which the contract also uses as the initial
+    /// accumulator when recomputing the settlement chain.
+    pub fn new_with_settlement_domain(
+        params: Arc<HyperNovaPublicParams>,
+        batch_size: usize,
+        finalize_every: u64,
+        settlement_domain: Fr,
+    ) -> Self {
         Self {
             params,
             state: Arc::new(Mutex::new(HashMap::new())),
             batch_size,
+            settlement_domain,
             finalize_every,
         }
     }
@@ -96,10 +112,11 @@ impl ProofAggregator for InlineFoldingAggregator {
         let params = Arc::clone(&self.params);
         let state = Arc::clone(&self.state);
         let batch_size = self.batch_size;
+        let settlement_domain = self.settlement_domain;
 
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let z_0 = compute_z_0(&external_inputs);
+                let z_0 = compute_z_0(&external_inputs, settlement_domain);
                 let mut guard = state.lock();
                 let entry = match guard.entry(pair) {
                     std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
@@ -145,17 +162,23 @@ impl ProofAggregator for InlineFoldingAggregator {
     }
 }
 
-/// Compute z_0 = [0, 0, poseidon(min_size, min_price, position_limit), 0, 0]
-/// from the external inputs of the first round. This matches the `initial_z`
-/// helper in `dp-zk`'s step circuit tests. The two trailing slots are the empty
-/// settlement hash-chain accumulator (#153) and the empty admitted-set chain
-/// (#157).
-fn compute_z_0(ext: &AuctionExternalInputs) -> [Fr; 5] {
+/// Compute z_0 = [0, 0, poseidon(min_size, min_price, position_limit),
+/// settlement_domain, 0] from the external inputs of the first round. The
+/// settlement domain must match the target `DarkPool` deployment so the
+/// proof-carried settlement chain starts from the same deployment-bound value
+/// the contract uses when recomputing `matches[]`.
+fn compute_z_0(ext: &AuctionExternalInputs, settlement_domain: Fr) -> [Fr; 5] {
     let cfg = poseidon_config();
     let mut s = PoseidonSponge::<Fr>::new(&cfg);
     s.absorb(&vec![ext.min_size, ext.min_price, ext.position_limit]);
     let policy_hash = s.squeeze_field_elements::<Fr>(1)[0];
-    [Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
+    [
+        Fr::zero(),
+        Fr::zero(),
+        policy_hash,
+        settlement_domain,
+        Fr::zero(),
+    ]
 }
 
 #[cfg(test)]
@@ -172,6 +195,14 @@ mod tests {
     fn aggregator_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<InlineFoldingAggregator>();
+    }
+
+    #[test]
+    fn initial_state_uses_settlement_domain() {
+        let ext = AuctionExternalInputs::default();
+        let domain = Fr::from(12345u64);
+        let z_0 = compute_z_0(&ext, domain);
+        assert_eq!(z_0[3], domain);
     }
 
     /// Full fold → finalize round-trip.  Ignored by default because
