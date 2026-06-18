@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let store: Arc<dyn Store> = if let Some(url) = cfg.event_db_url() {
         info!(url = %sanitize_db_url(url), "event log: postgres");
-        Arc::new(PgStore::connect(url).await?)
+        Arc::new(PgStore::connect_with_timeout(url, cfg.request_timeout).await?)
     } else if let Some(path) = cfg.event_log_path() {
         info!(path = %path, "event log: file");
         Arc::new(FileStore::open(path)?)
