@@ -116,7 +116,7 @@
     "name": "auctionToSession",
     "inputs": [
       {
-        "name": "",
+        "name": "auctionId",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -463,7 +463,7 @@
     "name": "sessionSettled",
     "inputs": [
       {
-        "name": "",
+        "name": "sessionId",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -482,7 +482,7 @@
     "name": "sessionSettlementAcc",
     "inputs": [
       {
-        "name": "",
+        "name": "sessionId",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -501,7 +501,7 @@
     "name": "sessionSubmitted",
     "inputs": [
       {
-        "name": "",
+        "name": "sessionId",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -615,6 +615,19 @@
   },
   {
     "type": "function",
+    "name": "settlementDomain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "settleAuction",
     "inputs": [
       {
@@ -683,7 +696,7 @@
     "name": "settledAuction",
     "inputs": [
       {
-        "name": "",
+        "name": "auctionId",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -702,7 +715,7 @@
     "name": "settledBatch",
     "inputs": [
       {
-        "name": "",
+        "name": "batchId",
         "type": "bytes32",
         "internalType": "bytes32"
       }

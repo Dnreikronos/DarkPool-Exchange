@@ -52,10 +52,12 @@ The HyperNova step circuit carries a 5-element public state across rounds:
 | 0 | `state_hash`     | Running `poseidon(prev, commitments_root, notionals_root, active_count)`. |
 | 1 | `round_nonce`    | Increments by 1 each folded round.                             |
 | 2 | `policy_hash`    | `poseidon(min_size, min_price, position_limit)`; invariant.    |
-| 3 | `settlement_acc` | Hash-chain over each active match's `(bid_addr, ask_addr, price, size)`. `DarkPool.settleAuction` recomputes the identical Poseidon chain over `matches[]` and requires it equals `z_n[3]`, binding settlement to the proof (#209; `dp_zk::settlement_chain` + `PoseidonBN254.sol`). |
+| 3 | `settlement_acc` | Hash-chain over each active match's `(bid_addr, ask_addr, price, size)`, seeded by the target `DarkPool.settlementDomain()` so the proof is bound to one chain ID + contract address. `DarkPool.settleAuction` recomputes the identical Poseidon chain over `matches[]` and requires it equals `z_n[3]`, binding settlement to the proof (#209, #222; `dp_zk::settlement_chain` + `PoseidonBN254.sol`). |
 | 4 | `admit_chain`    | Hash-chain over each round's admitted-set Merkle root — binds the input set to the proof (#157). |
 
-`z_0 = [0, 0, policy_hash, 0, 0]`. `verify_final` re-checks the whole
+`z_0 = [0, 0, policy_hash, settlement_domain, 0]`, where
+`settlement_domain` is the BN254 scalar returned by the target contract's
+`settlementDomain()` getter. `verify_final` re-checks the whole
 authenticated `z_0`/`z_n` slice, so neither chain can be rewritten while
 presenting a valid proof.
 

@@ -1062,10 +1062,10 @@ contract DarkPoolTest is Test {
         pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
     }
 
-    /// Defense in depth (#209): submitSession pins the proof's public IO to its
-    /// canonical form. A non-zero z0[3] (the settlement accumulator must start at
-    /// zero, where settleAuction's recompute begins) is rejected up front.
-    function test_submitSession_nonZeroZ0SettlementAcc_reverts() public {
+    /// Defense in depth (#222): submitSession pins the proof's public IO to its
+    /// canonical form. z0[3] must start at this deployment's settlement domain,
+    /// where settleAuction's recompute begins, or it is rejected up front.
+    function test_submitSession_wrongZ0SettlementDomain_reverts() public {
         HyperNovaDeciderVerifier ivcVerifier = new HyperNovaDeciderVerifier();
         pool.setIvcVerifier(address(ivcVerifier));
 
@@ -1073,7 +1073,7 @@ contract DarkPoolTest is Test {
         uint256[5] memory zN = [uint256(999), uint256(60), TEST_POLICY_HASH, uint256(123), uint256(0)];
 
         vm.prank(operator);
-        vm.expectRevert("z0 settlement acc not zero");
+        vm.expectRevert("z0 settlement domain");
         pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
     }
 
@@ -1513,20 +1513,24 @@ contract DarkPoolTest is Test {
 
     function _settlementAcc(address bidTrader, address askTrader, uint256 price, uint256 size)
         internal
-        pure
+        view
         returns (uint256)
     {
         return PoseidonBN254.poseidon5(
-            0, uint256(uint160(bidTrader)), uint256(uint160(askTrader)), price / 1e10, size / 1e10
+            pool.settlementDomain(),
+            uint256(uint160(bidTrader)),
+            uint256(uint160(askTrader)),
+            price / 1e10,
+            size / 1e10
         );
     }
 
     function _ivcStates(uint256 settlementAcc)
         internal
-        pure
+        view
         returns (uint256[5] memory z0, uint256[5] memory zN)
     {
-        z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, uint256(0), uint256(0)];
+        z0 = [uint256(0), uint256(0), TEST_POLICY_HASH, pool.settlementDomain(), uint256(0)];
         zN = [uint256(999), uint256(60), TEST_POLICY_HASH, settlementAcc, uint256(0)];
     }
 

@@ -79,7 +79,7 @@ contract SettleAuctionGasTest is Test {
 
         IDarkPool.Match[] memory matches = new IDarkPool.Match[](n);
         (uint256[3][65] memory ark, uint256[3][3] memory mds) = PoseidonBN254.loadConstants();
-        uint256 acc = 0;
+        uint256 acc = pool.settlementDomain();
         for (uint256 i = 0; i < n; i++) {
             address bid = _bidTrader(i);
             address ask = _askTrader(i);
@@ -103,7 +103,7 @@ contract SettleAuctionGasTest is Test {
         }
 
         bytes32 sessionId = bytes32(uint256(0x5e55));
-        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), uint256(0), uint256(0)];
+        uint256[5] memory z0 = [uint256(0), uint256(0), uint256(123), pool.settlementDomain(), uint256(0)];
         uint256[5] memory zN = [uint256(999), uint256(60), uint256(123), acc, uint256(0)];
         vm.prank(operator);
         pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(uint256(123)));
