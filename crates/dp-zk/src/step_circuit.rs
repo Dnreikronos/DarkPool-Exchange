@@ -1252,6 +1252,50 @@ mod tests {
         );
     }
 
+    /// Scope boundary for #223: a uniform price only has to cross each
+    /// supplied pair. The circuit does not recompute the admitted book's
+    /// volume-maximising price; it accepts any uniform clearing price inside
+    /// each matched pair's limit interval.
+    #[test]
+    fn step_accepts_uniform_crossing_price_without_argmax_proof() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(96), Decimal::from(96));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "uniform crossing price is accepted without an in-circuit auction argmax proof"
+        );
+    }
+
+    /// Scope boundary for #223: the admitted set can contain unmatched orders.
+    /// Membership proves every settled leg came from the admitted set, but it
+    /// does not prove completeness, no-censorship, or price-time priority.
+    #[test]
+    fn step_accepts_unmatched_admitted_orders_without_priority_proof() {
+        let (w, prices, sizes) = sample_witness();
+        let base = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let mut admitted: Vec<Fr> = base
+            .matches
+            .iter()
+            .filter(|m| m.is_active == Fr::one())
+            .flat_map(|m| [leaf_of(m, true), leaf_of(m, false)])
+            .collect();
+        admitted.extend([Fr::from(17u64), Fr::from(18u64), Fr::from(19u64)]);
+
+        let ext =
+            AuctionExternalInputs::from_witness_with_admitted(&w, &prices, &sizes, 2, &admitted)
+                .unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "extra admitted-but-unmatched orders are outside the circuit's fairness constraints"
+        );
+    }
+
     // ── Input-completeness membership (#157) ─────────────────────────────────
 
     #[test]
