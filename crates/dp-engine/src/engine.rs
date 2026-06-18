@@ -6,10 +6,11 @@ use chrono::Utc;
 use dp_aggregator::{NoopAggregator, ProofAggregator};
 use dp_crypto::{Decrypter, NoopDecrypter, SnapshotCipher};
 use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
-use dp_settlement::{NoopSubmitter, Submitter};
+use dp_settlement::{BalanceOracle, InsecureDevOracle, NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
 use dp_types::{DarkPoolError, EventType, Order, Side};
 use parking_lot::{Mutex, RwLock};
+#[cfg(test)]
 use rand::RngCore;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::EngineError;
+use crate::order_proof::OrderProofVerifier;
 use crate::state::{AuctionExecutedRecord, EngineState};
 use crate::subscribe::AuctionNotification;
 use crate::{DEFAULT_AUCTION_INTERVAL, DEFAULT_SUBSCRIBER_CAPACITY};
@@ -37,6 +39,7 @@ pub(crate) struct OrderSecrets {
     pub salt: [u8; 32],
     pub trader_id: [u8; 32],
     pub commitment: [u8; 32],
+    pub nullifier: [u8; 32],
     pub balance: Decimal,
     pub position: i128,
 }
@@ -47,35 +50,7 @@ impl Drop for OrderSecrets {
         self.salt.zeroize();
         self.trader_id.zeroize();
         self.commitment.zeroize();
-    }
-}
-
-/// Looks up balance/position for a trader. Default impl trusts the caller
-/// — pending escrow oracle integration.
-///
-/// **Per-leg asset semantics (#170).** The solvency constraint checks each
-/// leg's balance in the asset that leg *spends*: a bid (buyer) is checked
-/// against `notional` in the quote asset, an ask (seller) against `size` in
-/// the base asset — mirroring the on-chain `_settleMatch` debits. The real
-/// oracle must therefore return the balance in the right asset for the
-/// order's side: quote for a bid, base for an ask. The lookup is keyed only
-/// by `trader_id` today because the stub is asset-blind; the escrow-backed
-/// oracle wiring (the #165/#153-overlapping follow-up) must thread the side
-/// or per-asset escrow through so the witnessed `balance` matches the leg.
-pub trait BalanceOracle: Send + Sync {
-    fn lookup(&self, trader_id: &[u8; 32]) -> (Decimal, i128);
-}
-
-/// Returns a hard-coded 1B balance / 0 position for any trader. Solvency
-/// constraints (family 7) pass trivially under this oracle. NOT FOR
-/// PRODUCTION — `Engine::new` installs it as a placeholder and emits a
-/// startup warning; wire a real oracle via [`Engine::set_balance_oracle`]
-/// before serving traffic.
-pub struct InsecureDevOracle;
-
-impl BalanceOracle for InsecureDevOracle {
-    fn lookup(&self, _trader_id: &[u8; 32]) -> (Decimal, i128) {
-        (Decimal::from(1_000_000_000u64), 0)
+        self.nullifier.zeroize();
     }
 }
 
@@ -94,10 +69,10 @@ pub(crate) struct Inner {
     pub(crate) aggregator: RwLock<Arc<dyn ProofAggregator>>,
     pub(crate) submitter: RwLock<Arc<dyn Submitter>>,
     pub(crate) oracle: RwLock<Arc<dyn BalanceOracle>>,
+    pub(crate) order_proof_verifier: RwLock<Option<Arc<dyn OrderProofVerifier>>>,
     pub(crate) secrets: Mutex<HashMap<Uuid, OrderSecrets>>,
     pub(crate) subscribers: broadcast::Sender<AuctionNotification>,
     pub(crate) auction_interval: Duration,
-    pub(crate) salt_nonce: [u8; 32],
     pub(crate) batch_size: usize,
     /// Persistent home for periodic state snapshots. `None` disables
     /// the snapshot pipeline — recover then always falls back to full
@@ -129,8 +104,6 @@ impl Engine {
             auction_interval
         };
         let (tx, _rx) = broadcast::channel(DEFAULT_SUBSCRIBER_CAPACITY);
-        let mut salt_nonce = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut salt_nonce);
         let engine = Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(EngineState::new()),
@@ -139,10 +112,10 @@ impl Engine {
                 aggregator: RwLock::new(Arc::new(NoopAggregator)),
                 submitter: RwLock::new(Arc::new(NoopSubmitter)),
                 oracle: RwLock::new(Arc::new(InsecureDevOracle)),
+                order_proof_verifier: RwLock::new(None),
                 secrets: Mutex::new(HashMap::new()),
                 subscribers: tx,
                 auction_interval: interval,
-                salt_nonce,
                 batch_size: 8,
                 snapshot_store: RwLock::new(None),
                 snapshot_cipher: RwLock::new(None),
@@ -163,6 +136,14 @@ impl Engine {
 
     pub fn set_balance_oracle(&self, o: Arc<dyn BalanceOracle>) {
         *self.inner.oracle.write() = o;
+    }
+
+    pub fn set_order_proof_verifier(&self, v: Arc<dyn OrderProofVerifier>) {
+        *self.inner.order_proof_verifier.write() = Some(v);
+    }
+
+    pub fn clear_order_proof_verifier(&self) {
+        *self.inner.order_proof_verifier.write() = None;
     }
 
     pub fn set_decrypter(&self, d: Arc<dyn Decrypter>) {
@@ -343,6 +324,8 @@ impl Engine {
                 min_order_size: config.min_order_size,
                 tick_size: config.tick_size,
                 auction_interval_ms: config.auction_interval.map(|d| d.as_millis() as u64),
+                base_decimals: config.base_decimals,
+                quote_decimals: config.quote_decimals,
             },
         }];
 
@@ -490,32 +473,21 @@ impl Engine {
 
     /// Decrypt, validate, and book an order.
     ///
-    /// ## What is and isn't cryptographically enforced (issue #158)
+    /// ## What is cryptographically enforced (#217)
     ///
-    /// Order validity here is **operator-enforced, not proof-enforced**. The
-    /// operator decrypts the ciphertext and re-derives the canonical Poseidon
-    /// commitment over the decrypted fields (`derive_order_secrets` below);
-    /// that re-derived value — never the client's — is what gets persisted and
-    /// carried into the settlement-grade batch IVC proof.
-    ///
-    /// The per-order `proof` argument is **accepted and not verified**. It is a
-    /// placeholder (`dp-client::PLACEHOLDER_PROOF`) on the live path; we record
-    /// only its byte length for observability. A genuinely verified per-order
-    /// proof is deferred to ADR 0001 / issues #97–#98: it needs either richer
-    /// circuit public inputs (so the engine can bind the proof to the decrypted
-    /// fields) or a client-reproducible commitment, plus a one-time trusted
-    /// setup ceremony to pin a canonical VK. The sound keygen/verify primitives
-    /// for that work already exist (`dp_zk::commitment_circuit::generate_keys`
-    /// / `verify_proof_with_vk`, `dp-zk-cli setup-commitment-circuit`); the
-    /// missing piece is the binding, which the post-#153 server-derived salt
-    /// makes incompatible with the current single-public-input circuit.
+    /// The operator decrypts the ciphertext and re-derives the canonical
+    /// Poseidon commitment plus nullifier from the decrypted fields and
+    /// client-chosen salt. When a canonical order-proof verifier is installed
+    /// (the production server requires one at boot), the supplied Groth16 proof
+    /// must verify against those engine-derived public inputs. The nullifier is
+    /// also checked under the same lock that appends `OrderPlaced`, so a proof
+    /// replay cannot race two admissions through the book.
     #[tracing::instrument(
         name = "dp_engine.place_encrypted_order",
         skip(self, _client_commitment, _unverified_proof, ciphertext, caller),
         fields(
             ciphertext_bytes = ciphertext.len(),
-            // Byte length only — the proof is NOT verified (see doc comment).
-            unverified_proof_bytes = _unverified_proof.len(),
+            order_proof_bytes = _unverified_proof.len(),
         )
     )]
     pub async fn place_encrypted_order(
@@ -525,6 +497,22 @@ impl Engine {
         ciphertext: Vec<u8>,
         caller: Option<alloy_primitives::Address>,
     ) -> Result<Order, EngineError> {
+        // Cheap replay shed (#233): a byte-identical ciphertext is a replay of a
+        // captured submission (ECIES is randomized), so reject it before the
+        // ECIES decrypt + commitment derivation every admitted order pays. This
+        // is advisory — the race-free, durable check is the same-lock test in
+        // `persist_order_placed`; this only avoids spending crypto on a
+        // ciphertext already known to be spent.
+        if self
+            .inner
+            .state
+            .lock()
+            .seen_ciphertexts
+            .contains(&ciphertext_digest(&ciphertext))
+        {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
+
         let decrypter = self.inner.decrypter.read().clone();
         let decrypted = decrypter
             .decrypt(&ciphertext)
@@ -542,11 +530,10 @@ impl Engine {
             }
         }
 
-        // Neither the client-supplied commitment nor the per-order `proof` is
-        // verified content-wise (issue #158): the commitment is recomputed
-        // from decrypted fields below, and the proof is operator-enforced by
-        // that same re-derivation — see this method's doc comment. The fields
-        // below are the actual validity gate.
+        // Plaintext validity is checked before proof verification so malformed
+        // orders fail with precise validation errors. The proof, when a
+        // verifier is installed, is checked after the engine derives the exact
+        // commitment/nullifier public inputs from these fields.
         if decrypted.pair.is_empty() {
             return Err(EngineError::Validation(DarkPoolError::PairRequired));
         }
@@ -570,8 +557,9 @@ impl Engine {
         // Pair-registry defense-in-depth. The API layer cannot inspect the
         // encrypted PlaceOrder payload, so the engine is the only point at
         // which an unknown/suspended pair, sub-minimum size, or off-tick
-        // price can be rejected.
-        {
+        // price can be rejected. The same lock-scoped lookup resolves the asset
+        // this leg spends for the solvency witness (#170/#213).
+        let (spend_token, spend_decimals) = {
             let state = self.inner.state.lock();
             let cfg = state.pair_config(&pair_key).ok_or_else(|| {
                 EngineError::Validation(DarkPoolError::PairNotRegistered(pair_key.clone()))
@@ -603,7 +591,14 @@ impl Engine {
                     ));
                 }
             }
-        }
+            // A bid (buyer) pays the quote token; an ask (seller) delivers the
+            // base token. The solvency oracle reads `reserved` for exactly this
+            // asset, so the witnessed balance matches the leg (#170).
+            match decrypted.side {
+                Side::Buy => (cfg.quote_token, cfg.quote_decimals),
+                Side::Sell => (cfg.base_token, cfg.base_decimals),
+            }
+        };
 
         let default_ttl = self.inner.state.lock().default_ttl;
         let ttl = if decrypted.ttl > 0 {
@@ -633,22 +628,42 @@ impl Engine {
             seq: 0,
         };
 
-        // Capture ZK witness secrets in-memory only. Salt is derived
-        // deterministically from commitment_key + order_id; trader_id is
-        // derived from commitment_key. This avoids persisting plaintext
-        // and survives the privacy canary test.
-        let nonce = &self.inner.salt_nonce;
+        // Capture ZK witness secrets in-memory only. The salt is the
+        // client-chosen blinding value carried inside the ciphertext (#217), so
+        // the engine re-derives exactly the commitment the client proved
+        // against — rather than minting a server-side salt the client cannot
+        // know (#153). `trader_id` stays bound to the verified on-chain address.
+        let salt = parse_order_salt(&decrypted.salt)?;
+        // Read the trader's settlement-locked balance for the asset this leg
+        // spends from the installed BalanceOracle (#213). Clone the Arc out so
+        // the parking_lot read guard is not held across the await; a real
+        // (chain-backed) oracle does an RPC here and fails the placement closed
+        // if the read errors rather than fabricating a balance.
+        let oracle = self.inner.oracle.read().clone();
+        let (balance, position) = oracle
+            .lookup(order.trader, spend_token, spend_decimals)
+            .await
+            .map_err(EngineError::BalanceLookup)?;
         let secrets = derive_order_secrets(
-            order.id,
             order.trader.as_slice(),
-            &order.commitment_key,
             order.side as u8,
             order.price,
             order.size,
-            self.inner.oracle.read().as_ref(),
-            nonce,
+            balance,
+            position,
+            salt,
         )?;
+        if let Some(verifier) = self.inner.order_proof_verifier.read().clone() {
+            let publics = dp_zk::commitment_circuit::OrderProofPublics {
+                commitment: dp_zk::pedersen::bytes_to_scalar(&secrets.commitment),
+                nullifier: dp_zk::pedersen::bytes_to_scalar(&secrets.nullifier),
+            };
+            verifier
+                .verify(&_unverified_proof, &publics)
+                .map_err(|_| EngineError::Validation(DarkPoolError::InvalidOrderProof))?;
+        }
         let commitment = secrets.commitment.to_vec();
+        let nullifier = secrets.nullifier;
         self.inner.secrets.lock().insert(order.id, secrets);
 
         // Stamp the returned order with the same seq the book copy got, so a
@@ -660,10 +675,9 @@ impl Engine {
         match self.persist_order_placed(
             order.clone(),
             commitment,
-            // Persisted verbatim for the audit log / replay; still unverified.
             _unverified_proof,
             ciphertext,
-            nonce.to_vec(),
+            nullifier,
         ) {
             Ok(seq) => order.seq = seq,
             Err(e) => {
@@ -764,8 +778,11 @@ impl Engine {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        salt_nonce: Vec<u8>,
+        nullifier: [u8; 32],
     ) -> Result<u64, EngineError> {
+        // Hash the ciphertext now, before it is moved into the event below;
+        // this is the replay/spent-set key (#233).
+        let digest = ciphertext_digest(&ciphertext);
         let mut events = [Event {
             seq: 0,
             event_type: EventType::OrderPlaced,
@@ -775,11 +792,10 @@ impl Engine {
                 commitment,
                 proof,
                 ciphertext,
-                salt_nonce,
             },
         }];
 
-        let state = self.inner.state.lock();
+        let mut state = self.inner.state.lock();
         // Re-validate the pair status under the *same* lock that does the
         // append + insert. The status check in `place_encrypted_order` runs
         // in an earlier, separately-acquired lock scope; between dropping
@@ -803,6 +819,14 @@ impl Engine {
                 )));
             }
         }
+        // Reject a replayed ciphertext (#233), under the same lock that appends
+        // and inserts so two concurrent identical submissions can't both pass.
+        if state.seen_ciphertexts.contains(&digest) {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
+        if state.spent_nullifiers.contains(&nullifier) {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
         // The store stamped the monotonic seq onto the event during append;
@@ -816,6 +840,10 @@ impl Engine {
             Side::Sell => "sell",
         };
         state.book.insert_order(order);
+        // Record the digest only after the event is durably appended, so the
+        // live spent-set and a replay rebuilt from the log stay in lockstep.
+        state.seen_ciphertexts.insert(digest);
+        state.spent_nullifiers.insert(nullifier);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(assigned_seq)
     }
@@ -919,8 +947,9 @@ fn leg_witness_from(
         trader_id: hex::encode(secret.trader_id),
         salt: hex::encode(secret.salt),
         // Circuit checks this in the asset the leg spends: quote for a bid,
-        // base for an ask (#170). The stub oracle is asset-blind; see
-        // `BalanceOracle` for the per-asset wiring the real oracle owes.
+        // base for an ask (#170). `place_encrypted_order` already read the
+        // BalanceOracle for that exact asset (#213), so `secret.balance` is
+        // denominated to match the leg.
         balance: secret.balance,
         position: secret.position.to_string(),
         limit_price: order.price,
@@ -934,67 +963,87 @@ fn leg_witness_from(
 
 /// Derive per-order ZK secrets.
 ///
-/// **Salt threat model.** `salt = SHA256("salt" || nonce || commitment_key
-/// || order_id)` is deterministic given the inputs, but the per-boot
-/// `nonce` (32 bytes from OsRng, stored only in `Inner`) prevents any
-/// party — including the client who knows both `commitment_key` and
-/// `order_id` — from reconstructing the salt. The nonce is persisted
-/// alongside each `OrderPlaced` event so recovery can recompute the
-/// commitment.
+/// **Salt source (#217).** The `salt` is the client-chosen blinding value
+/// carried inside the ciphertext, decoded by [`parse_order_salt`]. The client
+/// commits and proves the order against it, so the engine re-derives the
+/// identical commitment here — that is what makes the per-order proof
+/// verifiable at ingestion. `trader_id` stays bound to the verified on-chain
+/// address (#153), not the client-chosen `commitment_key`, so a client cannot
+/// forge another trader's identity by choosing the salt.
 // Internal helper threading the full secret-derivation inputs; the argument
 // list is intentionally flat rather than a one-off params struct.
 #[allow(clippy::too_many_arguments)]
 fn derive_order_secrets(
-    order_id: Uuid,
     trader_addr: &[u8],
-    commitment_key: &str,
     side: u8,
     price: Decimal,
     size: Decimal,
-    oracle: &dyn BalanceOracle,
-    nonce: &[u8; 32],
+    balance: Decimal,
+    position: i128,
+    salt: [u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
-    // Identity is bound to the verified on-chain address, not the client-
-    // chosen commitment_key (#153). The commitment_key is retained below only
-    // as blinding entropy for the salt.
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
-    let salt = derive_salt(commitment_key, order_id, nonce);
-    let commitment = compute_poseidon_commitment(&trader_id, side, price, size, &salt)?;
+    let commitment_fr = compute_poseidon_commitment_fr(&trader_id, side, price, size, &salt)?;
+    let nullifier_fr = dp_zk::commitment_circuit::compute_nullifier_native(
+        commitment_fr,
+        dp_zk::pedersen::bytes_to_scalar(&salt),
+    );
 
-    let (balance, position) = oracle.lookup(&trader_id);
+    // `balance`/`position` are read from the installed BalanceOracle by the
+    // caller (#213) — in the asset this leg spends (#170) — and threaded in
+    // here so this helper stays pure and synchronous.
     Ok(OrderSecrets {
         salt,
         trader_id,
-        commitment,
+        commitment: dp_zk::fr_to_bytes32(commitment_fr),
+        nullifier: dp_zk::fr_to_bytes32(nullifier_fr),
         balance,
         position,
     })
 }
 
-/// Recompute the persisted Poseidon commitment for a (commitment_key,
-/// order_id, side, price, size) tuple. Used by recovery to re-verify
-/// `OrderPlaced` events without keeping any state in memory.
+/// Recompute the persisted Poseidon commitment for a (trader_addr, side, price,
+/// size, salt) tuple. Used by recovery to re-verify `OrderPlaced` events
+/// without keeping any state in memory. The `salt` is the client's, read back
+/// from the decrypted ciphertext (#217).
 pub(crate) fn recompute_persisted_commitment(
-    order_id: Uuid,
     trader_addr: &[u8],
-    commitment_key: &str,
     side: u8,
     price: Decimal,
     size: Decimal,
-    nonce: &[u8; 32],
+    salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
     let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
-    let salt = derive_salt(commitment_key, order_id, nonce);
-    compute_poseidon_commitment(&trader_id, side, price, size, &salt)
+    compute_poseidon_commitment(&trader_id, side, price, size, salt)
 }
 
-fn derive_salt(commitment_key: &str, order_id: Uuid, nonce: &[u8; 32]) -> [u8; 32] {
+/// SHA-256 of an order's ciphertext — the key for the replay spent-set (#233).
+/// ECIES is randomized, so a byte-identical ciphertext is a replay of a captured
+/// submission, not a fresh order. The live `persist_order_placed` path and the
+/// recovery replay path MUST hash identically, so both call this one helper.
+pub(crate) fn ciphertext_digest(ciphertext: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
-    h.update(b"salt");
-    h.update(nonce);
-    h.update(commitment_key.as_bytes());
-    h.update(order_id.as_bytes());
+    h.update(ciphertext);
     h.finalize().into()
+}
+
+/// Decode the client's `salt` (lowercase hex inside the ciphertext, #217) into
+/// the 32 raw bytes the commitment and nullifier are derived from. A malformed
+/// salt is a malformed order, surfaced to the client as `SaltInvalid` rather
+/// than an internal fault.
+pub(crate) fn parse_order_salt(salt_hex: &str) -> Result<[u8; 32], EngineError> {
+    if salt_hex.len() != 64
+        || !salt_hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(EngineError::Validation(DarkPoolError::SaltInvalid));
+    }
+    let bytes =
+        hex::decode(salt_hex).map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
+    bytes
+        .try_into()
+        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))
 }
 
 /// Compute the Poseidon order commitment (matches the in-circuit gadget
@@ -1010,17 +1059,23 @@ pub(crate) fn compute_poseidon_commitment(
     size: Decimal,
     salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
-    use ark_ff::{BigInteger, PrimeField};
+    Ok(dp_zk::fr_to_bytes32(compute_poseidon_commitment_fr(
+        trader_id, side, price, size, salt,
+    )?))
+}
+
+fn compute_poseidon_commitment_fr(
+    trader_id: &[u8; 32],
+    side: u8,
+    price: Decimal,
+    size: Decimal,
+    salt: &[u8; 32],
+) -> Result<ark_bn254::Fr, EngineError> {
     let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
     let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
     let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
         .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
-    let fr = dp_zk::commit_native(&input);
-    let bytes = fr.into_bigint().to_bytes_be();
-    let mut out = [0u8; 32];
-    let take = bytes.len().min(32);
-    out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
-    Ok(out)
+    Ok(dp_zk::commit_native(&input))
 }
 
 pub(crate) fn record_to_notification(rec: &AuctionExecutedRecord) -> AuctionNotification {
@@ -1058,6 +1113,10 @@ pub(crate) fn build_decrypted_ciphertext(
     commitment_key: &str,
     ttl: Duration,
 ) -> (Vec<u8>, Vec<u8>) {
+    // Random per call so two otherwise-identical orders still get distinct
+    // commitments (the live client picks a fresh salt per order, #217).
+    let mut salt = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
     let d = dp_crypto::DecryptedOrder {
         trader,
         pair: pair.to_string(),
@@ -1065,6 +1124,7 @@ pub(crate) fn build_decrypted_ciphertext(
         price,
         size,
         commitment_key: commitment_key.to_string(),
+        salt: hex::encode(salt),
         ttl: ttl.as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();

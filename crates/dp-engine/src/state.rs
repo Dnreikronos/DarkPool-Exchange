@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use alloy_primitives::{Address, U256};
@@ -64,10 +64,27 @@ impl PairStatus {
     }
 }
 
+/// ERC20 default decimals, used when a [`PairConfig`] (or a replayed
+/// `PairRegistered` event) predates the per-token decimals fields (#211).
+fn default_token_decimals() -> u8 {
+    18
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairConfig {
     pub base_token: Address,
     pub quote_token: Address,
+    /// On-chain ERC20 `decimals()` of each token. Settlement does NOT read
+    /// these: the contract derives token-raw amounts from the canonical
+    /// `decimal * 1e18` wire via a live `decimals()` call (#211). They are
+    /// captured and replayed today so a later patch (the #153 balance oracle,
+    /// order validation, UI display) can honour per-token precision without a
+    /// schema change. Default 18 — the ERC20 default — for configs predating
+    /// the field.
+    #[serde(default = "default_token_decimals")]
+    pub base_decimals: u8,
+    #[serde(default = "default_token_decimals")]
+    pub quote_decimals: u8,
     pub min_order_size: Decimal,
     pub tick_size: Decimal,
     /// Reserved for future per-pair tick cadence overrides. The auction
@@ -87,6 +104,8 @@ impl PairConfig {
         Self {
             base_token,
             quote_token,
+            base_decimals: default_token_decimals(),
+            quote_decimals: default_token_decimals(),
             min_order_size: Decimal::ZERO,
             tick_size: Decimal::ZERO,
             auction_interval: None,
@@ -167,6 +186,15 @@ pub(crate) struct SerializableState {
     pub pair_tokens: HashMap<String, PairConfig>,
     pub auction_log: Vec<AuctionExecutedRecord>,
     pub pending_batches: HashMap<Uuid, PendingBatch>,
+    /// SHA-256 digests of every ciphertext ever admitted, for replay
+    /// rejection (#233). `serde(default)` so snapshots taken before this
+    /// field existed still decode; the post-snapshot event tail repopulates
+    /// any digests minted after that older snapshot.
+    #[serde(default)]
+    pub seen_ciphertexts: HashSet<[u8; 32]>,
+    /// Public nullifiers already admitted. A projection rebuilt from
+    /// `OrderPlaced` ciphertext salts and captured in v3+ snapshots.
+    pub spent_nullifiers: HashSet<[u8; 32]>,
 }
 
 pub(crate) struct EngineState {
@@ -178,6 +206,15 @@ pub(crate) struct EngineState {
     pub pair_tokens: HashMap<String, PairConfig>,
     pub auction_log: Vec<AuctionExecutedRecord>,
     pub pending_batches: HashMap<Uuid, PendingBatch>,
+    /// SHA-256 digests of every ciphertext admitted by `place_encrypted_order`,
+    /// keyed for replay rejection (#233). A projection rebuilt from the
+    /// `OrderPlaced` event stream (so it survives `reset_projection` clearing
+    /// and is captured in snapshots). Grows monotonically — replay protection
+    /// is permanent; expiry-based pruning waits on the per-order freshness
+    /// token (nonce + expiry) tracked in the rest of #233.
+    pub seen_ciphertexts: HashSet<[u8; 32]>,
+    /// Cryptographic per-order replay keys derived from `(commitment, salt)`.
+    pub spent_nullifiers: HashSet<[u8; 32]>,
     pub submit_timeout: Duration,
     pub min_backoff: Duration,
     pub max_backoff: Duration,
@@ -192,6 +229,8 @@ impl EngineState {
             pair_tokens: HashMap::new(),
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
+            seen_ciphertexts: HashSet::new(),
+            spent_nullifiers: HashSet::new(),
             submit_timeout: DEFAULT_SUBMIT_TIMEOUT,
             min_backoff: DEFAULT_MIN_BACKOFF,
             max_backoff: DEFAULT_MAX_BACKOFF,
@@ -205,6 +244,11 @@ impl EngineState {
         self.pair_tokens.clear();
         self.auction_log.clear();
         self.pending_batches.clear();
+        // `seen_ciphertexts` is a projection rebuilt from `OrderPlaced` events,
+        // so a projection reset must clear it too — recovery repopulates it as
+        // it replays the log (or restores it from a snapshot).
+        self.seen_ciphertexts.clear();
+        self.spent_nullifiers.clear();
     }
 
     pub fn pair_config(&self, pair: &str) -> Option<&PairConfig> {
@@ -221,6 +265,8 @@ impl EngineState {
             pair_tokens: self.pair_tokens.clone(),
             auction_log: self.auction_log.clone(),
             pending_batches: self.pending_batches.clone(),
+            seen_ciphertexts: self.seen_ciphertexts.clone(),
+            spent_nullifiers: self.spent_nullifiers.clone(),
         }
     }
 
@@ -232,6 +278,8 @@ impl EngineState {
         self.pair_tokens = snap.pair_tokens;
         self.auction_log = snap.auction_log;
         self.pending_batches = snap.pending_batches;
+        self.seen_ciphertexts = snap.seen_ciphertexts;
+        self.spent_nullifiers = snap.spent_nullifiers;
     }
 }
 

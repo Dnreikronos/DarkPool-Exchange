@@ -1,13 +1,18 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export function prove_order_wasm(witness_json: string): Uint8Array
+export function prove_order_wasm(witness_json: string, pk_bytes: Uint8Array): Uint8Array
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory
-  readonly prove_order_wasm: (a: number, b: number) => [number, number, number]
+  readonly prove_order_wasm: (
+    a: number,
+    b: number,
+    c: number,
+    d: number
+  ) => [number, number, number]
   readonly __wbindgen_exn_store: (a: number) => void
   readonly __externref_table_alloc: () => number
   readonly __wbindgen_externrefs: WebAssembly.Table

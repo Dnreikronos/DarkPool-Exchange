@@ -52,6 +52,7 @@ mod tests {
             price: Decimal::new(5000000, 2),
             size: Decimal::new(1, 0),
             commitment_key: "key1".into(),
+            salt: "33".repeat(32),
             ttl: 10_000_000_000,
         };
         let json = serde_json::to_vec(&order).unwrap();

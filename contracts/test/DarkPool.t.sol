@@ -66,6 +66,11 @@ contract DarkPoolTest is Test {
         // not on the allowlist are rejected by deposit().
         pool.setTokenAllowed(address(baseToken), true);
         pool.setTokenAllowed(address(quoteToken), true);
+
+        // Arm the IVC settlement path (#210) so the HyperNova session tests can
+        // exercise submitSession/settleAuction. It defaults off; the dedicated
+        // gate tests below disarm it (or use a fresh pool) to cover that.
+        pool.setIvcEnabled(true);
     }
 
     // --- Deposit ---
@@ -291,7 +296,7 @@ contract DarkPoolTest is Test {
         _fundAndSubmitBatch(batchId);
 
         vm.prank(operator);
-        vm.expectRevert("already settled");
+        vm.expectRevert("batch already settled");
         pool.submitBatch(batchId, bytes32(0), new bytes(256), _zeroInputs(), _singleMatch());
     }
 
@@ -360,14 +365,59 @@ contract DarkPoolTest is Test {
         });
 
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, matches);
 
-        assertTrue(pool.settled(batchId));
+        assertTrue(pool.settledBatch(batchId));
         assertEq(pool.balances(trader1, address(quoteToken)), 0);
         assertEq(pool.balances(trader1, address(baseToken)), size);
         assertEq(pool.balances(trader2, address(baseToken)), 0);
         assertEq(pool.balances(trader2, address(quoteToken)), notional - fee);
         assertEq(pool.balances(feeRecipient, address(quoteToken)), fee);
+    }
+
+    /// #211 regression: a 6-decimal quote token (USDC-like) must settle its
+    /// quote leg in 1e6 units, not 1e18. The operator submits canonical
+    /// `price`/`size` (decimal * 1e18, the #209 wire domain); `_settleMatch`
+    /// rescales the notional to the quote token's own decimals. Pre-fix the
+    /// contract computed `notional` 1e18-scaled (1000e18), underflowing the
+    /// 1000e6 the bid actually reserved and reverting the whole batch.
+    function test_submitBatch_settles6DecimalQuote() public {
+        MockERC20 usdc = new MockERC20("USDC", "USDC", 6);
+        pool.setTokenAllowed(address(usdc), true);
+
+        uint256 price = 100e18; // 100.0
+        uint256 size = 10e18; // 10.0
+        uint256 baseAmount = 10e18; // base raw (18 decimals)
+        uint256 notional = 1000e6; // 100 * 10, in 6-decimal USDC units
+        uint256 fee = notional * 5 / 10_000; // 5 bps = 5e5
+
+        _depositAndReserve(trader1, address(usdc), notional);
+        _depositAndReserve(trader2, address(baseToken), baseAmount);
+
+        uint256[6] memory inputs;
+        inputs[0] = 1;
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(1)),
+            askOrderId: bytes32(uint256(2)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(usdc),
+            price: price,
+            size: size
+        });
+
+        vm.prank(operator);
+        pool.submitBatch(bytes32(uint256(0x6d)), _auctionFor(bytes32(uint256(0x6d))), new bytes(256), inputs, matches);
+
+        assertTrue(pool.settledBatch(bytes32(uint256(0x6d))));
+        assertEq(pool.balances(trader1, address(usdc)), 0);
+        assertEq(pool.balances(trader1, address(baseToken)), baseAmount);
+        assertEq(pool.balances(trader2, address(baseToken)), 0);
+        assertEq(pool.balances(trader2, address(usdc)), notional - fee);
+        assertEq(pool.balances(feeRecipient, address(usdc)), fee);
     }
 
     function test_submitBatch_emitsEvent() public {
@@ -380,7 +430,7 @@ contract DarkPoolTest is Test {
         vm.prank(operator);
         vm.expectEmit(true, false, false, true);
         emit IDarkPool.BatchSettled(batchId, block.timestamp);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, _fundedMatch());
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, _fundedMatch());
     }
 
     // --- Fee math ---
@@ -410,7 +460,7 @@ contract DarkPoolTest is Test {
         });
 
         vm.prank(operator);
-        pool.submitBatch(bytes32(uint256(99)), bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(bytes32(uint256(99)), _auctionFor(bytes32(uint256(99))), new bytes(256), inputs, matches);
 
         assertEq(pool.balances(feeRecipient, address(quoteToken)), expectedFee);
         assertEq(expectedFee, 5e17);
@@ -783,7 +833,79 @@ contract DarkPoolTest is Test {
         // settleAuction with the proved match
         vm.prank(operator);
         pool.settleAuction(sessionId, auctionId, matches);
-        assertTrue(pool.settled(auctionId));
+        assertTrue(pool.settledAuction(auctionId));
+    }
+
+    /// #210: the IVC settlement path is disarmed on a freshly constructed pool,
+    /// so wiring the all-accepting stub decider cannot auto-settle escrow.
+    function test_ivc_disabledByDefault() public {
+        DarkPool fresh = new DarkPool(address(verifier), feeRecipient, initialPubkey);
+        assertFalse(fresh.ivcEnabled());
+    }
+
+    /// Only the owner can arm/disarm the IVC path, and doing so emits the event.
+    function test_setIvcEnabled_onlyOwner_and_emits() public {
+        DarkPool fresh = new DarkPool(address(verifier), feeRecipient, initialPubkey);
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xdead)));
+        fresh.setIvcEnabled(true);
+
+        vm.expectEmit(false, false, false, true);
+        emit DarkPool.IvcEnabledSet(true);
+        fresh.setIvcEnabled(true);
+        assertTrue(fresh.ivcEnabled());
+
+        fresh.setIvcEnabled(false);
+        assertFalse(fresh.ivcEnabled());
+    }
+
+    /// submitSession reverts while the IVC path is disarmed, even with a verifier
+    /// wired and a valid operator — the gate is independent of both.
+    function test_submitSession_revertsWhenIvcDisabled() public {
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        pool.setIvcEnabled(false);
+
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(0);
+        vm.prank(operator);
+        vm.expectRevert("ivc settlement disabled");
+        pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+    }
+
+    /// Disarming after a session is submitted also freezes settlement: the whole
+    /// IVC path, not just its entry point, is gated.
+    function test_settleAuction_revertsWhenIvcDisabled() public {
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        bytes32 sessionId = bytes32(uint256(1));
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+
+        // Owner disarms the path after submission; settlement must now revert.
+        pool.setIvcEnabled(false);
+
+        IDarkPool.Match[] memory matches = new IDarkPool.Match[](1);
+        matches[0] = IDarkPool.Match({
+            bidOrderId: bytes32(uint256(10)),
+            askOrderId: bytes32(uint256(11)),
+            bidTrader: trader1,
+            askTrader: trader2,
+            baseToken: address(baseToken),
+            quoteToken: address(quoteToken),
+            price: price,
+            size: size
+        });
+        vm.prank(operator);
+        vm.expectRevert("ivc settlement disabled");
+        pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
     }
 
     /// The #209 binding: the proof fixes zN[3] to the settlement chain over the
@@ -910,7 +1032,7 @@ contract DarkPoolTest is Test {
         // First settlement succeeds and marks the session settled.
         vm.prank(operator);
         pool.settleAuction(sessionId, bytes32(uint256(2)), matches);
-        assertTrue(pool.settled(bytes32(uint256(2))));
+        assertTrue(pool.settledAuction(bytes32(uint256(2))));
         assertTrue(pool.sessionSettled(sessionId));
 
         // Replaying the same proved matches under a fresh auctionId clears the
@@ -966,6 +1088,103 @@ contract DarkPoolTest is Test {
         vm.prank(operator);
         vm.expectRevert("policy hash mismatch");
         pool.submitSession(bytes32(uint256(1)), new bytes(64), z0, zN, 60, bytes32(uint256(999)));
+    }
+
+    // --- Cross-path double-settlement (#214) ---
+
+    /// The Groth16 and IVC arms share `settledAuction`, so a round settled via
+    /// submitBatch cannot be re-settled via settleAuction. The guard fires
+    /// before the binding or any _settleMatch, so the same proved matches
+    /// (which would otherwise pass the #209 binding) are still rejected.
+    function test_groth16ThenIvc_sameAuction_reverts() public {
+        bytes32 auctionId = bytes32(uint256(0xA));
+        bytes32 batchId = bytes32(uint256(0xB));
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        // Groth16 settles the economic round.
+        vm.prank(operator);
+        pool.submitBatch(batchId, auctionId, new bytes(256), _zeroInputs(), _fundedMatch());
+        assertTrue(pool.settledAuction(auctionId));
+
+        // IVC submits the SAME matches (binding would pass) and tries to settle
+        // the same auctionId — the shared guard, not the binding, must stop it.
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        bytes32 sessionId = bytes32(uint256(0xC));
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+
+        vm.prank(operator);
+        vm.expectRevert("auction already settled");
+        pool.settleAuction(sessionId, auctionId, _fundedMatch());
+    }
+
+    /// Mirror of the above: a round settled via the IVC arm cannot be
+    /// re-settled via submitBatch. settleAuction marks `settledAuction`, which
+    /// submitBatch checks before touching escrow.
+    function test_ivcThenGroth16_sameAuction_reverts() public {
+        bytes32 auctionId = bytes32(uint256(0xA));
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        bytes32 sessionId = bytes32(uint256(0xC));
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+        vm.prank(operator);
+        pool.settleAuction(sessionId, auctionId, _fundedMatch());
+        assertTrue(pool.settledAuction(auctionId));
+
+        vm.prank(operator);
+        vm.expectRevert("auction already settled");
+        pool.submitBatch(bytes32(uint256(0xB)), auctionId, new bytes(256), _zeroInputs(), _fundedMatch());
+    }
+
+    /// `batchId` and `auctionId` live in separate namespaces, so a Groth16 batch
+    /// settled under id K never blocks an unrelated IVC auction whose auctionId
+    /// equals K. Under the old shared `settled` map this coincidental collision
+    /// would have falsely reverted the second, legitimate settlement.
+    function test_namespaceSeparation_batchIdDoesNotBlockEqualAuctionId() public {
+        bytes32 sharedId = bytes32(uint256(0x7777));
+
+        uint256 price = 100e18;
+        uint256 size = 10e18;
+        uint256 notional = price * size / 1e18;
+
+        // Groth16 batch settled under batchId == sharedId, with a distinct
+        // auctionId so the round guards don't interfere.
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+        vm.prank(operator);
+        pool.submitBatch(sharedId, bytes32(uint256(0x1111)), new bytes(256), _zeroInputs(), _fundedMatch());
+        assertTrue(pool.settledBatch(sharedId));
+        assertFalse(pool.settledAuction(sharedId));
+
+        // A separate IVC auction whose auctionId == sharedId must still settle.
+        _depositAndReserve(trader1, address(quoteToken), notional);
+        _depositAndReserve(trader2, address(baseToken), size);
+        pool.setIvcVerifier(address(new HyperNovaDeciderVerifier()));
+        bytes32 sessionId = bytes32(uint256(0xC));
+        uint256 settlementAcc = _settlementAcc(trader1, trader2, price, size);
+        (uint256[5] memory z0, uint256[5] memory zN) = _ivcStates(settlementAcc);
+        vm.prank(operator);
+        pool.submitSession(sessionId, new bytes(64), z0, zN, 60, bytes32(TEST_POLICY_HASH));
+        vm.prank(operator);
+        pool.settleAuction(sessionId, sharedId, _fundedMatch());
+
+        assertTrue(pool.settledAuction(sharedId));
     }
 
     // --- Escrow reserve / unbonding (#165) ---
@@ -1106,9 +1325,9 @@ contract DarkPoolTest is Test {
 
         // Settlement succeeds despite the pending unbonds.
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, matches);
 
-        assertTrue(pool.settled(batchId));
+        assertTrue(pool.settledBatch(batchId));
         assertEq(pool.reserved(trader1, address(quoteToken)), 0);
         assertEq(pool.balances(trader1, address(baseToken)), size);
         assertEq(pool.reserved(trader2, address(baseToken)), 0);
@@ -1206,7 +1425,7 @@ contract DarkPoolTest is Test {
         pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, matches);
 
         // Atomicity: the valid first match did NOT partially settle.
-        assertFalse(pool.settled(batchId));
+        assertFalse(pool.settledBatch(batchId));
         assertEq(pool.reserved(trader1, address(quoteToken)), notional);
         assertEq(pool.balances(trader1, address(baseToken)), 0);
         assertEq(pool.reserved(trader2, address(baseToken)), size);
@@ -1246,7 +1465,7 @@ contract DarkPoolTest is Test {
         // Settlement consumes trader1's reserved quote; the pending request and
         // its timer must be cleared, not left dangling.
         vm.prank(operator);
-        pool.submitBatch(bytes32(uint256(11)), bytes32(0), new bytes(256), inputs, matches);
+        pool.submitBatch(bytes32(uint256(11)), _auctionFor(bytes32(uint256(11))), new bytes(256), inputs, matches);
         assertEq(pool.reserved(trader1, address(quoteToken)), 0);
         assertEq(pool.pendingUnreserve(trader1, address(quoteToken)), 0);
         assertEq(pool.unreserveReadyAt(trader1, address(quoteToken)), 0);
@@ -1345,6 +1564,15 @@ contract DarkPoolTest is Test {
         return matches;
     }
 
+    /// A batch-distinct throwaway auction id for submitBatch settling tests.
+    /// submitBatch records settledAuction[auctionId] (#214), so a settling batch
+    /// needs a real auction id; bytes32(0) reused across two settling batches in
+    /// one test would falsely collide. (Tests asserting a pre-settlement revert
+    /// still pass bytes32(0): they never reach the settledAuction write.)
+    function _auctionFor(bytes32 batchId) internal pure returns (bytes32) {
+        return bytes32(~uint256(batchId));
+    }
+
     function _setupBatchBalances() internal {
         uint256 notional = 100e18 * 10e18 / 1e18;
         _depositAndReserve(trader1, address(quoteToken), notional);
@@ -1358,6 +1586,6 @@ contract DarkPoolTest is Test {
         inputs[0] = 1;
 
         vm.prank(operator);
-        pool.submitBatch(batchId, bytes32(0), new bytes(256), inputs, _fundedMatch());
+        pool.submitBatch(batchId, _auctionFor(batchId), new bytes(256), inputs, _fundedMatch());
     }
 }

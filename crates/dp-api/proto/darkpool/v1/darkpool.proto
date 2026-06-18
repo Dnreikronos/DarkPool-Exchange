@@ -91,20 +91,13 @@ service DarkPoolAdminService {
 // PlaceOrderRequest carries only the encrypt-only trio. The engine never
 // sees plaintext on the wire; the operator decrypts server-side.
 //
-// NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
-// verified today. The engine ignores the client commitment and re-derives
-// the canonical Poseidon commitment over the decrypted fields; the proof is
-// accepted unverified. Order validity is operator-enforced, not
-// proof-enforced. A verified per-order proof is deferred to ADR 0001 /
-// issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
-//
-// Both fields are still SYNTACTICALLY required: `validate_place_order`
-// rejects an empty `commitment` or `proof`. Until real verification lands,
-// clients must keep sending non-empty bytes for both (placeholder bytes are
-// fine — they are not checked, only their presence is).
+// The API only performs syntactic checks on `commitment` and `proof`; the
+// engine decrypts the payload, re-derives the canonical Poseidon commitment
+// and nullifier from plaintext fields, and verifies the proof against those
+// engine-derived public inputs when the operator has pinned a canonical VK.
 message PlaceOrderRequest {
-  bytes commitment        = 1; // client commitment; re-derived & overridden server-side (unverified)
-  bytes proof             = 2; // per-order ZK proof; ACCEPTED UNVERIFIED (see note)
+  bytes commitment        = 1; // client commitment; engine re-derives canonical value
+  bytes proof             = 2; // per-order Groth16 proof for commitment/nullifier
   bytes encrypted_payload = 3; // opaque ciphertext to operator pubkey
 }
 
@@ -213,6 +206,10 @@ message PairInfo {
   string tick_size = 5;
   optional uint32 auction_interval_ms = 6;
   PairStatus status = 7;
+  // On-chain ERC20 decimals of each token (#211). Defaults to 18 when a
+  // registration omitted them.
+  optional uint32 base_decimals = 8;
+  optional uint32 quote_decimals = 9;
 }
 
 message ListPairsRequest {}
@@ -234,6 +231,9 @@ message RegisterPairRequest {
   string min_order_size = 4;
   string tick_size = 5;
   optional uint32 auction_interval_ms = 6;
+  // On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+  optional uint32 base_decimals = 7;
+  optional uint32 quote_decimals = 8;
 }
 
 message RegisterPairResponse {

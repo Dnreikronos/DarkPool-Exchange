@@ -11,36 +11,29 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file darkpool/v1/darkpool.proto.
  */
 export const file_darkpool_v1_darkpool: GenFile = /*@__PURE__*/
-  fileDesc("ChpkYXJrcG9vbC92MS9kYXJrcG9vbC5wcm90bxILZGFya3Bvb2wudjEiUQoRUGxhY2VPcmRlclJlcXVlc3QSEgoKY29tbWl0bWVudBgBIAEoDBINCgVwcm9vZhgCIAEoDBIZChFlbmNyeXB0ZWRfcGF5bG9hZBgDIAEoDCI7ChJQbGFjZU9yZGVyUmVzcG9uc2USJQoFb3JkZXIYASABKAsyFi5kYXJrcG9vbC52MS5PcmRlckluZm8iNgoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhAKCG9yZGVyX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSIVChNDYW5jZWxPcmRlclJlc3BvbnNlIiMKD0dldE9yZGVyUmVxdWVzdBIQCghvcmRlcl9pZBgBIAEoCSI5ChBHZXRPcmRlclJlc3BvbnNlEiUKBW9yZGVyGAEgASgLMhYuZGFya3Bvb2wudjEuT3JkZXJJbmZvIiEKEUxpc3RPcmRlcnNSZXF1ZXN0EgwKBHBhaXIYASABKAkiPAoSTGlzdE9yZGVyc1Jlc3BvbnNlEiYKBm9yZGVycxgBIAMoCzIWLmRhcmtwb29sLnYxLk9yZGVySW5mbyI3ChhHZXRBdWN0aW9uSGlzdG9yeVJlcXVlc3QSDAoEcGFpchgBIAEoCRINCgVsaW1pdBgCIAEoBSJKChlHZXRBdWN0aW9uSGlzdG9yeVJlc3BvbnNlEi0KCGF1Y3Rpb25zGAEgAygLMhsuZGFya3Bvb2wudjEuQXVjdGlvblN1bW1hcnkijwEKDkF1Y3Rpb25TdW1tYXJ5EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyIlChVTdHJlYW1BdWN0aW9uc1JlcXVlc3QSDAoEcGFpchgBIAEoCSKNAQoMQXVjdGlvbkV2ZW50EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyLHAQoJT3JkZXJJbmZvEgoKAmlkGAEgASgJEgwKBHBhaXIYAiABKAkSHwoEc2lkZRgDIAEoDjIRLmRhcmtwb29sLnYxLlNpZGUSDQoFcHJpY2UYBCABKAkSDAoEc2l6ZRgFIAEoCRIWCg5yZW1haW5pbmdfc2l6ZRgGIAEoCRIWCg5jb21taXRtZW50X2tleRgHIAEoCRIZChFzdWJtaXR0ZWRfYXRfdW5peBgIIAEoAxIXCg9leHBpcmVzX2F0X3VuaXgYCSABKAMizwEKCFBhaXJJbmZvEgwKBHBhaXIYASABKAkSEgoKYmFzZV90b2tlbhgCIAEoCRITCgtxdW90ZV90b2tlbhgDIAEoCRIWCg5taW5fb3JkZXJfc2l6ZRgEIAEoCRIRCgl0aWNrX3NpemUYBSABKAkSIAoTYXVjdGlvbl9pbnRlcnZhbF9tcxgGIAEoDUgAiAEBEicKBnN0YXR1cxgHIAEoDjIXLmRhcmtwb29sLnYxLlBhaXJTdGF0dXNCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiEgoQTGlzdFBhaXJzUmVxdWVzdCI5ChFMaXN0UGFpcnNSZXNwb25zZRIkCgVwYWlycxgBIAMoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIhcKFUxpc3RQYWlyc0FkbWluUmVxdWVzdCI+ChZMaXN0UGFpcnNBZG1pblJlc3BvbnNlEiQKBXBhaXJzGAEgAygLMhUuZGFya3Bvb2wudjEuUGFpckluZm8isQEKE1JlZ2lzdGVyUGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCRISCgpiYXNlX3Rva2VuGAIgASgJEhMKC3F1b3RlX3Rva2VuGAMgASgJEhYKDm1pbl9vcmRlcl9zaXplGAQgASgJEhEKCXRpY2tfc2l6ZRgFIAEoCRIgChNhdWN0aW9uX2ludGVydmFsX21zGAYgASgNSACIAQFCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXMiOwoUUmVnaXN0ZXJQYWlyUmVzcG9uc2USIwoEcGFpchgBIAEoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIiIKElN1c3BlbmRQYWlyUmVxdWVzdBIMCgRwYWlyGAEgASgJIhUKE1N1c3BlbmRQYWlyUmVzcG9uc2UiIQoRRGVsaXN0UGFpclJlcXVlc3QSDAoEcGFpchgBIAEoCSIuChJEZWxpc3RQYWlyUmVzcG9uc2USGAoQY2FuY2VsbGVkX29yZGVycxgBIAEoDSo5CgRTaWRlEhQKEFNJREVfVU5TUEVDSUZJRUQQABIMCghTSURFX0JVWRABEg0KCVNJREVfU0VMTBACKnYKClBhaXJTdGF0dXMSGwoXUEFJUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIWChJQQUlSX1NUQVRVU19BQ1RJVkUQARIZChVQQUlSX1NUQVRVU19TVVNQRU5ERUQQAhIYChRQQUlSX1NUQVRVU19ERUxJU1RFRBADMuEFCg9EYXJrUG9vbFNlcnZpY2USZAoKUGxhY2VPcmRlchIeLmRhcmtwb29sLnYxLlBsYWNlT3JkZXJSZXF1ZXN0Gh8uZGFya3Bvb2wudjEuUGxhY2VPcmRlclJlc3BvbnNlIhWC0+STAg86ASoiCi92MS9vcmRlcnMSbwoLQ2FuY2VsT3JkZXISHy5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5kYXJrcG9vbC52MS5DYW5jZWxPcmRlclJlc3BvbnNlIh2C0+STAhcqFS92MS9vcmRlcnMve29yZGVyX2lkfRJmCghHZXRPcmRlchIcLmRhcmtwb29sLnYxLkdldE9yZGVyUmVxdWVzdBodLmRhcmtwb29sLnYxLkdldE9yZGVyUmVzcG9uc2UiHYLT5JMCFxIVL3YxL29yZGVycy97b3JkZXJfaWR9EmEKCkxpc3RPcmRlcnMSHi5kYXJrcG9vbC52MS5MaXN0T3JkZXJzUmVxdWVzdBofLmRhcmtwb29sLnYxLkxpc3RPcmRlcnNSZXNwb25zZSISgtPkkwIMEgovdjEvb3JkZXJzEngKEUdldEF1Y3Rpb25IaXN0b3J5EiUuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXF1ZXN0GiYuZGFya3Bvb2wudjEuR2V0QXVjdGlvbkhpc3RvcnlSZXNwb25zZSIUgtPkkwIOEgwvdjEvYXVjdGlvbnMSUwoOU3RyZWFtQXVjdGlvbnMSIi5kYXJrcG9vbC52MS5TdHJlYW1BdWN0aW9uc1JlcXVlc3QaGS5kYXJrcG9vbC52MS5BdWN0aW9uRXZlbnQiADABEl0KCUxpc3RQYWlycxIdLmRhcmtwb29sLnYxLkxpc3RQYWlyc1JlcXVlc3QaHi5kYXJrcG9vbC52MS5MaXN0UGFpcnNSZXNwb25zZSIRgtPkkwILEgkvdjEvcGFpcnMy5wMKFERhcmtQb29sQWRtaW5TZXJ2aWNlEm8KDFJlZ2lzdGVyUGFpchIgLmRhcmtwb29sLnYxLlJlZ2lzdGVyUGFpclJlcXVlc3QaIS5kYXJrcG9vbC52MS5SZWdpc3RlclBhaXJSZXNwb25zZSIagtPkkwIUOgEqIg8vdjEvYWRtaW4vcGFpcnMSewoLU3VzcGVuZFBhaXISHy5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlcXVlc3QaIC5kYXJrcG9vbC52MS5TdXNwZW5kUGFpclJlc3BvbnNlIimC0+STAiM6ASoyHi92MS9hZG1pbi9wYWlycy97cGFpcn0vc3VzcGVuZBJtCgpEZWxpc3RQYWlyEh4uZGFya3Bvb2wudjEuRGVsaXN0UGFpclJlcXVlc3QaHy5kYXJrcG9vbC52MS5EZWxpc3RQYWlyUmVzcG9uc2UiHoLT5JMCGCoWL3YxL2FkbWluL3BhaXJzL3twYWlyfRJyCg5MaXN0UGFpcnNBZG1pbhIiLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVxdWVzdBojLmRhcmtwb29sLnYxLkxpc3RQYWlyc0FkbWluUmVzcG9uc2UiF4LT5JMCERIPL3YxL2FkbWluL3BhaXJzQkRaQmdpdGh1Yi5jb20vZGFya3Bvb2wtZXhjaGFuZ2Uvc2VydmVyL2FwaS9nZW4vZGFya3Bvb2wvdjE7ZGFya3Bvb2x2MWIGcHJvdG8z", [file_google_api_annotations]);
+  fileDesc("ChpkYXJrcG9vbC92MS9kYXJrcG9vbC5wcm90bxILZGFya3Bvb2wudjEiUQoRUGxhY2VPcmRlclJlcXVlc3QSEgoKY29tbWl0bWVudBgBIAEoDBINCgVwcm9vZhgCIAEoDBIZChFlbmNyeXB0ZWRfcGF5bG9hZBgDIAEoDCI7ChJQbGFjZU9yZGVyUmVzcG9uc2USJQoFb3JkZXIYASABKAsyFi5kYXJrcG9vbC52MS5PcmRlckluZm8iNgoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhAKCG9yZGVyX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSIVChNDYW5jZWxPcmRlclJlc3BvbnNlIiMKD0dldE9yZGVyUmVxdWVzdBIQCghvcmRlcl9pZBgBIAEoCSI5ChBHZXRPcmRlclJlc3BvbnNlEiUKBW9yZGVyGAEgASgLMhYuZGFya3Bvb2wudjEuT3JkZXJJbmZvIiEKEUxpc3RPcmRlcnNSZXF1ZXN0EgwKBHBhaXIYASABKAkiPAoSTGlzdE9yZGVyc1Jlc3BvbnNlEiYKBm9yZGVycxgBIAMoCzIWLmRhcmtwb29sLnYxLk9yZGVySW5mbyI3ChhHZXRBdWN0aW9uSGlzdG9yeVJlcXVlc3QSDAoEcGFpchgBIAEoCRINCgVsaW1pdBgCIAEoBSJKChlHZXRBdWN0aW9uSGlzdG9yeVJlc3BvbnNlEi0KCGF1Y3Rpb25zGAEgAygLMhsuZGFya3Bvb2wudjEuQXVjdGlvblN1bW1hcnkijwEKDkF1Y3Rpb25TdW1tYXJ5EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyIlChVTdHJlYW1BdWN0aW9uc1JlcXVlc3QSDAoEcGFpchgBIAEoCSKNAQoMQXVjdGlvbkV2ZW50EhIKCmF1Y3Rpb25faWQYASABKAkSDAoEcGFpchgCIAEoCRIWCg5jbGVhcmluZ19wcmljZRgDIAEoCRIWCg5tYXRjaGVkX3ZvbHVtZRgEIAEoCRITCgttYXRjaF9jb3VudBgFIAEoBRIWCg50aW1lc3RhbXBfdW5peBgGIAEoAyLHAQoJT3JkZXJJbmZvEgoKAmlkGAEgASgJEgwKBHBhaXIYAiABKAkSHwoEc2lkZRgDIAEoDjIRLmRhcmtwb29sLnYxLlNpZGUSDQoFcHJpY2UYBCABKAkSDAoEc2l6ZRgFIAEoCRIWCg5yZW1haW5pbmdfc2l6ZRgGIAEoCRIWCg5jb21taXRtZW50X2tleRgHIAEoCRIZChFzdWJtaXR0ZWRfYXRfdW5peBgIIAEoAxIXCg9leHBpcmVzX2F0X3VuaXgYCSABKAMirQIKCFBhaXJJbmZvEgwKBHBhaXIYASABKAkSEgoKYmFzZV90b2tlbhgCIAEoCRITCgtxdW90ZV90b2tlbhgDIAEoCRIWCg5taW5fb3JkZXJfc2l6ZRgEIAEoCRIRCgl0aWNrX3NpemUYBSABKAkSIAoTYXVjdGlvbl9pbnRlcnZhbF9tcxgGIAEoDUgAiAEBEicKBnN0YXR1cxgHIAEoDjIXLmRhcmtwb29sLnYxLlBhaXJTdGF0dXMSGgoNYmFzZV9kZWNpbWFscxgIIAEoDUgBiAEBEhsKDnF1b3RlX2RlY2ltYWxzGAkgASgNSAKIAQFCFgoUX2F1Y3Rpb25faW50ZXJ2YWxfbXNCEAoOX2Jhc2VfZGVjaW1hbHNCEQoPX3F1b3RlX2RlY2ltYWxzIhIKEExpc3RQYWlyc1JlcXVlc3QiOQoRTGlzdFBhaXJzUmVzcG9uc2USJAoFcGFpcnMYASADKAsyFS5kYXJrcG9vbC52MS5QYWlySW5mbyIXChVMaXN0UGFpcnNBZG1pblJlcXVlc3QiPgoWTGlzdFBhaXJzQWRtaW5SZXNwb25zZRIkCgVwYWlycxgBIAMoCzIVLmRhcmtwb29sLnYxLlBhaXJJbmZvIo8CChNSZWdpc3RlclBhaXJSZXF1ZXN0EgwKBHBhaXIYASABKAkSEgoKYmFzZV90b2tlbhgCIAEoCRITCgtxdW90ZV90b2tlbhgDIAEoCRIWCg5taW5fb3JkZXJfc2l6ZRgEIAEoCRIRCgl0aWNrX3NpemUYBSABKAkSIAoTYXVjdGlvbl9pbnRlcnZhbF9tcxgGIAEoDUgAiAEBEhoKDWJhc2VfZGVjaW1hbHMYByABKA1IAYgBARIbCg5xdW90ZV9kZWNpbWFscxgIIAEoDUgCiAEBQhYKFF9hdWN0aW9uX2ludGVydmFsX21zQhAKDl9iYXNlX2RlY2ltYWxzQhEKD19xdW90ZV9kZWNpbWFscyI7ChRSZWdpc3RlclBhaXJSZXNwb25zZRIjCgRwYWlyGAEgASgLMhUuZGFya3Bvb2wudjEuUGFpckluZm8iIgoSU3VzcGVuZFBhaXJSZXF1ZXN0EgwKBHBhaXIYASABKAkiFQoTU3VzcGVuZFBhaXJSZXNwb25zZSIhChFEZWxpc3RQYWlyUmVxdWVzdBIMCgRwYWlyGAEgASgJIi4KEkRlbGlzdFBhaXJSZXNwb25zZRIYChBjYW5jZWxsZWRfb3JkZXJzGAEgASgNKjkKBFNpZGUSFAoQU0lERV9VTlNQRUNJRklFRBAAEgwKCFNJREVfQlVZEAESDQoJU0lERV9TRUxMEAIqdgoKUGFpclN0YXR1cxIbChdQQUlSX1NUQVRVU19VTlNQRUNJRklFRBAAEhYKElBBSVJfU1RBVFVTX0FDVElWRRABEhkKFVBBSVJfU1RBVFVTX1NVU1BFTkRFRBACEhgKFFBBSVJfU1RBVFVTX0RFTElTVEVEEAMy4QUKD0RhcmtQb29sU2VydmljZRJkCgpQbGFjZU9yZGVyEh4uZGFya3Bvb2wudjEuUGxhY2VPcmRlclJlcXVlc3QaHy5kYXJrcG9vbC52MS5QbGFjZU9yZGVyUmVzcG9uc2UiFYLT5JMCDzoBKiIKL3YxL29yZGVycxJvCgtDYW5jZWxPcmRlchIfLmRhcmtwb29sLnYxLkNhbmNlbE9yZGVyUmVxdWVzdBogLmRhcmtwb29sLnYxLkNhbmNlbE9yZGVyUmVzcG9uc2UiHYLT5JMCFyoVL3YxL29yZGVycy97b3JkZXJfaWR9EmYKCEdldE9yZGVyEhwuZGFya3Bvb2wudjEuR2V0T3JkZXJSZXF1ZXN0Gh0uZGFya3Bvb2wudjEuR2V0T3JkZXJSZXNwb25zZSIdgtPkkwIXEhUvdjEvb3JkZXJzL3tvcmRlcl9pZH0SYQoKTGlzdE9yZGVycxIeLmRhcmtwb29sLnYxLkxpc3RPcmRlcnNSZXF1ZXN0Gh8uZGFya3Bvb2wudjEuTGlzdE9yZGVyc1Jlc3BvbnNlIhKC0+STAgwSCi92MS9vcmRlcnMSeAoRR2V0QXVjdGlvbkhpc3RvcnkSJS5kYXJrcG9vbC52MS5HZXRBdWN0aW9uSGlzdG9yeVJlcXVlc3QaJi5kYXJrcG9vbC52MS5HZXRBdWN0aW9uSGlzdG9yeVJlc3BvbnNlIhSC0+STAg4SDC92MS9hdWN0aW9ucxJTCg5TdHJlYW1BdWN0aW9ucxIiLmRhcmtwb29sLnYxLlN0cmVhbUF1Y3Rpb25zUmVxdWVzdBoZLmRhcmtwb29sLnYxLkF1Y3Rpb25FdmVudCIAMAESXQoJTGlzdFBhaXJzEh0uZGFya3Bvb2wudjEuTGlzdFBhaXJzUmVxdWVzdBoeLmRhcmtwb29sLnYxLkxpc3RQYWlyc1Jlc3BvbnNlIhGC0+STAgsSCS92MS9wYWlyczLnAwoURGFya1Bvb2xBZG1pblNlcnZpY2USbwoMUmVnaXN0ZXJQYWlyEiAuZGFya3Bvb2wudjEuUmVnaXN0ZXJQYWlyUmVxdWVzdBohLmRhcmtwb29sLnYxLlJlZ2lzdGVyUGFpclJlc3BvbnNlIhqC0+STAhQ6ASoiDy92MS9hZG1pbi9wYWlycxJ7CgtTdXNwZW5kUGFpchIfLmRhcmtwb29sLnYxLlN1c3BlbmRQYWlyUmVxdWVzdBogLmRhcmtwb29sLnYxLlN1c3BlbmRQYWlyUmVzcG9uc2UiKYLT5JMCIzoBKjIeL3YxL2FkbWluL3BhaXJzL3twYWlyfS9zdXNwZW5kEm0KCkRlbGlzdFBhaXISHi5kYXJrcG9vbC52MS5EZWxpc3RQYWlyUmVxdWVzdBofLmRhcmtwb29sLnYxLkRlbGlzdFBhaXJSZXNwb25zZSIegtPkkwIYKhYvdjEvYWRtaW4vcGFpcnMve3BhaXJ9EnIKDkxpc3RQYWlyc0FkbWluEiIuZGFya3Bvb2wudjEuTGlzdFBhaXJzQWRtaW5SZXF1ZXN0GiMuZGFya3Bvb2wudjEuTGlzdFBhaXJzQWRtaW5SZXNwb25zZSIXgtPkkwIREg8vdjEvYWRtaW4vcGFpcnNCRFpCZ2l0aHViLmNvbS9kYXJrcG9vbC1leGNoYW5nZS9zZXJ2ZXIvYXBpL2dlbi9kYXJrcG9vbC92MTtkYXJrcG9vbHYxYgZwcm90bzM", [file_google_api_annotations]);
 
 /**
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
  * sees plaintext on the wire; the operator decrypts server-side.
  *
- * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
- * verified today. The engine ignores the client commitment and re-derives
- * the canonical Poseidon commitment over the decrypted fields; the proof is
- * accepted unverified. Order validity is operator-enforced, not
- * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
- * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
- *
- * Both fields are still SYNTACTICALLY required: `validate_place_order`
- * rejects an empty `commitment` or `proof`. Until real verification lands,
- * clients must keep sending non-empty bytes for both (placeholder bytes are
- * fine — they are not checked, only their presence is).
+ * The API only performs syntactic checks on `commitment` and `proof`; the
+ * engine decrypts the payload, re-derives the canonical Poseidon commitment
+ * and nullifier from plaintext fields, and verifies the proof against those
+ * engine-derived public inputs when the operator has pinned a canonical VK.
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
   /**
-   * client commitment; re-derived & overridden server-side (unverified)
+   * client commitment; engine re-derives canonical value
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment: Uint8Array;
 
   /**
-   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
+   * per-order Groth16 proof for commitment/nullifier
    *
    * @generated from field: bytes proof = 2;
    */
@@ -58,30 +51,23 @@ export type PlaceOrderRequest = Message<"darkpool.v1.PlaceOrderRequest"> & {
  * PlaceOrderRequest carries only the encrypt-only trio. The engine never
  * sees plaintext on the wire; the operator decrypts server-side.
  *
- * NOTE (issue #158): `commitment` and `proof` are NOT cryptographically
- * verified today. The engine ignores the client commitment and re-derives
- * the canonical Poseidon commitment over the decrypted fields; the proof is
- * accepted unverified. Order validity is operator-enforced, not
- * proof-enforced. A verified per-order proof is deferred to ADR 0001 /
- * issues #97-#98. Do not treat these two fields as a cryptographic guarantee.
- *
- * Both fields are still SYNTACTICALLY required: `validate_place_order`
- * rejects an empty `commitment` or `proof`. Until real verification lands,
- * clients must keep sending non-empty bytes for both (placeholder bytes are
- * fine — they are not checked, only their presence is).
+ * The API only performs syntactic checks on `commitment` and `proof`; the
+ * engine decrypts the payload, re-derives the canonical Poseidon commitment
+ * and nullifier from plaintext fields, and verifies the proof against those
+ * engine-derived public inputs when the operator has pinned a canonical VK.
  *
  * @generated from message darkpool.v1.PlaceOrderRequest
  */
 export type PlaceOrderRequestJson = {
   /**
-   * client commitment; re-derived & overridden server-side (unverified)
+   * client commitment; engine re-derives canonical value
    *
    * @generated from field: bytes commitment = 1;
    */
   commitment?: string;
 
   /**
-   * per-order ZK proof; ACCEPTED UNVERIFIED (see note)
+   * per-order Groth16 proof for commitment/nullifier
    *
    * @generated from field: bytes proof = 2;
    */
@@ -695,6 +681,19 @@ export type PairInfo = Message<"darkpool.v1.PairInfo"> & {
    * @generated from field: darkpool.v1.PairStatus status = 7;
    */
   status: PairStatus;
+
+  /**
+   * On-chain ERC20 decimals of each token (#211). Defaults to 18 when a
+   * registration omitted them.
+   *
+   * @generated from field: optional uint32 base_decimals = 8;
+   */
+  baseDecimals?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 quote_decimals = 9;
+   */
+  quoteDecimals?: number | undefined;
 };
 
 /**
@@ -735,6 +734,19 @@ export type PairInfoJson = {
    * @generated from field: darkpool.v1.PairStatus status = 7;
    */
   status?: PairStatusJson;
+
+  /**
+   * On-chain ERC20 decimals of each token (#211). Defaults to 18 when a
+   * registration omitted them.
+   *
+   * @generated from field: optional uint32 base_decimals = 8;
+   */
+  baseDecimals?: number;
+
+  /**
+   * @generated from field: optional uint32 quote_decimals = 9;
+   */
+  quoteDecimals?: number;
 };
 
 /**
@@ -869,6 +881,18 @@ export type RegisterPairRequest = Message<"darkpool.v1.RegisterPairRequest"> & {
    * @generated from field: optional uint32 auction_interval_ms = 6;
    */
   auctionIntervalMs?: number | undefined;
+
+  /**
+   * On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+   *
+   * @generated from field: optional uint32 base_decimals = 7;
+   */
+  baseDecimals?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 quote_decimals = 8;
+   */
+  quoteDecimals?: number | undefined;
 };
 
 /**
@@ -904,6 +928,18 @@ export type RegisterPairRequestJson = {
    * @generated from field: optional uint32 auction_interval_ms = 6;
    */
   auctionIntervalMs?: number;
+
+  /**
+   * On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+   *
+   * @generated from field: optional uint32 base_decimals = 7;
+   */
+  baseDecimals?: number;
+
+  /**
+   * @generated from field: optional uint32 quote_decimals = 8;
+   */
+  quoteDecimals?: number;
 };
 
 /**

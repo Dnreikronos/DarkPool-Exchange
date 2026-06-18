@@ -98,6 +98,13 @@ export const darkPoolAbi = [
   {
     type: 'function',
     inputs: [],
+    name: 'ivcEnabled',
+    outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    inputs: [],
     name: 'ivcVerifier',
     outputs: [{ name: '', internalType: 'contract IDeciderVerifier', type: 'address' }],
     stateMutability: 'view',
@@ -263,6 +270,13 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
+    inputs: [{ name: 'enabled', internalType: 'bool', type: 'bool' }],
+    name: 'setIvcEnabled',
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     inputs: [{ name: 'ivcVerifier_', internalType: 'address', type: 'address' }],
     name: 'setIvcVerifier',
     outputs: [],
@@ -327,7 +341,14 @@ export const darkPoolAbi = [
   {
     type: 'function',
     inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
-    name: 'settled',
+    name: 'settledAuction',
+    outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    name: 'settledBatch',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
   },
@@ -475,6 +496,12 @@ export const darkPoolAbi = [
       },
     ],
     name: 'Deposit',
+  },
+  {
+    type: 'event',
+    anonymous: false,
+    inputs: [{ name: 'enabled', internalType: 'bool', type: 'bool', indexed: false }],
+    name: 'IvcEnabledSet',
   },
   {
     type: 'event',

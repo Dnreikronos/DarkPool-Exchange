@@ -77,6 +77,7 @@ async fn populate_store(engine: &Engine, n: usize) {
             price: Decimal::new(100 + (i as i64 % 7), 0),
             size: Decimal::new(1, 0),
             commitment_key: format!("ck-{i}"),
+            salt: "ab".repeat(32),
             ttl: 60_000_000_000,
         };
         let ct = serde_json::to_vec(&order).unwrap();

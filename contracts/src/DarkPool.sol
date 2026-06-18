@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -43,7 +44,27 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     IVerifier public immutable verifier;
 
     mapping(address => bool) public operators;
-    mapping(bytes32 => bool) public settled;
+
+    /// @notice Replay guard for the Groth16 path, keyed by `batchId`. Kept in a
+    ///         namespace distinct from `settledAuction` so a `batchId` can never
+    ///         alias an `auctionId` of the same 32-byte value (#214). A single
+    ///         shared map would either let one economic round settle twice
+    ///         (different keys, no overlap) or falsely block an unrelated round
+    ///         (coincidental key collision).
+    mapping(bytes32 => bool) public settledBatch;
+
+    /// @notice Replay guard for the economic auction round, keyed by `auctionId`
+    ///         and SHARED across both settlement arms. `submitBatch` (Groth16)
+    ///         and `settleAuction` (HyperNova IVC) each set and check it, so a
+    ///         round settled through one arm cannot be re-settled through the
+    ///         other (#214). The off-chain operator runs one auction → one batch
+    ///         → one `submitBatch`, so a one-settlement-per-`auctionId` rule does
+    ///         not constrain any legitimate flow. Without this, the same proved
+    ///         matches could run `_settleMatch` twice — once via `submitBatch`,
+    ///         once via `submitSession` + `settleAuction` — double-charging
+    ///         traders.
+    mapping(bytes32 => bool) public settledAuction;
+
     mapping(address => mapping(address => uint256)) public balances;
 
     /// @notice Tokens approved for deposit. Only vetted, standard ERC20s
@@ -101,6 +122,16 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///         double-spending reserved escrow.
     mapping(bytes32 => bool) public sessionSettled;
 
+    /// @notice IVC settlement arm switch. `submitSession` and `settleAuction`
+    ///         revert while this is false, so wiring the all-accepting stub
+    ///         decider no longer auto-arms fund settlement on the IVC path
+    ///         (#210). Defaults to false at construction; the owner flips it on
+    ///         only once a real, audited Decider verifier has replaced the stub.
+    ///         Defense-in-depth behind the deploy-time chain allowlist: a stub
+    ///         wired post-deploy via `setIvcVerifier`, or a deploy-script
+    ///         regression, still cannot settle reserved escrow while this is off.
+    bool public ivcEnabled;
+
     address public feeRecipient;
     uint256 public minSize;
     uint256 public minPrice;
@@ -122,9 +153,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
 
     event SessionSubmitted(bytes32 indexed sessionId, uint64 nSteps, bytes32 policyHash);
     event AuctionSettled(bytes32 indexed sessionId, bytes32 indexed auctionId);
+    event IvcEnabledSet(bool enabled);
 
     modifier onlyOperator() {
         require(operators[msg.sender], "not operator");
+        _;
+    }
+
+    /// @dev Gates the IVC settlement path (submitSession + settleAuction) on the
+    ///      owner having explicitly armed it via setIvcEnabled. See `ivcEnabled`.
+    modifier whenIvcEnabled() {
+        require(ivcEnabled, "ivc settlement disabled");
         _;
     }
 
@@ -250,7 +289,10 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint256[6] calldata publicInputs,
         Match[] calldata matches
     ) external onlyOperator whenNotPaused {
-        require(!settled[batchId], "already settled");
+        require(!settledBatch[batchId], "batch already settled");
+        // Shared with the IVC arm: if this round already settled via
+        // submitSession + settleAuction, reject the Groth16 replay (#214).
+        require(!settledAuction[auctionId], "auction already settled");
         require(matches.length > 0 && matches.length <= MAX_BATCH_SIZE, "invalid batch size");
         require(proof.length == 256, "invalid proof length");
 
@@ -262,11 +304,19 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c) = _decodeProof(proof);
         require(verifier.verifyProof(a, b, c, publicInputs), "invalid proof");
 
+        // Effects before interactions: set the replay guards before the
+        // _settleMatch loop, which makes external decimals() staticcalls. This
+        // matches settleAuction's ordering; on the success path it changes
+        // nothing (an atomic revert rolls the writes back either way).
+        settledBatch[batchId] = true;
+        // Mark the economic round settled in the shared namespace so the IVC arm
+        // cannot later re-settle the same auctionId (#214).
+        settledAuction[auctionId] = true;
+
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);
         }
 
-        settled[batchId] = true;
         emit BatchSettled(batchId, block.timestamp);
     }
 
@@ -306,14 +356,29 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///      `reserved` so a valid batch never references unreserved funds —
     ///      see the BalanceOracle follow-up, which overlaps #153.)
     function _settleMatch(Match calldata m) internal {
-        uint256 notional = m.price * m.size / 1e18;
+        // `m.price`/`m.size` arrive in the canonical wei domain (`decimal * 1e18`,
+        // per the #209 binding — `_settlementChain` divides them by
+        // WEI_TO_CIRCUIT_SCALE to recover the proved 1e8 values). Convert each
+        // leg here into its token's raw on-chain units using that token's own
+        // decimals, so a non-18-decimal quote (6-decimal USDC) settles correctly
+        // instead of 10^12x off (#211). Reading decimals() live is the canonical
+        // source and is safe: only vetted standard ERC20s are ever allowlisted.
+        uint8 baseDecimals = IERC20Metadata(m.baseToken).decimals();
+        uint8 quoteDecimals = IERC20Metadata(m.quoteToken).decimals();
+
+        // size: decimal * 1e18  ->  decimal * 10^baseDecimals (base raw).
+        uint256 baseAmount = m.size * (uint256(10) ** baseDecimals) / 1e18;
+        // notional: `m.price * m.size / 1e18` is the notional still in the 1e18
+        // domain; rescale it to the quote token's decimals (quote raw). For an
+        // 18-decimal quote this is identity, so existing settlement is unchanged.
+        uint256 notional = (m.price * m.size / 1e18) * (uint256(10) ** quoteDecimals) / 1e18;
         uint256 fee = notional * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         uint256 askReceives = notional - fee;
 
         _consumeReserved(m.bidTrader, m.quoteToken, notional);
-        balances[m.bidTrader][m.baseToken] += m.size;
+        balances[m.bidTrader][m.baseToken] += baseAmount;
 
-        _consumeReserved(m.askTrader, m.baseToken, m.size);
+        _consumeReserved(m.askTrader, m.baseToken, baseAmount);
         balances[m.askTrader][m.quoteToken] += askReceives;
 
         balances[feeRecipient][m.quoteToken] += fee;
@@ -380,6 +445,17 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         ivcVerifier = IDeciderVerifier(ivcVerifier_);
     }
 
+    /// @notice Arm or disarm the IVC settlement path. Off until the owner turns
+    ///         it on, which should happen only after a real Decider verifier
+    ///         (the trusted-setup output, not the all-accepting stub) is wired
+    ///         via setIvcVerifier. Kept independent of the verifier pointer on
+    ///         purpose: settlement needs both a verifier set AND the path armed,
+    ///         so neither a stray setIvcVerifier nor a stale arm settles alone.
+    function setIvcEnabled(bool enabled) external onlyOwner {
+        ivcEnabled = enabled;
+        emit IvcEnabledSet(enabled);
+    }
+
     /// @notice Commit to an IVC-proved session. The matches are bound to the
     ///         proof by its settlement hash-chain `zN[3]` (#209), which
     ///         settleAuction recomputes from `matches[]` — no separate
@@ -394,7 +470,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         uint256[5] calldata zN,
         uint64 nSteps,
         bytes32 policyHash
-    ) external onlyOperator whenNotPaused {
+    ) external onlyOperator whenNotPaused whenIvcEnabled {
         require(!sessionSubmitted[sessionId], "session already submitted");
         require(address(ivcVerifier) != address(0), "ivc verifier not set");
         require(ivcVerifier.verifyIvcProof(proof, z0, zN, nSteps), "invalid ivc proof");
@@ -429,9 +505,11 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         bytes32 sessionId,
         bytes32 auctionId,
         IDarkPool.Match[] calldata matches
-    ) external onlyOperator whenNotPaused {
+    ) external onlyOperator whenNotPaused whenIvcEnabled {
         require(sessionSubmitted[sessionId], "session not submitted");
-        require(!settled[auctionId], "auction already settled");
+        // Shared with the Groth16 arm (#214): blocks re-settling this round
+        // whether it first settled via this path or via submitBatch.
+        require(!settledAuction[auctionId], "auction already settled");
         // A session proves exactly one auction's matches. Because the binding
         // below is over `matches[]` only (auctionId is absent from the proof's
         // hash-chain), the same proved session would otherwise settle multiple
@@ -440,7 +518,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         // settlement.
         require(!sessionSettled[sessionId], "session already settled");
         // Defense in depth: once an auction is bound to a session, only that
-        // session can settle it. `settled[auctionId]` already blocks
+        // session can settle it. `settledAuction[auctionId]` already blocks
         // re-settlement; this guards a cross-session race where two distinct
         // submitSession calls both try to settle the same auctionId.
         bytes32 bound = auctionToSession[auctionId];
@@ -454,7 +532,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
         // over `matches[]` and require it equals the proved `zN[3]`.
         require(_settlementChain(matches) == sessionSettlementAcc[sessionId], "settlement binding");
         auctionToSession[auctionId] = sessionId;
-        settled[auctionId] = true;
+        settledAuction[auctionId] = true;
         sessionSettled[sessionId] = true;
         for (uint256 i = 0; i < matches.length; i++) {
             _settleMatch(matches[i]);

@@ -4,6 +4,12 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// ERC20 default decimals, used when a `PairRegistered` event predates the
+/// per-token decimals fields (#211).
+fn default_token_decimals() -> u8 {
+    18
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
@@ -27,8 +33,6 @@ pub enum EventData {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        #[serde(default)]
-        salt_nonce: Vec<u8>,
     },
     OrderCancelled {
         order_id: Uuid,
@@ -82,6 +86,12 @@ pub enum EventData {
         tick_size: Decimal,
         #[serde(default)]
         auction_interval_ms: Option<u64>,
+        /// On-chain ERC20 decimals of each token, replayed into `PairConfig`
+        /// (#211). Default 18 for events written before the field existed.
+        #[serde(default = "default_token_decimals")]
+        base_decimals: u8,
+        #[serde(default = "default_token_decimals")]
+        quote_decimals: u8,
     },
     PairSuspended {
         pair: String,
@@ -147,7 +157,6 @@ mod tests {
                     commitment: vec![1],
                     proof: vec![2],
                     ciphertext: vec![3],
-                    salt_nonce: vec![4],
                 },
                 EventType::OrderPlaced,
             ),
@@ -216,6 +225,8 @@ mod tests {
                     min_order_size: Decimal::new(1, 2),
                     tick_size: Decimal::new(1, 2),
                     auction_interval_ms: Some(5000),
+                    base_decimals: 18,
+                    quote_decimals: 6,
                 },
                 EventType::PairRegistered,
             ),
@@ -261,5 +272,40 @@ mod tests {
         assert_eq!(back.seq, original.seq);
         assert_eq!(back.event_type, original.event_type);
         assert_eq!(back.data.event_type(), EventType::OrderExpired);
+    }
+
+    #[test]
+    fn pair_registered_missing_decimals_defaults_to_18() {
+        let full = EventData::PairRegistered {
+            pair: "ETH/USDC".into(),
+            base_token: "0x0".into(),
+            quote_token: "0x1".into(),
+            min_order_size: Decimal::new(1, 2),
+            tick_size: Decimal::new(1, 2),
+            auction_interval_ms: Some(5000),
+            base_decimals: 6,
+            quote_decimals: 6,
+        };
+        // Drop the decimals keys to mimic an event written before the fields
+        // existed; deserialization must fall back to the serde default (18).
+        let mut value = serde_json::to_value(&full).unwrap();
+        let obj = value
+            .get_mut("PairRegistered")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("externally tagged PairRegistered object");
+        obj.remove("base_decimals");
+        obj.remove("quote_decimals");
+
+        match serde_json::from_value::<EventData>(value).unwrap() {
+            EventData::PairRegistered {
+                base_decimals,
+                quote_decimals,
+                ..
+            } => {
+                assert_eq!(base_decimals, 18);
+                assert_eq!(quote_decimals, 18);
+            }
+            other => panic!("expected PairRegistered, got {other:?}"),
+        }
     }
 }

@@ -19,6 +19,9 @@ pub enum EngineError {
     #[error("submit batch: {0}")]
     Submit(#[source] SettlementError),
 
+    #[error("balance oracle lookup: {0}")]
+    BalanceLookup(#[source] SettlementError),
+
     #[error(transparent)]
     Event(#[from] EventError),
 
@@ -32,8 +35,8 @@ pub enum EngineError {
     #[error("recover: commitment mismatch for order {order_id}")]
     RecoverCommitmentMismatch { order_id: uuid::Uuid },
 
-    #[error("recover: order {order_id} has salt_nonce of {len} bytes; expected 32")]
-    RecoverSaltNonceLen { order_id: uuid::Uuid, len: usize },
+    #[error("recover: order {order_id} has a malformed salt (expected 32-byte hex)")]
+    RecoverSaltInvalid { order_id: uuid::Uuid },
 
     #[error("recover: re-aggregate orphan auction {auction_id}: {source}")]
     RecoverReAggregate {

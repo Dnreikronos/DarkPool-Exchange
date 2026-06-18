@@ -10,12 +10,12 @@ https://front-five-flax.vercel.app/
 
 ## Why this exists
 
-On a normal DEX, your orders sit in a public mempool. Anyone can see them, front-run them, sandwich them. This project takes a different approach: orders are encrypted to the engine operator and matched in periodic batch auctions. The operator proves via ZK that every auction was executed correctly. Settlement happens in batches with aggregated ZK proofs verified on-chain.
+On a normal DEX, your orders sit in a public mempool. Anyone can see them, front-run them, sandwich them. This project takes a different approach: orders are encrypted to the engine operator and matched in periodic batch auctions. The operator proves via ZK that settled fills are valid, use one crossing clearing price, and came from the admitted order set. Settlement happens in batches with aggregated ZK proofs verified on-chain.
 
 Three things we care about:
 
 1. Orders are invisible to external observers before settlement.
-2. Every matched trade comes with a ZK proof that the batch auction was computed correctly.
+2. Every matched trade comes with a ZK proof that the fill is valid and tied to the admitted input set.
 3. Price emerges from the protocol itself — each auction round produces a clearing price with no oracle dependency.
 
 | | Typical DEX | This project |
@@ -25,7 +25,7 @@ Three things we care about:
 | Matching model | Continuous on-chain (expensive) | Off-chain periodic batch auction |
 | Price discovery | Visible order book | Clearing price after each auction round |
 | Settlement | Immediate per-order | Batched, gas-efficient |
-| Trust model | Trustless (but transparent) | Semi-trusted operator + ZK proof of correct execution |
+| Trust model | Trustless (but transparent) | Semi-trusted operator + ZK proof of fill validity |
 | Stack | Solidity only | Rust + Solidity + ZK |
 
 ---
@@ -92,10 +92,10 @@ flowchart TB
 1. Trader submits a Poseidon commitment to the order parameters and locks collateral in escrow.
 2. Trader runs a Rust circuit locally, gets back a ZK proof that the order is valid.
 3. Trader encrypts the full order to the operator's public key and submits commitment + proof + encrypted payload.
-4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs a batch auction — computing a clearing price and matching all crossing orders. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (bincode-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
+4. The operator decrypts in memory, collects orders into a time-bounded batch (default: 5s), and runs the off-circuit batch auction matcher — computing a clearing price and fills under deterministic price-time priority. **Plaintext orders exist only in engine RAM during the auction window. The event log is an append-only file (bincode-encoded, fsync per append) containing ciphertext + commitment + proof only — never plaintext.**
 5. Matched pairs are handed to a pluggable `ProofAggregator` (subprocess / FFI / RPC), then submitted on-chain via a pluggable `Submitter`. The Solidity verifier checks the aggregated proof and transfers tokens atomically.
 
-> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` in `dp-settlement` is wired into `darkpool-server`: setting `--eth-rpc` together with `--signer-key-uri` (and `--contract-addr`) builds a live on-chain submitter, while `--eth-rpc` without a signer logs a warning and falls back to the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; the Groth16 settlement path is live, but the HyperNova decider verifier is still a stub and its trusted setup is pending before mainnet.
+> **Status note.** ECIES decryption and the subprocess proof aggregator are implemented. The `alloy`-based `EthSubmitter` in `dp-settlement` is wired into `darkpool-server`: setting `--eth-rpc` together with `--signer-key-uri`, `--contract-addr`, and `--settlement-private-rpc` builds a live on-chain submitter, while `--eth-rpc` without a signer logs a warning and falls back to the noop submitter. All seams are pluggable. The engine, API, event store, auction, and expiry logic are production-shape; the Groth16 settlement path is live, but the HyperNova decider verifier is still a stub and its trusted setup is pending before mainnet.
 
 ---
 
@@ -103,8 +103,8 @@ flowchart TB
 
 ### Matching
 
-- Periodic batch auction (default: every 5 seconds). All orders in the same round are treated equally — no temporal advantage.
-- Clearing price computed as the price that maximizes matched volume.
+- Periodic batch auction (default: every 5 seconds). The Rust matcher uses deterministic price-time priority: better price first, then the event-store sequence number (`seq`).
+- Clearing price is computed off-circuit as the price that maximizes matched volume.
 - Partial fills are supported. Residual quantity carries over to the next auction round.
 - Orders expire after a configurable TTL (default: 10 min).
 - Orders from the same trader cannot match each other.
@@ -120,7 +120,7 @@ flowchart TB
 ### Trust model & privacy
 
 - Nobody outside the operator can determine the price or size of a pending order from on-chain data.
-- The matching engine operator **can** see decrypted order contents but is cryptographically bound to execute auctions correctly via ZK proofs. This mirrors institutional dark pools in TradFi.
+- The matching engine operator **can** see decrypted order contents. The ZK proof binds settlement to valid crossing fills at one clearing price and to orders in the admitted set, but it does **not** prove the off-circuit matcher chose the volume-maximizing price, matched every eligible order, or honored price-time priority. Those fairness properties are implemented by deterministic engine code and can be replay-audited only with decrypted order contents/operator-side access; external observers cannot verify them from the ciphertext-only event log or the current circuit.
 - After settlement, the clearing price and trade amounts become visible but individual orders are unlinkable to wallet addresses without additional info.
 
 ---
@@ -198,7 +198,11 @@ cargo run   --release --bin darkpool-server
                                  # required when --snapshot-dir or a postgres store is used
 --signer-key-uri file:/etc/dp/eth.hex   # independent Ethereum signer URI
 --aggregator-bin /usr/local/bin/dp-aggregate  # proof aggregator subprocess (omit → noop)
---eth-rpc https://...            # settlement RPC (with --signer-key-uri + --contract-addr → on-chain)
+--eth-rpc https://...            # read RPC for chain state and balance oracle
+--settlement-private-rpc https://...
+                                 # private tx RPC for submitBatch/settleAuction;
+                                 # required with --signer-key-uri unless
+                                 # --allow-public-settlement is set for local dev
 --api-keys k1,k2                 # comma-separated API keys (omit → no auth)
 --rate-limit 100  --rate-burst 20  --rate-stale-after 5m
 ```

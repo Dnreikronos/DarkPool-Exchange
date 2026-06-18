@@ -14,11 +14,12 @@ use dp_api::ratelimit::{RateLimitCore, RateLimitLayer, TrustedProxies};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
 use dp_api::tls;
+use dp_api::validation::PLACE_ORDER_BODY_LIMIT;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
     SnapshotCipher,
 };
-use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
+use dp_engine::{Engine, Groth16OrderProofVerifier, PairConfig, PairStatus, SnapshotConfig};
 use dp_event::{
     FileSnapshotStore, FileStore, MemSnapshotStore, MemStore, PgSnapshotStore, PgStore,
     SnapshotStore, Store,
@@ -45,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     cfg.validate_siwe_config()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     cfg.validate_admin_auth()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_settlement_transport()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
     // Resolve the TLS posture up-front: half-configured TLS (cert
@@ -109,6 +112,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
     engine.set_snapshot_store(snapshot_store.clone());
+
+    if let Some(path) = cfg.order_proof_vk_path() {
+        let verifier = Groth16OrderProofVerifier::from_file(path)?;
+        engine.set_order_proof_verifier(Arc::new(verifier));
+        info!(path = %path, "order proof verifier: canonical VK loaded");
+    } else if cfg.allow_unverified_order_proofs {
+        warn!(
+            "DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true — per-order proofs will not be \
+             cryptographically verified. Local/dev only; do not use in production."
+        );
+    } else {
+        return Err(
+            "DARKPOOL_ORDER_PROOF_VK must point to commitment_vk.bin. To run an unsafe local \
+             fixture without per-order proof verification, set \
+             DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true."
+                .into(),
+        );
+    }
 
     // Snapshot-at-rest encryption (#203). A snapshot store without a cipher
     // would persist cleartext order data (trader / price / size), so fail
@@ -245,30 +266,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "DARKPOOL_ETH_RPC and DARKPOOL_SIGNER_KEY_URI are set but \
                  DARKPOOL_CONTRACT_ADDR is missing — cannot build EthSubmitter",
             )?;
+            let (settlement_rpc, tx_transport) =
+                if let Some(private_rpc) = cfg.settlement_private_rpc_url() {
+                    (
+                        private_rpc,
+                        dp_settlement::SettlementTxTransport::PrivateRpc,
+                    )
+                } else {
+                    warn!(
+                        "DARKPOOL_ALLOW_PUBLIC_SETTLEMENT=true — settlement calldata will be \
+                         sent through DARKPOOL_ETH_RPC and may expose the full cleared book in \
+                         the public mempool. Local/dev only."
+                    );
+                    (rpc, dp_settlement::SettlementTxTransport::PublicMempool)
+                };
 
-            let provider = alloy_provider::ProviderBuilder::new()
+            let read_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            let submit_provider = alloy_provider::ProviderBuilder::new()
                 .wallet(signer.wallet())
-                .connect_http(
-                    rpc.parse()
-                        .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
-                );
+                .connect_http(settlement_rpc.parse().map_err(|e| {
+                    if tx_transport == dp_settlement::SettlementTxTransport::PrivateRpc {
+                        format!("bad DARKPOOL_SETTLEMENT_PRIVATE_RPC URL: {e}")
+                    } else {
+                        format!("bad DARKPOOL_ETH_RPC URL: {e}")
+                    }
+                })?);
 
             let submitter_cfg = dp_settlement::EthSubmitterConfig {
-                rpc_url: rpc.to_string(),
                 signer,
                 contract_address: contract_addr.to_string(),
                 chain_id: cfg.chain_id,
                 gas_limit: Some(cfg.submit_gas),
+                tx_transport,
             };
 
-            let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
+            let submitter = dp_settlement::EthSubmitter::with_submit_provider(
+                read_provider,
+                submit_provider,
+                &submitter_cfg,
+            )?;
             engine.set_submitter(Arc::new(submitter));
 
             info!(
-                rpc = %rpc,
+                read_rpc = %rpc,
                 contract = %contract_addr,
                 chain_id = cfg.chain_id,
+                tx_transport = tx_transport.as_str(),
                 "batch submitter: on-chain (EthSubmitter)"
+            );
+
+            // Value-bearing deployment: fail closed on the InsecureDevOracle
+            // default. The matching circuit's solvency witness must come from
+            // real on-chain `reserved` collateral, not a fabricated 1B balance
+            // (#213). A read-only provider (no signer needed for eth_call) backs
+            // the oracle; a bad address/URL aborts boot rather than serving
+            // traffic whose solvency proof attests nothing about real funds.
+            let oracle_contract = contract_addr
+                .parse::<alloy_primitives::Address>()
+                .map_err(|e| format!("bad DARKPOOL_CONTRACT_ADDR: {e}"))?;
+            let oracle_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            engine.set_balance_oracle(Arc::new(dp_settlement::ChainBalanceOracle::new(
+                oracle_provider,
+                oracle_contract,
+            )));
+            info!(
+                contract = %contract_addr,
+                "balance oracle: on-chain (reads reserved[trader][asset])"
             );
         } else {
             warn!(
@@ -428,7 +497,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         builder
             .layer(grpc_auth)
             .layer(grpc_rl)
-            .add_service(DarkPoolServiceServer::new(handler))
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
             .serve_with_shutdown(grpc_addr, async move { grpc_cancel.cancelled().await })
             .await
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
@@ -660,6 +732,26 @@ struct PairSeedEntry {
     tick_size: String,
     #[serde(default, alias = "auctionIntervalMs")]
     auction_interval_ms: Option<u64>,
+    /// On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+    #[serde(default, alias = "baseDecimals")]
+    base_decimals: Option<u8>,
+    #[serde(default, alias = "quoteDecimals")]
+    quote_decimals: Option<u8>,
+}
+
+/// Validate an optional seed `decimals` field, mirroring the `<= 30` bound the
+/// admin `register_pair` RPC enforces, so a JSON seed cannot persist a pair the
+/// operator API would itself refuse to register. Absent defaults to 18.
+fn seed_decimals(
+    v: Option<u8>,
+    field: &str,
+    pair: &str,
+) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    match v {
+        None => Ok(18),
+        Some(d) if d <= 30 => Ok(d),
+        Some(d) => Err(format!("pair seed {pair}: {field} must be <= 30, got {d}").into()),
+    }
 }
 
 /// Apply the `DARKPOOL_PAIR_SEED_JSON` seed. Each entry becomes a
@@ -691,9 +783,13 @@ fn seed_pairs_from_json(
             Decimal::from_str(e.tick_size.trim())
                 .map_err(|err| format!("pair seed {}: bad tick_size: {err}", e.pair))?
         };
+        let base_decimals = seed_decimals(e.base_decimals, "base_decimals", &e.pair)?;
+        let quote_decimals = seed_decimals(e.quote_decimals, "quote_decimals", &e.pair)?;
         let cfg = PairConfig {
             base_token: base,
             quote_token: quote,
+            base_decimals,
+            quote_decimals,
             min_order_size: min,
             tick_size: tick,
             auction_interval: e.auction_interval_ms.map(Duration::from_millis),

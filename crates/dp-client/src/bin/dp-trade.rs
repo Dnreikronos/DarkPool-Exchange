@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use clap::{Parser, ValueEnum};
+use rand::RngCore;
 use rust_decimal::Decimal;
 
 use dp_client::encrypt::{load_operator_pubkey_file, parse_operator_pubkey_hex};
@@ -36,8 +37,15 @@ enum OutputFormat {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "dp-trade", about = "Build an encrypted DarkPool order submission")]
+#[command(
+    name = "dp-trade",
+    about = "Build an encrypted DarkPool order submission"
+)]
 struct Args {
+    /// Trader address bound into the encrypted payload.
+    #[arg(long)]
+    trader: String,
+
     #[arg(long)]
     pair: String,
 
@@ -97,11 +105,13 @@ async fn run() -> Result<(), ClientError> {
         .map_err(|_| ClientError::InvalidPayload("ttl exceeds i64 nanoseconds".into()))?;
 
     let payload = OrderPayload {
+        trader: args.trader,
         pair: args.pair,
         side: args.side.into(),
         price: args.price,
         size: args.size,
         commitment_key: args.commitment_key,
+        salt: random_salt_hex(),
         ttl: ttl_nanos,
     };
 
@@ -110,10 +120,19 @@ async fn run() -> Result<(), ClientError> {
     print_submission(&sub, args.output);
 
     if let Some(server) = args.server {
+        eprintln!(
+            "warning: dp-trade sends a development placeholder proof; production servers reject it unless DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true"
+        );
         submit_http(&server, args.api_key.as_deref(), &sub).await?;
     }
 
     Ok(())
+}
+
+fn random_salt_hex() -> String {
+    let mut salt = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut salt);
+    hex::encode(salt)
 }
 
 fn resolve_operator_key(input: &str) -> Result<Vec<u8>, ClientError> {

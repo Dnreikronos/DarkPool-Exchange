@@ -1,10 +1,8 @@
 // Pure builders for the real submission pipeline (#99). No React, no
-// network, no worker — everything is injected so this is node-testable.
-// The order's blinding nonce is `commitment_key`: ONE random hex value is
-// generated per submission and threaded into BOTH the prover witness and
-// the encrypted order payload. The operator recomputes the canonical
-// Poseidon commitment from the decrypted payload, so the client never
-// sends a salt (dp-engine/src/engine.rs:487-490).
+// network, no worker; everything is injected so this is node-testable.
+// The connected wallet address binds the proof to the trader. The commitment
+// key is payload-only entropy, while salt is shared between the prover witness
+// and encrypted payload so the engine can reproduce the proof commitment.
 
 import type { DecryptedOrderPayload } from '@/lib/crypto'
 import type { WitnessInput } from '@/lib/prover'
@@ -29,14 +27,14 @@ export function randomHex(nBytes: number): string {
 }
 
 export function buildWitness(args: {
-  commitmentKey: string
+  trader: string
   saltHex: string
   side: OrderSide
   price: string
   size: string
 }): WitnessInput {
   return {
-    commitment_key: args.commitmentKey,
+    trader_addr: args.trader,
     side: sideToNum(args.side),
     price: args.price,
     size: args.size,
@@ -51,6 +49,7 @@ export function buildOrderPayload(args: {
   price: string
   size: string
   commitmentKey: string
+  saltHex: string
   ttlNs: number
 }): DecryptedOrderPayload {
   return {
@@ -60,6 +59,7 @@ export function buildOrderPayload(args: {
     price: args.price,
     size: args.size,
     commitment_key: args.commitmentKey,
+    salt: args.saltHex,
     ttl: args.ttlNs,
   }
 }
@@ -86,8 +86,8 @@ export interface RealStepDeps {
 
 /**
  * Build the four real stage steps. The steps share a private draft so the
- * commitment_key minted in `preparing` reaches `proving`/`encrypting`, and
- * the prove output reaches `submitting`.
+ * entropy minted in `preparing` reaches `proving`/`encrypting`, and the prove
+ * output reaches `submitting`.
  */
 export function createRealSteps(deps: RealStepDeps): StageStep[] {
   const draft: {
@@ -106,7 +106,7 @@ export function createRealSteps(deps: RealStepDeps): StageStep[] {
         const commitmentKey = deps.randomHex(32)
         const saltHex = deps.randomHex(32)
         draft.witness = buildWitness({
-          commitmentKey,
+          trader: deps.trader,
           saltHex,
           side: deps.side,
           price: deps.price,
@@ -119,6 +119,7 @@ export function createRealSteps(deps: RealStepDeps): StageStep[] {
           price: deps.price,
           size: deps.size,
           commitmentKey,
+          saltHex,
           ttlNs: deps.ttlNs,
         })
       },

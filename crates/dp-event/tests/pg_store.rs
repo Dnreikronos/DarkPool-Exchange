@@ -32,7 +32,6 @@ fn placed_event() -> Event {
             commitment: vec![1, 2, 3],
             proof: vec![4, 5, 6],
             ciphertext: vec![7, 8, 9],
-            salt_nonce: vec![0u8; 32],
         },
     }
 }

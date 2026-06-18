@@ -104,6 +104,7 @@ mod tests {
             price: Decimal::new(180000, 2),
             size: Decimal::new(5, 0),
             commitment_key: "testkey".into(),
+            salt: "22".repeat(32),
             ttl: 3_000_000_000,
         }
     }

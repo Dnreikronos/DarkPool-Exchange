@@ -398,3 +398,61 @@ async fn admin_suspend_rejects_empty_pair() {
     // which maps to InvalidArgument → 400.
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn admin_register_propagates_decimals() {
+    let app = make_app();
+    let body = serde_json::json!({
+        "pair": "ETH/USDC",
+        "baseToken": "0x0000000000000000000000000000000000000001",
+        "quoteToken": "0x0000000000000000000000000000000000000002",
+        "minOrderSize": "0.01",
+        "tickSize": "0.01",
+        "baseDecimals": 18,
+        "quoteDecimals": 6
+    })
+    .to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/admin/pairs")
+                .header("x-api-key", OPERATOR_KEY)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp.into_body()).await;
+    assert_eq!(json["pair"]["baseDecimals"], 18);
+    assert_eq!(json["pair"]["quoteDecimals"], 6);
+}
+
+#[tokio::test]
+async fn admin_register_rejects_decimals_above_30() {
+    let app = make_app();
+    let body = serde_json::json!({
+        "pair": "ETH/USDC",
+        "baseToken": "0x0000000000000000000000000000000000000001",
+        "quoteToken": "0x0000000000000000000000000000000000000002",
+        "minOrderSize": "0.01",
+        "tickSize": "0.01",
+        "quoteDecimals": 31
+    })
+    .to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/admin/pairs")
+                .header("x-api-key", OPERATOR_KEY)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

@@ -409,7 +409,6 @@ impl Engine {
                 order_id,
                 commitment,
                 ciphertext,
-                salt_nonce,
                 ..
             } => {
                 let decrypted = decrypter.decrypt(ciphertext).await.map_err(|source| {
@@ -418,27 +417,28 @@ impl Engine {
                         source,
                     }
                 })?;
-                // A persisted salt_nonce of != 32 bytes cannot be the one the
-                // commitment was originally derived from. Surface the bad
-                // length as a distinct error instead of silently falling back
-                // to a zero nonce — the zero fallback would have produced a
-                // misleading `RecoverCommitmentMismatch` for every affected
-                // event, hiding the actual corruption.
-                let nonce: [u8; 32] = salt_nonce.as_slice().try_into().map_err(|_| {
-                    EngineError::RecoverSaltNonceLen {
+                // The salt is the client's, carried in the ciphertext (#217), so
+                // recovery decodes it from the decrypted order and recomputes the
+                // identical commitment the live path persisted. A malformed salt
+                // is corruption — surface it distinctly instead of letting it
+                // masquerade as a `RecoverCommitmentMismatch`.
+                let salt = crate::engine::parse_order_salt(&decrypted.salt).map_err(|_| {
+                    EngineError::RecoverSaltInvalid {
                         order_id: *order_id,
-                        len: salt_nonce.len(),
                     }
                 })?;
                 let recomputed = crate::engine::recompute_persisted_commitment(
-                    *order_id,
                     decrypted.trader.as_slice(),
-                    &decrypted.commitment_key,
                     decrypted.side as u8,
                     decrypted.price,
                     decrypted.size,
-                    &nonce,
+                    &salt,
                 )?;
+                let nullifier =
+                    dp_zk::fr_to_bytes32(dp_zk::commitment_circuit::compute_nullifier_native(
+                        dp_zk::pedersen::bytes_to_scalar(&recomputed),
+                        dp_zk::pedersen::bytes_to_scalar(&salt),
+                    ));
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
                         order_id: *order_id,
@@ -488,6 +488,13 @@ impl Engine {
                 // logs always emit `PairRegistered` first.
                 state.pair_tokens.entry(pair_key).or_default();
                 state.book.insert_order(order);
+                // Rebuild the replay spent-set from the log so a recovered
+                // engine rejects the same ciphertext replays a live one would
+                // (#233). Same hash helper as the live path keeps them aligned.
+                state
+                    .seen_ciphertexts
+                    .insert(crate::engine::ciphertext_digest(ciphertext));
+                state.spent_nullifiers.insert(nullifier);
             }
             EventData::OrderCancelled { .. } | EventData::OrderExpired { .. } => {
                 self.inner.state.lock().book.apply(ev);
@@ -609,6 +616,8 @@ impl Engine {
                 min_order_size,
                 tick_size,
                 auction_interval_ms,
+                base_decimals,
+                quote_decimals,
             } => {
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
@@ -628,6 +637,8 @@ impl Engine {
                     crate::state::PairConfig {
                         base_token: base,
                         quote_token: quote,
+                        base_decimals: *base_decimals,
+                        quote_decimals: *quote_decimals,
                         min_order_size: *min_order_size,
                         tick_size: *tick_size,
                         auction_interval: auction_interval_ms.map(Duration::from_millis),
@@ -992,7 +1003,6 @@ mod tests {
                 commitment: vec![],
                 proof: vec![],
                 ciphertext: vec![],
-                salt_nonce: vec![0u8; 32],
             },
         }
     }

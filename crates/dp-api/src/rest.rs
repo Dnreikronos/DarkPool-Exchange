@@ -35,7 +35,7 @@ use crate::pb::{
 use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
-use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use crate::validation::{validate_pair_known, PLACE_ORDER_BODY_LIMIT};
 use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
 pub type SharedHandler = Arc<ApiHandler>;
@@ -51,10 +51,6 @@ impl MakeRequestId for MakeRequestUlid {
         Some(RequestId::new(HeaderValue::from_str(&id).unwrap()))
     }
 }
-
-// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
-// Rejects oversized requests before JSON parse + base64 decode burn CPU.
-const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
 
 pub fn router(handler: SharedHandler) -> Router {
     let place_order =
@@ -557,6 +553,8 @@ struct PairInfoJson {
     tick_size: String,
     auction_interval_ms: Option<u32>,
     status: String,
+    base_decimals: Option<u32>,
+    quote_decimals: Option<u32>,
 }
 
 impl From<pb::PairInfo> for PairInfoJson {
@@ -575,6 +573,8 @@ impl From<pb::PairInfo> for PairInfoJson {
             tick_size: p.tick_size,
             auction_interval_ms: p.auction_interval_ms,
             status: status.to_string(),
+            base_decimals: p.base_decimals,
+            quote_decimals: p.quote_decimals,
         }
     }
 }
@@ -597,6 +597,10 @@ struct RegisterPairJson {
     tick_size: String,
     #[serde(default)]
     auction_interval_ms: Option<u32>,
+    #[serde(default)]
+    base_decimals: Option<u32>,
+    #[serde(default)]
+    quote_decimals: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -841,6 +845,8 @@ async fn rest_register_pair(
         min_order_size: body.min_order_size,
         tick_size: body.tick_size,
         auction_interval_ms: body.auction_interval_ms,
+        base_decimals: body.base_decimals,
+        quote_decimals: body.quote_decimals,
     };
     let resp = h.register_pair(Request::new(req)).await?.into_inner();
     Ok(Json(RegisterPairRespJson {
@@ -1154,9 +1160,13 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: pb::PairStatus::Active as i32,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_ACTIVE");
+        assert_eq!(json.base_decimals, None);
+        assert_eq!(json.quote_decimals, None);
     }
 
     #[test]
@@ -1169,10 +1179,14 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: Some(5000),
             status: pb::PairStatus::Suspended as i32,
+            base_decimals: Some(18),
+            quote_decimals: Some(6),
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_SUSPENDED");
         assert_eq!(json.auction_interval_ms, Some(5000));
+        assert_eq!(json.base_decimals, Some(18));
+        assert_eq!(json.quote_decimals, Some(6));
     }
 
     #[test]
@@ -1185,6 +1199,8 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: pb::PairStatus::Delisted as i32,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_DELISTED");
@@ -1200,6 +1216,8 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: 99,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_UNSPECIFIED");

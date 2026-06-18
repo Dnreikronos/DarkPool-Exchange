@@ -10,14 +10,16 @@
 
 **Problema:** Price-time priority exige conhecer o preco, mas o design original diz que o engine so ve commitments. Isso e uma contradicao.
 
+**Nota de status (2026-06-17):** a implementacao atual segue a Opcao A, mas a prova ZK nao prova toda a justica do matching. O circuito vincula fills liquidados a ordens admitidas, exige lados opostos, solvencia, limites de posicao e um unico preco de clearing que cruza cada par. Ele nao recomputa o preco que maximiza volume, nao prova que todas as ordens elegiveis foram preenchidas e nao recebe `seq`, portanto nao prova price-time priority. Essas propriedades vivem no matcher Rust (`dp-auction`) e so podem ser reexecutadas com as ordens descriptografadas ou acesso do operador; operadores maliciosos ainda fazem parte do trust model para fairness ate que essas restricoes sejam levadas ao circuito ou a um verificador externo equivalente.
+
 ### Opcoes consideradas
 
 **Opcao A — Operador semi-trusted (pragmatica)** ✅ ESCOLHIDA
 
-O trader encripta a ordem para o engine usando a chave publica do operador. O engine decripta, faz matching normal em cleartext, e gera uma prova ZK de que executou o matching corretamente (sem favorecer ninguem, sem front-running). A privacidade e contra o mundo externo, nao contra o operador.
+O trader encripta a ordem para o engine usando a chave publica do operador. O engine decripta, faz matching normal em cleartext, e gera uma prova ZK de validade dos fills liquidados. A privacidade e contra o mundo externo, nao contra o operador.
 
 - Pros: simples de implementar, matching engine continua sendo um btree normal em Go, performance maxima
-- Contras: o operador ve as ordens — se for malicioso pode vazar info (mas a prova ZK garante que ele nao adulterou o matching)
+- Contras: o operador ve as ordens e, se for malicioso, pode vazar informacao ou desviar da politica de fairness sem a prova ZK falhar; a prova atual garante validade dos fills liquidados, nao corretude completa do matching
 - Referencia: a maioria das dark pools institucionais em TradFi funciona assim
 
 **Opcao B — MPC entre multiplos operadores**
