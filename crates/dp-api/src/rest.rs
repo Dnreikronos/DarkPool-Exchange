@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{Extension, MatchedPath, Path, Query, State};
-use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
+use axum::extract::{ConnectInfo, Extension, MatchedPath, Path, Query, State};
+use axum::http::{
+    header, HeaderMap, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode,
+};
 use axum::middleware::from_fn_with_state;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -12,7 +16,9 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use metrics_exporter_prometheus::PrometheusHandle;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::BroadcastStream;
 use tonic::{Code, Request};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -32,7 +38,9 @@ use crate::pb::{
     ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
-use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
+use crate::ratelimit::{
+    client_key, ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore, TrustedProxies,
+};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
 use crate::validation::{validate_pair_known, PLACE_ORDER_BODY_LIMIT};
@@ -41,6 +49,61 @@ use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
 pub type SharedKeyAdminHandler = Arc<KeyAdminHandler>;
+
+#[derive(Clone, Debug)]
+pub struct SseStreamLimiter {
+    max_per_key: usize,
+    semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
+}
+
+impl SseStreamLimiter {
+    pub fn new(max_per_key: usize) -> Self {
+        Self {
+            max_per_key,
+            semaphores: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn try_acquire(&self, key: String) -> Option<SseStreamPermit> {
+        let semaphore = {
+            let mut semaphores = self.semaphores.lock();
+            semaphores.retain(|_, sem| {
+                sem.available_permits() < self.max_per_key || Arc::strong_count(sem) > 1
+            });
+            semaphores
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_key)))
+                .clone()
+        };
+        let permit = semaphore.clone().try_acquire_owned().ok()?;
+        Some(SseStreamPermit {
+            key,
+            semaphore,
+            limiter: self.clone(),
+            permit: Some(permit),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct SseStreamPermit {
+    key: String,
+    semaphore: Arc<Semaphore>,
+    limiter: SseStreamLimiter,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for SseStreamPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        let mut semaphores = self.limiter.semaphores.lock();
+        if self.semaphore.available_permits() == self.limiter.max_per_key
+            && Arc::strong_count(&self.semaphore) <= 2
+        {
+            semaphores.remove(&self.key);
+        }
+    }
+}
 
 #[derive(Clone)]
 struct MakeRequestUlid;
@@ -191,6 +254,7 @@ pub fn router_with_ops(
     ops: OpsState,
     cors_origins: &[String],
     siwe_state: Option<SiweState>,
+    sse_streams_per_key: usize,
 ) -> Router {
     let mut base = router_with_admin(
         handler,
@@ -225,7 +289,9 @@ pub fn router_with_ops(
     let traced = base
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUlid));
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUlid))
+        .layer(Extension(ratelimit.trusted_proxies().clone()))
+        .layer(Extension(SseStreamLimiter::new(sse_streams_per_key)));
 
     if cors_origins.is_empty() {
         return traced;
@@ -794,11 +860,33 @@ async fn rest_get_auction_history(
 async fn rest_stream_auctions(
     State(h): State<SharedHandler>,
     Query(q): Query<AuctionStreamQuery>,
+    headers: HeaderMap,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
+    limiter: Option<Extension<SseStreamLimiter>>,
+    trusted: Option<Extension<TrustedProxies>>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let pair = if q.pair.is_empty() {
         String::new()
     } else {
         validate_pair_known(&h.engine, &q.pair)?.into_string()
+    };
+    let permit = if let Some(Extension(limiter)) = limiter {
+        let trusted_default = TrustedProxies::none();
+        let trusted = trusted
+            .as_ref()
+            .map(|Extension(t)| t)
+            .unwrap_or(&trusted_default);
+        let identity = identity.as_ref().map(|Extension(i)| i);
+        let peer = peer.map(|ConnectInfo(addr)| addr);
+        let key = client_key(identity, &headers, peer, trusted);
+        Some(limiter.try_acquire(key).ok_or_else(|| {
+            ApiError(tonic::Status::resource_exhausted(
+                "too many open auction streams for client key",
+            ))
+        })?)
+    } else {
+        None
     };
     let rx = h.engine.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(move |item| {
@@ -820,6 +908,10 @@ async fn rest_stream_auctions(
                 }
             }
         }
+    });
+    let stream = stream.map(move |event| {
+        let _permit = &permit;
+        event
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }

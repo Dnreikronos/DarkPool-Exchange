@@ -27,8 +27,11 @@ use dp_event::{
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -46,6 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     cfg.validate_siwe_config()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     cfg.validate_admin_auth()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_server_limits()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     cfg.validate_settlement_transport()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
@@ -463,6 +468,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
+    let request_timeout = cfg.request_timeout;
+    let http2_max_concurrent_streams = cfg.http2_max_concurrent_streams;
+    let global_concurrency = Arc::new(Semaphore::new(cfg.max_concurrent_requests));
+    info!(
+        request_timeout = ?request_timeout,
+        max_concurrent_requests = cfg.max_concurrent_requests,
+        http2_max_concurrent_streams,
+        sse_streams_per_key = cfg.sse_streams_per_key,
+        "server request guardrails enabled"
+    );
+
     let auth = AuthLayer::from_core(auth_core.clone());
     let ratelimit = RateLimitLayer::from_core(rl_core.clone());
 
@@ -477,6 +493,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let grpc_addr = cfg.grpc_addr;
     let grpc_auth = auth.clone();
     let grpc_rl = ratelimit.clone();
+    let grpc_concurrency = GlobalConcurrencyLimitLayer::with_semaphore(global_concurrency.clone());
+    let grpc_request_timeout = request_timeout;
+    let grpc_http2_max_concurrent_streams = http2_max_concurrent_streams;
     // The admin service is intentionally NOT mounted on the gRPC port:
     // the gRPC listener authenticates with the trader API key set, which
     // would let any trader call RegisterPair/SuspendPair/DelistPair if the
@@ -488,7 +507,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let grpc_tls_enabled = grpc_tls.is_some();
     let grpc_handle = tokio::spawn(async move {
         info!(addr = %grpc_addr, tls = grpc_tls_enabled, "gRPC server starting");
-        let mut builder = Server::builder();
+        let mut builder = Server::builder()
+            .timeout(grpc_request_timeout)
+            .max_concurrent_streams(Some(grpc_http2_max_concurrent_streams))
+            .layer(grpc_concurrency);
         if let Some(tls) = grpc_tls {
             builder = builder
                 .tls_config(tls)
@@ -559,7 +581,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ops,
         &cors_origins,
         siwe_state,
-    );
+        cfg.sse_streams_per_key,
+    )
+    .layer(RequestBodyTimeoutLayer::new(request_timeout))
+    .layer(TimeoutLayer::new(request_timeout))
+    .layer(GlobalConcurrencyLimitLayer::with_semaphore(
+        global_concurrency.clone(),
+    ));
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
     let rest_tls = tls::axum_rustls_config(&tls_mode).await?;
@@ -583,16 +611,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
         let result = match rest_tls {
             Some(cfg) => {
-                axum_server::bind_rustls(http_addr, cfg)
-                    .handle(server_handle)
-                    .serve(make_svc)
-                    .await
+                let mut server = axum_server::bind_rustls(http_addr, cfg);
+                server
+                    .http_builder()
+                    .http1()
+                    .timer(hyper_util::rt::TokioTimer::new())
+                    .header_read_timeout(Some(request_timeout));
+                server
+                    .http_builder()
+                    .http2()
+                    .max_concurrent_streams(Some(http2_max_concurrent_streams));
+                server.handle(server_handle).serve(make_svc).await
             }
             None => {
-                axum_server::bind(http_addr)
-                    .handle(server_handle)
-                    .serve(make_svc)
-                    .await
+                let mut server = axum_server::bind(http_addr);
+                server
+                    .http_builder()
+                    .http1()
+                    .timer(hyper_util::rt::TokioTimer::new())
+                    .header_read_timeout(Some(request_timeout));
+                server
+                    .http_builder()
+                    .http2()
+                    .max_concurrent_streams(Some(http2_max_concurrent_streams));
+                server.handle(server_handle).serve(make_svc).await
             }
         };
         result.map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
