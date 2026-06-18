@@ -8,8 +8,9 @@ pre-trade positions.
 
 This crate does not prove full matching fairness. Volume-maximising price
 selection, completeness/no-censorship, and price-time priority are implemented
-by the off-circuit matcher and are auditable from the event log; they are not
-constraints in the current circuit. See [`CIRCUIT.md`](./CIRCUIT.md).
+by the off-circuit matcher and are replay-auditable only with decrypted order
+contents/operator-side access; they are not constraints in the current circuit.
+See [`CIRCUIT.md`](./CIRCUIT.md).
 
 ## Layout
 

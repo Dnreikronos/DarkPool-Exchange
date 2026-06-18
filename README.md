@@ -25,7 +25,7 @@ Three things we care about:
 | Matching model | Continuous on-chain (expensive) | Off-chain periodic batch auction |
 | Price discovery | Visible order book | Clearing price after each auction round |
 | Settlement | Immediate per-order | Batched, gas-efficient |
-| Trust model | Trustless (but transparent) | Semi-trusted operator + ZK proof of correct execution |
+| Trust model | Trustless (but transparent) | Semi-trusted operator + ZK proof of fill validity |
 | Stack | Solidity only | Rust + Solidity + ZK |
 
 ---
@@ -120,7 +120,7 @@ flowchart TB
 ### Trust model & privacy
 
 - Nobody outside the operator can determine the price or size of a pending order from on-chain data.
-- The matching engine operator **can** see decrypted order contents. The ZK proof binds settlement to valid crossing fills at one clearing price and to orders in the admitted set, but it does **not** prove the off-circuit matcher chose the volume-maximizing price, matched every eligible order, or honored price-time priority. Those fairness properties come from deterministic engine code plus event-log/watchtower auditability, not from the current circuit.
+- The matching engine operator **can** see decrypted order contents. The ZK proof binds settlement to valid crossing fills at one clearing price and to orders in the admitted set, but it does **not** prove the off-circuit matcher chose the volume-maximizing price, matched every eligible order, or honored price-time priority. Those fairness properties are implemented by deterministic engine code and can be replay-audited only with decrypted order contents/operator-side access; external observers cannot verify them from the ciphertext-only event log or the current circuit.
 - After settlement, the clearing price and trade amounts become visible but individual orders are unlinkable to wallet addresses without additional info.
 
 ---

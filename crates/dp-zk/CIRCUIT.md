@@ -78,8 +78,8 @@ no off-log order was matched and the operator did not misrepresent the
 admitted set.
 
 **Scope boundary.** This binds *matched ⊆ admitted set* (no injection) and
-makes the input set transparent. It does **not** prove the full fairness of the
-off-circuit auction:
+makes the committed input set transparent. It does **not** prove the full
+fairness of the off-circuit auction:
 
 - **No volume-maximisation proof.** The circuit checks `bid_limit >=
   clearing_price >= ask_limit` for each supplied fill and checks that every
@@ -87,14 +87,16 @@ off-circuit auction:
   order book to prove this price maximizes matched volume.
 - **No completeness / no-censorship proof.** Extra admitted orders may remain
   unmatched. Full maximal-matching is prohibitively expensive in this circuit,
-  so censorship-by-omission remains detectable only by an external observer
-  comparing the public book against the clearing price.
+  so censorship-by-omission is replay-auditable only with decrypted order
+  contents/operator-side access, not by an external observer reading the
+  ciphertext-only log.
 - **No price-time priority proof.** The matcher uses `seq` off-circuit, but
   `seq` is not a witness or public input here, so the proof cannot show that
   higher-priority eligible orders were filled before lower-priority orders.
 
-Those properties are enforced by `dp-auction` and are replayable from the
-event log, but they are not cryptographic constraints of the current proof.
+Those properties are implemented by `dp-auction` and are replayable only with
+decrypted order contents/operator-side access, but they are not cryptographic
+constraints of the current proof.
 
 ## Poseidon vs. Pedersen
 

@@ -26,7 +26,7 @@ The target audience is protocols and institutions that need MEV protection and o
 | Matching model | Continuous on-chain (expensive, front-runnable) | Off-chain periodic batch auction |
 | Price discovery | Visible order book | Clearing price revealed after each auction round |
 | Settlement | Immediate per-order | Batched, gas-efficient |
-| Trust model | Trustless (but transparent) | Semi-trusted operator with ZK proof of correct execution |
+| Trust model | Trustless (but transparent) | Semi-trusted operator with ZK proof of fill validity |
 | Stack complexity | Solidity only | Rust + Solidity + ZK |
 
 ### 1.2 Trust Model
@@ -36,10 +36,10 @@ The matching engine operator is **semi-trusted**:
 - The trader encrypts the full order (pair, side, price, size) to the operator's public key before submission.
 - The operator decrypts and matches orders in cleartext internally.
 - The operator generates a ZK proof that settled fills are valid, use a uniform crossing price, and are members of the admitted order set.
-- The operator **can** see order contents. The current proof does not enforce volume-maximizing price selection, complete matching of every eligible order, or price-time priority; those properties are enforced by the Rust matcher and can be audited from the event log, but a malicious operator can deviate without this proof failing.
+- The operator **can** see order contents. The current proof does not enforce volume-maximizing price selection, complete matching of every eligible order, or price-time priority; those properties are implemented by the Rust matcher and can be replay-audited only with decrypted order contents/operator-side access. A malicious operator can deviate without this proof failing.
 - Privacy is against **external observers** (other traders, on-chain watchers, MEV bots), not against the operator itself.
 
-This mirrors how institutional dark pools work in traditional finance, where the venue operator sees order flow and remains part of the trust model. In this implementation, cryptography constrains settlement validity, while fairness of the matching policy is an auditable off-circuit invariant rather than a circuit-enforced one.
+This mirrors how institutional dark pools work in traditional finance, where the venue operator sees order flow and remains part of the trust model. In this implementation, cryptography constrains settlement validity, while fairness of the matching policy is an operator-side replay invariant rather than a circuit-enforced one.
 
 ---
 

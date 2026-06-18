@@ -1252,12 +1252,10 @@ mod tests {
         );
     }
 
-    /// Scope boundary for #223: a uniform price only has to cross each
-    /// supplied pair. The circuit does not recompute the admitted book's
-    /// volume-maximising price; it accepts any uniform clearing price inside
-    /// each matched pair's limit interval.
+    /// Scope boundary for #223: the circuit checks only uniform crossing
+    /// prices, not whether the chosen price maximizes admitted-book volume.
     #[test]
-    fn step_accepts_uniform_crossing_price_without_argmax_proof() {
+    fn step_accepts_uniform_price_inside_limits() {
         let (w, prices, sizes) = two_match_witness(Decimal::from(96), Decimal::from(96));
         let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let z_0 = initial_z(&ext);
@@ -1269,11 +1267,10 @@ mod tests {
         );
     }
 
-    /// Scope boundary for #223: the admitted set can contain unmatched orders.
-    /// Membership proves every settled leg came from the admitted set, but it
-    /// does not prove completeness, no-censorship, or price-time priority.
+    /// Scope boundary for #223: membership proves every settled leg came from
+    /// the admitted set, but it does not prove every admitted order was matched.
     #[test]
-    fn step_accepts_unmatched_admitted_orders_without_priority_proof() {
+    fn step_accepts_admitted_superset_without_completeness_check() {
         let (w, prices, sizes) = sample_witness();
         let base = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let mut admitted: Vec<Fr> = base
