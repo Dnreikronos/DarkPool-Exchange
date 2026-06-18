@@ -23,6 +23,10 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
         EngineError::Validation(e @ DarkPoolError::DuplicateOrder) => {
             Status::already_exists(e.to_string())
         }
+        EngineError::Validation(
+            e @ (DarkPoolError::TooManyRestingOrdersForTrader { .. }
+            | DarkPoolError::OrderBookCapacityExceeded { .. }),
+        ) => Status::resource_exhausted(e.to_string()),
         EngineError::Decrypt(CryptoError::DeserializationFailed(e)) => {
             Status::invalid_argument(e.to_string())
         }
@@ -36,6 +40,7 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
             | DarkPoolError::OrderPriceNotOnTick { .. }
             | DarkPoolError::SaltInvalid
             | DarkPoolError::InvalidOrderProof
+            | DarkPoolError::EncryptedPayloadTooLarge { .. }
             | DarkPoolError::InvalidPair(_)),
         ) => Status::invalid_argument(e.to_string()),
         other => Status::internal(other.to_string()),
@@ -97,6 +102,7 @@ mod tests {
             },
             DarkPoolError::SaltInvalid,
             DarkPoolError::InvalidOrderProof,
+            DarkPoolError::EncryptedPayloadTooLarge { max: 128 * 1024 },
             DarkPoolError::InvalidPair("bad".into()),
         ] {
             let s = engine_error_to_status(EngineError::Validation(err));
@@ -119,6 +125,17 @@ mod tests {
     fn duplicate_order_maps_to_already_exists() {
         let s = engine_error_to_status(EngineError::Validation(DarkPoolError::DuplicateOrder));
         assert_eq!(s.code(), Code::AlreadyExists);
+    }
+
+    #[test]
+    fn capacity_errors_map_to_resource_exhausted() {
+        for err in [
+            DarkPoolError::TooManyRestingOrdersForTrader { max: 128 },
+            DarkPoolError::OrderBookCapacityExceeded { max: 16 * 1024 },
+        ] {
+            let s = engine_error_to_status(EngineError::Validation(err));
+            assert_eq!(s.code(), Code::ResourceExhausted);
+        }
     }
 
     #[test]
