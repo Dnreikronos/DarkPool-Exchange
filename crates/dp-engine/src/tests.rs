@@ -6,7 +6,7 @@ use dp_aggregator::ProofAggregator;
 use dp_crypto::{DecryptedOrder, SnapshotCipher};
 use dp_event::{EventData, FileStore, MemStore, Store};
 use dp_settlement::{BalanceOracle, SettlementError, Submitter};
-use dp_types::{DarkPoolError, EventType, Side};
+use dp_types::{DarkPoolError, EventType, Order, Side};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -127,6 +127,174 @@ async fn place_order_succeeds() {
     assert_eq!(order.pair, "BTC-USD");
     assert_eq!(order.side, Side::Buy);
     assert_eq!(engine.active_order_count(), 1);
+}
+
+#[tokio::test]
+async fn place_order_rejects_oversized_encrypted_payload_in_engine() {
+    let (engine, _store) = make_engine();
+    let err = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            vec![0u8; crate::engine::MAX_ENCRYPTED_PAYLOAD_BYTES + 1],
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::EncryptedPayloadTooLarge { .. })
+    ));
+    assert_eq!(engine.active_order_count(), 0);
+    assert_eq!(engine.inner.secrets.lock().len(), 0);
+}
+
+#[tokio::test]
+async fn place_order_enforces_per_trader_active_order_cap() {
+    let (engine, _store) = make_engine();
+    let trader = Address::repeat_byte(0xA5);
+    let mut first_order = None;
+
+    for i in 0..crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER {
+        let order = place_plaintext_order_as(
+            &engine,
+            trader,
+            "BTC-USD",
+            Side::Buy,
+            dec(1_000 + i as i64),
+            dec(1),
+            "key-cap",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        first_order.get_or_insert(order.id);
+    }
+
+    let err = place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(2_000),
+        dec(1),
+        "key-cap",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::TooManyRestingOrdersForTrader { .. })
+    ));
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+    assert_eq!(
+        engine.inner.secrets.lock().len(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+
+    engine.cancel_order(first_order.unwrap(), None).unwrap();
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER - 1
+    );
+    assert_eq!(
+        engine.inner.secrets.lock().len(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER - 1
+    );
+
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(2_001),
+        dec(1),
+        "key-cap",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+}
+
+#[tokio::test]
+async fn persist_order_enforces_process_active_order_cap() {
+    let (engine, store) = make_engine();
+    let now = chrono::Utc::now();
+
+    {
+        let state = engine.inner.state.lock();
+        for i in 0..crate::engine::MAX_ACTIVE_ORDERS {
+            let mut trader = [0u8; 20];
+            trader[19] = (i / crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER) as u8;
+
+            state.book.insert_order(Order {
+                id: Uuid::new_v4(),
+                trader: Address::from(trader),
+                pair: "BTC-USD".into(),
+                side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+                price: dec(10_000 + i as i64),
+                size: dec(1),
+                remaining_size: dec(1),
+                commitment_key: format!("seed-{i}"),
+                encrypted_payload: Vec::new(),
+                submitted_at: now,
+                expires_at: now + chrono::Duration::seconds(600),
+                seq: i as u64 + 1,
+            });
+        }
+    }
+
+    let err = engine
+        .persist_order_placed(
+            Order {
+                id: Uuid::new_v4(),
+                trader: Address::repeat_byte(0xFE),
+                pair: "BTC-USD".into(),
+                side: Side::Buy,
+                price: dec(30_000),
+                size: dec(1),
+                remaining_size: dec(1),
+                commitment_key: "over-cap".into(),
+                encrypted_payload: Vec::new(),
+                submitted_at: now,
+                expires_at: now + chrono::Duration::seconds(600),
+                seq: 0,
+            },
+            crate::engine::OrderSecrets {
+                salt: [1u8; 32],
+                trader_id: [2u8; 32],
+                commitment: [3u8; 32],
+                nullifier: [4u8; 32],
+                balance: dec(1_000),
+                position: 0,
+            },
+            vec![0u8; 32],
+            vec![],
+            vec![9, 9, 9],
+            [9u8; 32],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::OrderBookCapacityExceeded { .. })
+    ));
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS
+    );
+    assert_eq!(engine.inner.secrets.lock().len(), 0);
+    assert_eq!(count_events(store.as_ref(), EventType::OrderPlaced), 0);
 }
 
 #[tokio::test]
@@ -1591,6 +1759,17 @@ mod delist_toctou {
         }
     }
 
+    fn dummy_secrets() -> crate::engine::OrderSecrets {
+        crate::engine::OrderSecrets {
+            salt: [1u8; 32],
+            trader_id: [2u8; 32],
+            commitment: [3u8; 32],
+            nullifier: [4u8; 32],
+            balance: dec(1_000),
+            position: 0,
+        }
+    }
+
     // Simulates the lost race: the order passed its earlier `Active` check,
     // but by the time `persist_order_placed` takes the lock the pair has been
     // delisted. The in-lock re-check must reject and insert nothing.
@@ -1603,6 +1782,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("BTC-USD"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
@@ -1638,6 +1818,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("BTC-USD"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
@@ -1660,6 +1841,7 @@ mod delist_toctou {
         let err = engine
             .persist_order_placed(
                 dummy_order("DOGE/USDC"),
+                dummy_secrets(),
                 vec![0u8; 32],
                 vec![],
                 vec![],
