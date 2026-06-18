@@ -4,6 +4,7 @@ use std::time::Duration;
 use alloy_primitives::Address;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::Extension;
 use dp_api::auth::AuthenticatedIdentity;
 use dp_api::handler::ApiHandler;
 use dp_api::rest;
@@ -444,6 +445,63 @@ async fn sse_stream_no_pair_filter_returns_200() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sse_stream_limit_is_per_client_key_and_releases_on_drop() {
+    let app = new_app().layer(Extension(rest::SseStreamLimiter::new(1)));
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let different_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "other-stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(different_key.status(), StatusCode::OK);
+
+    drop(first);
+    let after_drop = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_drop.status(), StatusCode::OK);
 }
 
 #[tokio::test]

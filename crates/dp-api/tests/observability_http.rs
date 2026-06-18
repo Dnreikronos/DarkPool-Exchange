@@ -63,6 +63,7 @@ fn make_router_with_rl(probes: ReadinessProbes, rl: RateLimitCore) -> axum::Rout
         },
         &[],
         None,
+        4,
     )
 }
 
