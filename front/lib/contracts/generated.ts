@@ -63,7 +63,7 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'auctionId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'auctionToSession',
     outputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
     stateMutability: 'view',
@@ -242,21 +242,21 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'sessionId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'sessionSettled',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'sessionId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'sessionSettlementAcc',
     outputs: [{ name: '', internalType: 'uint256', type: 'uint256' }],
     stateMutability: 'view',
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'sessionId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'sessionSubmitted',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
@@ -315,6 +315,13 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
+    inputs: [],
+    name: 'settlementDomain',
+    outputs: [{ name: '', internalType: 'uint256', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     inputs: [
       { name: 'sessionId', internalType: 'bytes32', type: 'bytes32' },
       { name: 'auctionId', internalType: 'bytes32', type: 'bytes32' },
@@ -340,14 +347,14 @@ export const darkPoolAbi = [
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'auctionId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'settledAuction',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
   },
   {
     type: 'function',
-    inputs: [{ name: '', internalType: 'bytes32', type: 'bytes32' }],
+    inputs: [{ name: 'batchId', internalType: 'bytes32', type: 'bytes32' }],
     name: 'settledBatch',
     outputs: [{ name: '', internalType: 'bool', type: 'bool' }],
     stateMutability: 'view',
