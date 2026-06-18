@@ -871,23 +871,24 @@ async fn rest_stream_auctions(
     } else {
         validate_pair_known(&h.engine, &q.pair)?.into_string()
     };
-    let permit = if let Some(Extension(limiter)) = limiter {
-        let trusted_default = TrustedProxies::none();
-        let trusted = trusted
-            .as_ref()
-            .map(|Extension(t)| t)
-            .unwrap_or(&trusted_default);
-        let identity = identity.as_ref().map(|Extension(i)| i);
-        let peer = peer.map(|ConnectInfo(addr)| addr);
-        let key = client_key(identity, &headers, peer, trusted);
-        Some(limiter.try_acquire(key).ok_or_else(|| {
-            ApiError(tonic::Status::resource_exhausted(
-                "too many open auction streams for client key",
-            ))
-        })?)
-    } else {
-        None
+    let Some(Extension(limiter)) = limiter else {
+        return Err(ApiError(tonic::Status::internal(
+            "auction stream limiter is not configured",
+        )));
     };
+    let trusted_default = TrustedProxies::none();
+    let trusted = trusted
+        .as_ref()
+        .map(|Extension(t)| t)
+        .unwrap_or(&trusted_default);
+    let identity = identity.as_ref().map(|Extension(i)| i);
+    let peer = peer.map(|ConnectInfo(addr)| addr);
+    let key = client_key(identity, &headers, peer, trusted);
+    let permit = Some(limiter.try_acquire(key).ok_or_else(|| {
+        ApiError(tonic::Status::resource_exhausted(
+            "too many open auction streams for client key",
+        ))
+    })?);
     let rx = h.engine.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(move |item| {
         let pair = pair.clone();
