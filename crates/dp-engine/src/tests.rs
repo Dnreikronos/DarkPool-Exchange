@@ -130,6 +130,103 @@ async fn place_order_succeeds() {
 }
 
 #[tokio::test]
+async fn place_order_rejects_oversized_encrypted_payload_in_engine() {
+    let (engine, _store) = make_engine();
+    let err = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            vec![0u8; crate::engine::MAX_ENCRYPTED_PAYLOAD_BYTES + 1],
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::EncryptedPayloadTooLarge { .. })
+    ));
+    assert_eq!(engine.active_order_count(), 0);
+    assert_eq!(engine.inner.secrets.lock().len(), 0);
+}
+
+#[tokio::test]
+async fn place_order_enforces_per_trader_active_order_cap() {
+    let (engine, _store) = make_engine();
+    let trader = Address::repeat_byte(0xA5);
+    let mut first_order = None;
+
+    for i in 0..crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER {
+        let order = place_plaintext_order_as(
+            &engine,
+            trader,
+            "BTC-USD",
+            Side::Buy,
+            dec(1_000 + i as i64),
+            dec(1),
+            "key-cap",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        first_order.get_or_insert(order.id);
+    }
+
+    let err = place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(2_000),
+        dec(1),
+        "key-cap",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::TooManyRestingOrdersForTrader { .. })
+    ));
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+    assert_eq!(
+        engine.inner.secrets.lock().len(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+
+    engine.cancel_order(first_order.unwrap(), None).unwrap();
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER - 1
+    );
+    assert_eq!(
+        engine.inner.secrets.lock().len(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER - 1
+    );
+
+    place_plaintext_order_as(
+        &engine,
+        trader,
+        "BTC-USD",
+        Side::Buy,
+        dec(2_001),
+        dec(1),
+        "key-cap",
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        engine.active_order_count(),
+        crate::engine::MAX_ACTIVE_ORDERS_PER_TRADER
+    );
+}
+
+#[tokio::test]
 async fn place_order_fails_closed_when_balance_oracle_errors() {
     let (engine, _store) = make_engine();
     engine.set_balance_oracle(Arc::new(FailingOracle));
