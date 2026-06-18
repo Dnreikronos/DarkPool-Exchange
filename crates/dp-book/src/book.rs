@@ -199,6 +199,24 @@ impl OrderBook {
             .sum()
     }
 
+    pub fn active_order_count_for_trader(&self, trader: &[u8]) -> usize {
+        let inner = self.inner.read();
+        inner
+            .books
+            .values()
+            .map(|b| {
+                b.bids
+                    .values()
+                    .filter(|o| o.trader.as_slice() == trader)
+                    .count()
+                    + b.asks
+                        .values()
+                        .filter(|o| o.trader.as_slice() == trader)
+                        .count()
+            })
+            .sum()
+    }
+
     pub fn len_for(&self, pair: &str) -> usize {
         let inner = self.inner.read();
         inner

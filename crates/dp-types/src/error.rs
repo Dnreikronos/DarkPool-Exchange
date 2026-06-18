@@ -50,6 +50,21 @@ pub enum DarkPoolError {
     /// fields and client salt under the operator-pinned canonical verifying key.
     #[error("invalid order proof")]
     InvalidOrderProof,
+    /// The encrypted payload is too large to retain in the resting book or
+    /// durable event log. API handlers also reject this earlier, but the engine
+    /// owns the invariant for every caller path (#225).
+    #[error("encrypted_payload exceeds max size ({max} bytes)")]
+    EncryptedPayloadTooLarge { max: usize },
+    /// A single trader has reached the active resting-order ceiling. This
+    /// bounds per-trader book and ZK-secret growth until orders match, expire,
+    /// or are cancelled (#225).
+    #[error("too many resting orders for trader (max {max})")]
+    TooManyRestingOrdersForTrader { max: usize },
+    /// Process-wide safety valve for the live book. The per-trader cap limits a
+    /// single address, while this keeps aggregate book/secrets memory bounded
+    /// even across many traders (#225).
+    #[error("order book capacity exceeded (max {max})")]
+    OrderBookCapacityExceeded { max: usize },
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use crate::pb::PlaceOrderRequest;
 //     are well under 1 KB; 128 KiB tolerates future schema growth and any
 //     framing overhead.
 pub const MAX_PROOF_BYTES: usize = 64 * 1024;
-pub const MAX_CIPHERTEXT_BYTES: usize = 128 * 1024;
+pub const MAX_CIPHERTEXT_BYTES: usize = dp_engine::MAX_ENCRYPTED_PAYLOAD_BYTES;
 
 // Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON
 // envelope. Also caps the gRPC decode frame before prost allocates and
