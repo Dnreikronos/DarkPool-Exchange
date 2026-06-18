@@ -689,6 +689,21 @@ async fn stream_auctions_receives_event() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stream_auctions_ends_after_configured_timeout() {
+    let h = new_handler().with_auction_stream_timeout(Duration::from_millis(10));
+    let mut stream = h
+        .stream_auctions(Request::new(StreamAuctionsRequest { pair: "".into() }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let item = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .unwrap();
+    assert!(item.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stream_auctions_filters_by_pair() {
     let h = new_handler();
     h.engine

@@ -98,6 +98,32 @@ pub struct Config {
     #[arg(long, env = "DARKPOOL_RATE_STALE_AFTER", default_value = "10m", value_parser = parse_duration)]
     pub rate_stale_after: Duration,
 
+    /// Per-request handler timeout applied to REST and gRPC calls. Also caps
+    /// gRPC auction stream lifetime; REST streaming responses are guarded
+    /// separately by the SSE stream cap.
+    #[arg(long, env = "DARKPOOL_REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    pub request_timeout: Duration,
+
+    /// Maximum number of request handlers running at once across both
+    /// listeners. This is a process-wide cap, not a per-connection cap.
+    #[arg(long, env = "DARKPOOL_MAX_CONCURRENT_REQUESTS", default_value = "1024")]
+    pub max_concurrent_requests: usize,
+
+    /// Maximum concurrent HTTP/2 streams accepted on each listener
+    /// connection. gRPC is HTTP/2-only; the REST listener also applies this
+    /// when clients negotiate h2.
+    #[arg(
+        long,
+        env = "DARKPOOL_HTTP2_MAX_CONCURRENT_STREAMS",
+        default_value = "128"
+    )]
+    pub http2_max_concurrent_streams: u32,
+
+    /// Maximum simultaneously open auction SSE streams per resolved client
+    /// key. Key derivation mirrors the request rate limiter.
+    #[arg(long, env = "DARKPOOL_SSE_STREAMS_PER_KEY", default_value = "4")]
+    pub sse_streams_per_key: usize,
+
     /// Comma/whitespace-separated CIDRs or IPs of trusted reverse
     /// proxies / load balancers. When the TCP peer matches one of these,
     /// rate limiting and the SIWE nonce cap key on the client IP from
@@ -406,6 +432,24 @@ impl Config {
                  local dev."
                     .into(),
             );
+        }
+        Ok(())
+    }
+
+    /// Fail closed on limits that would make the server unusable or leave a
+    /// requested guardrail disabled.
+    pub fn validate_server_limits(&self) -> Result<(), String> {
+        if self.request_timeout.is_zero() {
+            return Err("DARKPOOL_REQUEST_TIMEOUT must be greater than zero".into());
+        }
+        if self.max_concurrent_requests == 0 {
+            return Err("DARKPOOL_MAX_CONCURRENT_REQUESTS must be greater than zero".into());
+        }
+        if self.http2_max_concurrent_streams == 0 {
+            return Err("DARKPOOL_HTTP2_MAX_CONCURRENT_STREAMS must be greater than zero".into());
+        }
+        if self.sse_streams_per_key == 0 {
+            return Err("DARKPOOL_SSE_STREAMS_PER_KEY must be greater than zero".into());
         }
         Ok(())
     }

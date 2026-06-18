@@ -15,6 +15,10 @@ fn clear_env() {
         "DARKPOOL_RATE_LIMIT",
         "DARKPOOL_RATE_BURST",
         "DARKPOOL_RATE_STALE_AFTER",
+        "DARKPOOL_REQUEST_TIMEOUT",
+        "DARKPOOL_MAX_CONCURRENT_REQUESTS",
+        "DARKPOOL_HTTP2_MAX_CONCURRENT_STREAMS",
+        "DARKPOOL_SSE_STREAMS_PER_KEY",
         "DARKPOOL_EVENT_LOG",
         "DARKPOOL_EVENT_DB",
         "DARKPOOL_OPERATOR_KEY",
@@ -48,6 +52,10 @@ fn defaults() {
     assert_eq!(cfg.rate_limit, 10.0);
     assert_eq!(cfg.rate_burst, 20.0);
     assert_eq!(cfg.rate_stale_after, Duration::from_secs(600));
+    assert_eq!(cfg.request_timeout, Duration::from_secs(30));
+    assert_eq!(cfg.max_concurrent_requests, 1024);
+    assert_eq!(cfg.http2_max_concurrent_streams, 128);
+    assert_eq!(cfg.sse_streams_per_key, 4);
     assert_eq!(cfg.submit_gas, 500_000);
 }
 
@@ -57,10 +65,18 @@ fn env_fills_defaults() {
     clear_env();
     std::env::set_var("DARKPOOL_GRPC_ADDR", "127.0.0.1:1111");
     std::env::set_var("DARKPOOL_RATE_LIMIT", "42.5");
+    std::env::set_var("DARKPOOL_REQUEST_TIMEOUT", "7s");
+    std::env::set_var("DARKPOOL_MAX_CONCURRENT_REQUESTS", "33");
+    std::env::set_var("DARKPOOL_HTTP2_MAX_CONCURRENT_STREAMS", "11");
+    std::env::set_var("DARKPOOL_SSE_STREAMS_PER_KEY", "2");
     std::env::set_var("DARKPOOL_API_KEYS", "k1,k2,k3");
     let cfg = Config::try_parse_from(["bin"]).unwrap();
     assert_eq!(cfg.grpc_addr.to_string(), "127.0.0.1:1111");
     assert_eq!(cfg.rate_limit, 42.5);
+    assert_eq!(cfg.request_timeout, Duration::from_secs(7));
+    assert_eq!(cfg.max_concurrent_requests, 33);
+    assert_eq!(cfg.http2_max_concurrent_streams, 11);
+    assert_eq!(cfg.sse_streams_per_key, 2);
     assert_eq!(cfg.api_keys(), vec!["k1", "k2", "k3"]);
     clear_env();
 }
@@ -81,6 +97,40 @@ fn parses_humantime_duration() {
     clear_env();
     let cfg = Config::try_parse_from(["bin", "--auction-interval", "2m30s"]).unwrap();
     assert_eq!(cfg.auction_interval, Duration::from_secs(150));
+}
+
+#[test]
+#[serial]
+fn server_limit_validation_rejects_zero_values() {
+    clear_env();
+    let cases = [
+        (
+            "--request-timeout",
+            "0s",
+            "DARKPOOL_REQUEST_TIMEOUT must be greater than zero",
+        ),
+        (
+            "--max-concurrent-requests",
+            "0",
+            "DARKPOOL_MAX_CONCURRENT_REQUESTS must be greater than zero",
+        ),
+        (
+            "--http2-max-concurrent-streams",
+            "0",
+            "DARKPOOL_HTTP2_MAX_CONCURRENT_STREAMS must be greater than zero",
+        ),
+        (
+            "--sse-streams-per-key",
+            "0",
+            "DARKPOOL_SSE_STREAMS_PER_KEY must be greater than zero",
+        ),
+    ];
+
+    for (flag, value, expected) in cases {
+        let cfg = Config::try_parse_from(["bin", flag, value]).unwrap();
+        let err = cfg.validate_server_limits().unwrap_err();
+        assert_eq!(err, expected);
+    }
 }
 
 #[test]

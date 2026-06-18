@@ -4,6 +4,7 @@ use std::time::Duration;
 use alloy_primitives::Address;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::Extension;
 use dp_api::auth::AuthenticatedIdentity;
 use dp_api::handler::ApiHandler;
 use dp_api::rest;
@@ -410,7 +411,8 @@ async fn sse_stream_returns_event_stream_content_type() {
     let engine = Engine::new(store, Duration::from_secs(1));
     engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
     let handler = ApiHandler::new(engine);
-    let app = rest::router(std::sync::Arc::new(handler));
+    let app =
+        rest::router(std::sync::Arc::new(handler)).layer(Extension(rest::SseStreamLimiter::new(4)));
 
     let resp = app
         .oneshot(
@@ -433,7 +435,7 @@ async fn sse_stream_returns_event_stream_content_type() {
 
 #[tokio::test]
 async fn sse_stream_no_pair_filter_returns_200() {
-    let app = new_app();
+    let app = new_app().layer(Extension(rest::SseStreamLimiter::new(4)));
     let resp = app
         .oneshot(
             Request::builder()
@@ -447,8 +449,83 @@ async fn sse_stream_no_pair_filter_returns_200() {
 }
 
 #[tokio::test]
+async fn sse_stream_fails_closed_without_limiter() {
+    let app = new_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_to_json(resp.into_body()).await;
+    assert_eq!(json["message"], "auction stream limiter is not configured");
+}
+
+#[tokio::test]
+async fn sse_stream_limit_is_per_client_key_and_releases_on_drop() {
+    let app = new_app().layer(Extension(rest::SseStreamLimiter::new(1)));
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let different_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "other-stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(different_key.status(), StatusCode::OK);
+
+    drop(first);
+    let after_drop = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_drop.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn sse_stream_receives_auction_events() {
     let (app, engine) = registered_app();
+    let app = app.layer(Extension(rest::SseStreamLimiter::new(4)));
 
     // Place crossing orders so the auction tick produces a match. Distinct
     // traders per leg: self-trade prevention keys on `trader` (#168), so a
