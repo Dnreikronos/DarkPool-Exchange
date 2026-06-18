@@ -615,6 +615,19 @@
   },
   {
     "type": "function",
+    "name": "settlementDomain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "settleAuction",
     "inputs": [
       {
