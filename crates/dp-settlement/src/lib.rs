@@ -64,6 +64,8 @@ pub struct SubmitSessionParams {
 pub enum SettlementError {
     #[error("too many matches: {count} exceeds max {}", abi::MAX_MATCHES_PER_BATCH)]
     TooManyMatches { count: usize },
+    #[error("invalid proof length: expected {expected} bytes, got {actual}")]
+    InvalidProofLength { expected: usize, actual: usize },
     #[error("negative amount")]
     NegativeAmount,
     #[error("precision loss converting to wei")]
