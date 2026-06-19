@@ -361,7 +361,8 @@ async fn router_with_middleware_enforces_api_key() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // With api key in query param → 200
+    // Query-string api keys must never authenticate. They leak through
+    // browser history, Referer headers, and proxy logs.
     let resp = app
         .clone()
         .oneshot(
@@ -372,10 +373,9 @@ async fn router_with_middleware_enforces_api_key() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
-    // With percent-encoded api key in query param → 200
-    // "mw-key" percent-encoded: "mw%2Dkey"
+    // Percent-encoding must not make query-string credentials acceptable.
     let resp = app
         .oneshot(
             Request::builder()
@@ -385,7 +385,7 @@ async fn router_with_middleware_enforces_api_key() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ---------- SSE auction stream ----------
