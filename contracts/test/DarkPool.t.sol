@@ -53,6 +53,8 @@ contract DarkPoolTest is Test {
     // compression tag (02/03) followed by 32 bytes of X coordinate.
     bytes initialPubkey =
         hex"0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798";
+    bytes uncompressedGeneratorPubkey =
+        hex"0479BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8";
 
     function setUp() public {
         verifier = new MockVerifier(true);
@@ -575,12 +577,7 @@ contract DarkPoolTest is Test {
     // --- setOperatorPubkey ---
 
     function test_setOperatorPubkey_storesAndEmits() public {
-        // Uncompressed SEC1 — 65 bytes (0x04 prefix + 32-byte X + 32-byte Y).
-        bytes memory next = new bytes(65);
-        next[0] = 0x04;
-        for (uint256 i = 1; i < 65; i++) {
-            next[i] = bytes1(uint8(i));
-        }
+        bytes memory next = uncompressedGeneratorPubkey;
         uint64 effectiveAt = uint64(block.timestamp + 600);
 
         vm.expectEmit(false, false, false, true);
@@ -627,21 +624,39 @@ contract DarkPoolTest is Test {
         pool.setOperatorPubkey(bad, uint64(block.timestamp));
     }
 
+    function test_setOperatorPubkey_badCompressedPoint_reverts() public {
+        // x = 0 has a valid compressed SEC1 tag/length but is not on secp256k1.
+        bytes memory bad = new bytes(33);
+        bad[0] = 0x02;
+        vm.expectRevert("bad pubkey point");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_outOfFieldCompressedPoint_reverts() public {
+        // x = p is correctly tagged/length-prefixed but is outside secp256k1's base field.
+        bytes memory bad = hex"02FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F";
+        vm.expectRevert("bad pubkey point");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
+    function test_setOperatorPubkey_badUncompressedPoint_reverts() public {
+        // x = 1, y = 1 is field-valid and correctly tagged but fails y^2 = x^3 + 7.
+        bytes memory bad = new bytes(65);
+        bad[0] = 0x04;
+        bad[32] = 0x01;
+        bad[64] = 0x01;
+        vm.expectRevert("bad pubkey point");
+        pool.setOperatorPubkey(bad, uint64(block.timestamp));
+    }
+
     function test_setOperatorPubkey_acceptsBothCompressedTags() public {
         // 0x02 and 0x03 (Y-parity) must both be accepted.
-        bytes memory withTwo = new bytes(33);
-        withTwo[0] = 0x02;
-        for (uint256 i = 1; i < 33; i++) {
-            withTwo[i] = bytes1(uint8(i));
-        }
+        bytes memory withTwo = initialPubkey;
         pool.setOperatorPubkey(withTwo, uint64(block.timestamp));
         assertEq(pool.operatorPubkey(), withTwo);
 
-        bytes memory withThree = new bytes(33);
+        bytes memory withThree = initialPubkey;
         withThree[0] = 0x03;
-        for (uint256 i = 1; i < 33; i++) {
-            withThree[i] = bytes1(uint8(i));
-        }
         pool.setOperatorPubkey(withThree, uint64(block.timestamp));
         assertEq(pool.operatorPubkey(), withThree);
     }
@@ -652,6 +667,13 @@ contract DarkPoolTest is Test {
             bad[i] = 0xff;
         }
         vm.expectRevert("bad pubkey tag");
+        new DarkPool(address(verifier), feeRecipient, bad);
+    }
+
+    function test_constructor_badPubkeyPoint_reverts() public {
+        bytes memory bad = new bytes(33);
+        bad[0] = 0x02;
+        vm.expectRevert("bad pubkey point");
         new DarkPool(address(verifier), feeRecipient, bad);
     }
 

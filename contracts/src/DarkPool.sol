@@ -32,6 +32,9 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     ///         sizes when the real decider replaces the stub (#210).
     uint256 public constant MAX_IVC_SETTLE_MATCHES = 32;
     uint256 private constant BPS_DENOMINATOR = 10_000;
+    uint256 private constant SECP256K1_P =
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F;
+    uint256 private constant SECP256K1_LEGENDRE_EXP = (SECP256K1_P - 1) / 2;
 
     /// @notice Bridges the on-chain amount domain (wei, `decimal * 1e18` as
     ///         produced by the operator's `decimal_to_wei`) to the circuit's 1e8
@@ -189,6 +192,7 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
             "bad pubkey len"
         );
         require(_validSec1Tag(operatorPubkey_), "bad pubkey tag");
+        require(_validSec1Point(operatorPubkey_), "bad pubkey point");
         verifier = IVerifier(verifier_);
         feeRecipient = feeRecipient_;
         operatorPubkey = operatorPubkey_;
@@ -617,13 +621,13 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
     /// @notice Publish a new operator ECIES pubkey.
     /// @dev The off-chain decrypter continues to accept the old key for
     ///      `MultiKeyDecrypter`-driven drain; this on-chain pointer is
-    ///      the discovery surface for clients. SEC1 length check is the
-    ///      same as the client-side validator (compressed 33 or
-    ///      uncompressed 65 bytes) so an operator typo surfaces here
-    ///      rather than as silent message loss.
+    ///      the discovery surface for clients. SEC1 length, tag, and
+    ///      secp256k1 on-curve checks surface operator typos here rather
+    ///      than as silent message loss.
     function setOperatorPubkey(bytes calldata newPubkey, uint64 effectiveAt) external onlyOwner {
         require(newPubkey.length == 33 || newPubkey.length == 65, "bad pubkey len");
         require(_validSec1Tag(newPubkey), "bad pubkey tag");
+        require(_validSec1Point(newPubkey), "bad pubkey point");
         bytes memory old = operatorPubkey;
         operatorPubkey = newPubkey;
         operatorPubkeyEffectiveAt = effectiveAt;
@@ -640,6 +644,54 @@ contract DarkPool is IDarkPool, Ownable2Step, ReentrancyGuard, Pausable {
             return tag == 0x02 || tag == 0x03;
         }
         return tag == 0x04;
+    }
+
+    /// @dev Full secp256k1 SEC1 point validation. secp256k1 has cofactor 1,
+    ///      so every non-infinity on-curve point is in the prime-order subgroup.
+    ///      SEC1's point-at-infinity encoding is length 1 and is rejected before
+    ///      this function is called.
+    function _validSec1Point(bytes memory pubkey) internal view returns (bool) {
+        uint256 x = _readUint256(pubkey, 1);
+        if (x >= SECP256K1_P) {
+            return false;
+        }
+
+        uint256 rhs = _secp256k1Rhs(x);
+        if (pubkey.length == 33) {
+            return _isQuadraticResidue(rhs);
+        }
+
+        uint256 y = _readUint256(pubkey, 33);
+        return y < SECP256K1_P && mulmod(y, y, SECP256K1_P) == rhs;
+    }
+
+    function _secp256k1Rhs(uint256 x) internal pure returns (uint256) {
+        uint256 x2 = mulmod(x, x, SECP256K1_P);
+        return addmod(mulmod(x2, x, SECP256K1_P), 7, SECP256K1_P);
+    }
+
+    function _isQuadraticResidue(uint256 value) internal view returns (bool) {
+        (bool success, uint256 result) = _modExp(value, SECP256K1_LEGENDRE_EXP, SECP256K1_P);
+        return success && result == 1;
+    }
+
+    function _modExp(uint256 base, uint256 exponent, uint256 modulus)
+        internal
+        view
+        returns (bool success, uint256 result)
+    {
+        bytes memory input = abi.encode(uint256(32), uint256(32), uint256(32), base, exponent, modulus);
+        bytes memory output = new bytes(32);
+        assembly {
+            success := staticcall(gas(), 0x05, add(input, 0x20), mload(input), add(output, 0x20), 0x20)
+        }
+        result = abi.decode(output, (uint256));
+    }
+
+    function _readUint256(bytes memory data, uint256 offset) internal pure returns (uint256 word) {
+        assembly {
+            word := mload(add(add(data, 0x20), offset))
+        }
     }
 
     function pause() external onlyOwner {
