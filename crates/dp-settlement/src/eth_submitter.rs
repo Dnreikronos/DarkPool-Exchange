@@ -15,6 +15,8 @@ use crate::signer::TxSigner;
 use crate::submitter::Submitter;
 use crate::{SettlementError, SubmitBatchParams};
 
+const GROTH16_PROOF_LEN: usize = 256;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettlementTxTransport {
     PrivateRpc,
@@ -84,6 +86,7 @@ impl<ReadP: Provider + Send + Sync, SubmitP: Provider + Send + Sync> EthSubmitte
     pub fn pack_submit(params: &SubmitBatchParams) -> Result<Vec<u8>, SettlementError> {
         use crate::abi::submitBatchCall;
         use alloy_sol_types::SolCall;
+        validate_groth16_proof_len(&params.proof)?;
         let sol_matches = build_sol_matches(params)?;
         let call = submitBatchCall {
             batchId: uuid_to_bytes32(params.batch_id),
@@ -94,6 +97,16 @@ impl<ReadP: Provider + Send + Sync, SubmitP: Provider + Send + Sync> EthSubmitte
         };
         Ok(call.abi_encode())
     }
+}
+
+fn validate_groth16_proof_len(proof: &[u8]) -> Result<(), SettlementError> {
+    if proof.len() != GROTH16_PROOF_LEN {
+        return Err(SettlementError::InvalidProofLength {
+            expected: GROTH16_PROOF_LEN,
+            actual: proof.len(),
+        });
+    }
+    Ok(())
 }
 
 fn build_sol_matches(
@@ -151,6 +164,7 @@ where
         let span = build_submit_span(params, self.tx_transport);
         Box::pin(
             async move {
+                validate_groth16_proof_len(&params.proof)?;
                 let sol_matches = build_sol_matches(params)?;
                 let sender = NetworkWallet::<Ethereum>::default_signer_address(&self.wallet);
 
@@ -365,7 +379,7 @@ mod tests {
         SubmitBatchParams {
             batch_id: Uuid::new_v4(),
             auction_id: Uuid::new_v4(),
-            proof: b"proof".to_vec(),
+            proof: vec![0u8; GROTH16_PROOF_LEN],
             public_inputs: [U256::from(matches.len()); 6],
             matches,
         }
@@ -376,6 +390,20 @@ mod tests {
         let params = test_params(vec![test_match()]);
         let data = EthSubmitter::<alloy_provider::RootProvider>::pack_submit(&params).unwrap();
         assert!(data.len() > 4);
+    }
+
+    #[test]
+    fn pack_submit_invalid_proof_length() {
+        let mut params = test_params(vec![test_match()]);
+        params.proof = vec![0u8; GROTH16_PROOF_LEN - 1];
+        let err = EthSubmitter::<alloy_provider::RootProvider>::pack_submit(&params).unwrap_err();
+        assert!(matches!(
+            err,
+            SettlementError::InvalidProofLength {
+                expected: GROTH16_PROOF_LEN,
+                actual
+            } if actual == GROTH16_PROOF_LEN - 1
+        ));
     }
 
     #[test]
