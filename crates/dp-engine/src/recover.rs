@@ -436,8 +436,10 @@ impl Engine {
                 )?;
                 let nullifier =
                     dp_zk::fr_to_bytes32(dp_zk::commitment_circuit::compute_nullifier_native(
-                        dp_zk::pedersen::bytes_to_scalar(&recomputed),
-                        dp_zk::pedersen::bytes_to_scalar(&salt),
+                        dp_zk::pedersen::bytes32_to_scalar(&recomputed)
+                            .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?,
+                        dp_zk::pedersen::bytes32_to_scalar(&salt)
+                            .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?,
                     ));
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {

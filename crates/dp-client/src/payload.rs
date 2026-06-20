@@ -44,7 +44,7 @@ mod tests {
             price: Decimal::new(250000, 2),
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
-            salt: "ab".repeat(32),
+            salt: "01".repeat(32),
             ttl: 5_000_000_000,
         };
         let json = serde_json::to_string(&p).unwrap();
@@ -53,7 +53,7 @@ mod tests {
         assert!(json.contains("\"side\":0"));
         assert!(json.contains("\"price\":\"2500.00\""));
         assert!(json.contains("\"size\":\"1.0\""));
-        assert!(json.contains("\"salt\":\"abab"));
+        assert!(json.contains("\"salt\":\"0101"));
         assert!(json.contains("\"ttl\":5000000000"));
     }
 }

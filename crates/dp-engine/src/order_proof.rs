@@ -62,7 +62,7 @@ mod tests {
         let vk_bytes = serialize_vk(&vk).unwrap();
         let circuit = CommitmentPreimageCircuit {
             trader_id: derive_trader_id(b"alice").unwrap(),
-            trader_addr: bytes_to_scalar(b"alice"),
+            trader_addr: bytes_to_scalar(b"alice").unwrap(),
             side: Fr::from(0u64),
             limit_price: Fr::from(100u64),
             size: Fr::from(2u64),

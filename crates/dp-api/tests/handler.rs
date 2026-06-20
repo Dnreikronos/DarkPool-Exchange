@@ -51,6 +51,12 @@ fn stub_proof() -> Vec<u8> {
     b"stub-proof".to_vec()
 }
 
+fn canonical_salt(n: u64) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&n.to_be_bytes());
+    hex::encode(bytes)
+}
+
 fn build_req(d: &DecryptedOrder) -> PlaceOrderRequest {
     let ct = serde_json::to_vec(d).unwrap();
     build_req_from_ciphertext(ct)
@@ -76,7 +82,7 @@ fn valid_decrypted() -> DecryptedOrder {
         price: Decimal::new(180050, 2),
         size: Decimal::from(10),
         commitment_key: format!("ck-{}", n),
-        salt: "ab".repeat(32),
+        salt: canonical_salt(n),
         ttl: 60_000_000_000,
     }
 }
@@ -96,7 +102,7 @@ async fn place_test_order(
         price: price.parse().unwrap(),
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
-        salt: "ab".repeat(32),
+        salt: canonical_salt(n),
         ttl: 600_000_000_000,
     };
     let resp = h
@@ -126,7 +132,7 @@ async fn place_test_order_as(
         price: price.parse().unwrap(),
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
-        salt: "ab".repeat(32),
+        salt: canonical_salt(n),
         ttl: 600_000_000_000,
     };
     let resp = h

@@ -55,11 +55,11 @@ fn order_proof_fixture(d: &DecryptedOrder) -> (Vec<u8>, Vec<u8>, crate::Groth16O
     let salt = crate::engine::parse_order_salt(&d.salt).unwrap();
     let circuit = CommitmentPreimageCircuit {
         trader_id: derive_trader_id(d.trader.as_slice()).unwrap(),
-        trader_addr: bytes_to_scalar(d.trader.as_slice()),
+        trader_addr: bytes_to_scalar(d.trader.as_slice()).unwrap(),
         side: Fr::from(d.side as u8 as u64),
         limit_price: decimal_to_scalar(d.price).unwrap(),
         size: decimal_to_scalar(d.size).unwrap(),
-        salt: bytes_to_scalar(&salt),
+        salt: bytes_to_scalar(&salt).unwrap(),
     };
 
     let mut prove_rng = rand::rngs::StdRng::from_seed([99u8; 32]);
@@ -617,7 +617,7 @@ async fn place_encrypted_order_noop_round_trip() {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -638,7 +638,7 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -678,13 +678,26 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
 
 #[test]
 fn parse_order_salt_requires_lowercase_32_byte_hex() {
-    assert!(crate::engine::parse_order_salt(&"ab".repeat(32)).is_ok());
+    assert!(crate::engine::parse_order_salt(&"01".repeat(32)).is_ok());
     for salt in ["AB".repeat(32), "zz".repeat(32), "ab".repeat(31)] {
         assert!(matches!(
             crate::engine::parse_order_salt(&salt),
             Err(EngineError::Validation(DarkPoolError::SaltInvalid))
         ));
     }
+}
+
+#[test]
+fn parse_order_salt_rejects_non_canonical_field_encoding() {
+    use ark_bn254::Fr;
+    use ark_ff::{BigInteger, PrimeField};
+
+    let salt = hex::encode(Fr::MODULUS.to_bytes_be());
+
+    assert!(matches!(
+        crate::engine::parse_order_salt(&salt),
+        Err(EngineError::Validation(DarkPoolError::SaltInvalid))
+    ));
 }
 
 #[tokio::test]
@@ -707,7 +720,7 @@ fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
         price: dec(100),
         size: dec(1),
         commitment_key: "k".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     })
     .unwrap()
@@ -983,7 +996,7 @@ async fn event_store_contains_no_plaintext() {
         price: Decimal::new(123456789, 4),
         size: Decimal::new(987654321, 4),
         commitment_key: commitment_key.into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     };
     let plain = serde_json::to_vec(&d).unwrap();
@@ -1636,7 +1649,7 @@ async fn full_pipeline_encrypted_order_to_settlement() {
                 price,
                 size: dec(1),
                 commitment_key: key.into(),
-                salt: "ab".repeat(32),
+                salt: "01".repeat(32),
                 ttl: 60_000_000_000,
             };
             let plaintext = serde_json::to_vec(&order).unwrap();

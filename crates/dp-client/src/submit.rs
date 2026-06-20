@@ -6,7 +6,7 @@
 //! they were started with the unsafe unverified-proof escape hatch.
 
 use crate::commitment::{
-    bytes_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
+    bytes32_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
 };
 use crate::encrypt::encrypt_order;
 use crate::error::ClientError;
@@ -45,10 +45,10 @@ pub fn prepare_order_with_entropy(
     validate_trader(&payload.trader)?;
 
     let trader_addr = parse_trader_address(&payload.trader)?;
-    let trader_id_fr = derive_trader_id(&trader_addr);
+    let trader_id_fr = derive_trader_id(&trader_addr)?;
     let trader_id = scalar_to_be_bytes(trader_id_fr);
     let salt = parse_payload_salt(&payload.salt)?;
-    let salt_fr = bytes_to_scalar(&salt);
+    let salt_fr = bytes32_to_scalar(&salt)?;
 
     let inp = OrderCommitmentInput::from_decimals(
         trader_id_fr,
@@ -127,7 +127,7 @@ mod tests {
             price: Decimal::new(250000, 2),
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
-            salt: "ab".repeat(32),
+            salt: "01".repeat(32),
             ttl: 5_000_000_000,
         }
     }
@@ -152,7 +152,7 @@ mod tests {
         let pk = fake_pubkey();
         let a = prepare_order(&pk, &sample()).unwrap();
         let mut p = sample();
-        p.salt = "cd".repeat(32);
+        p.salt = "02".repeat(32);
         let b = prepare_order(&pk, &p).unwrap();
         assert_ne!(a.commitment, b.commitment);
         assert_ne!(a.salt, b.salt);
@@ -190,6 +190,20 @@ mod tests {
             let err = prepare_order(&pk, &p).unwrap_err();
             assert!(err.to_string().contains("salt"));
         }
+    }
+
+    #[test]
+    fn non_canonical_payload_salt_is_rejected() {
+        use ark_bn254::Fr;
+        use ark_ff::{BigInteger, PrimeField};
+
+        let pk = fake_pubkey();
+        let mut p = sample();
+        p.salt = hex::encode(Fr::MODULUS.to_bytes_be());
+
+        let err = prepare_order(&pk, &p).unwrap_err();
+
+        assert!(err.to_string().contains("not canonical"), "got {err}");
     }
 
     #[test]

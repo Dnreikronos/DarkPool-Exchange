@@ -1,5 +1,5 @@
 use dp_client::commitment::{
-    bytes_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
+    bytes32_to_scalar, commit_native, derive_trader_id, scalar_to_be_bytes, OrderCommitmentInput,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -28,12 +28,12 @@ fn golden_commitments_match_dp_zk_cli() {
     assert!(vectors.len() >= 10, "need at least 10 golden vectors");
 
     for v in &vectors {
-        let trader_id = derive_trader_id(v.commitment_key.as_bytes());
+        let trader_id = derive_trader_id(v.commitment_key.as_bytes()).unwrap();
         let price = Decimal::from_str(&v.price).unwrap();
         let size = Decimal::from_str(&v.size).unwrap();
         let salt_bytes = hex::decode(&v.salt_hex).unwrap();
         assert_eq!(salt_bytes.len(), 32, "{}: salt must be 32 bytes", v.label);
-        let salt = bytes_to_scalar(&salt_bytes);
+        let salt = bytes32_to_scalar(&salt_bytes).unwrap();
 
         let input =
             OrderCommitmentInput::from_decimals(trader_id, v.side, price, size, salt).unwrap();
@@ -53,7 +53,7 @@ fn golden_trader_ids_match_dp_zk_cli() {
     let vectors = load_vectors();
 
     for v in &vectors {
-        let trader_id = derive_trader_id(v.commitment_key.as_bytes());
+        let trader_id = derive_trader_id(v.commitment_key.as_bytes()).unwrap();
         let trader_id_hex = hex::encode(scalar_to_be_bytes(trader_id));
 
         assert_eq!(

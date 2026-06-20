@@ -115,6 +115,12 @@ fn encrypt_b64(order: &dp_crypto::DecryptedOrder) -> String {
     STANDARD.encode(serde_json::to_vec(order).unwrap())
 }
 
+fn canonical_salt(n: u64) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&n.to_be_bytes());
+    hex::encode(bytes)
+}
+
 #[tokio::test]
 async fn rest_place_get_cancel_round_trip() {
     let (app, _engine) = registered_app();
@@ -125,7 +131,7 @@ async fn rest_place_get_cancel_round_trip() {
         price: "1800".parse().unwrap(),
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
-        salt: "ab".repeat(32),
+        salt: canonical_salt(1),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -242,7 +248,7 @@ async fn rest_list_orders_is_scoped_to_caller() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
-            salt: "ab".repeat(32),
+            salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -540,7 +546,7 @@ async fn sse_stream_receives_auction_events() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("sse-{}-{}", side as u8, price),
-            salt: "ab".repeat(32),
+            salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
             ttl: 60_000_000_000,
         };
         serde_json::json!({

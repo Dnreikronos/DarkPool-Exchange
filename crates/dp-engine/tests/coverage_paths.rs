@@ -141,7 +141,7 @@ async fn place(engine: &Engine, pair: &str, side: Side, price: &str, size: &str,
         price: dec(price),
         size: dec(size),
         commitment_key: key.into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -170,7 +170,7 @@ async fn tick_collects_and_emits_expired_orders() {
         price: dec("100"),
         size: dec("1"),
         commitment_key: "expiring".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 1,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -249,7 +249,7 @@ async fn recover_returns_commitment_mismatch_for_tampered_event() {
         price: dec("100"),
         size: dec("1"),
         commitment_key: "k".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -291,7 +291,7 @@ async fn recover_uses_default_ttl_when_decrypted_ttl_is_zero() {
         price: dec("100"),
         size: dec("1"),
         commitment_key: "k".into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: 0,
     };
     let ct = serde_json::to_vec(&d).unwrap();
