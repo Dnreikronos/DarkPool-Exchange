@@ -50,7 +50,7 @@ pub fn compute_commitment_wasm(
     size: &str,
     salt_hex: &str,
 ) -> Result<String, JsError> {
-    let trader_id = inner_derive_trader_id(commitment_key.as_bytes());
+    let trader_id = inner_derive_trader_id(commitment_key.as_bytes()).map_err(js_err)?;
     let price_d = Decimal::from_str(price).map_err(js_err)?;
     let size_d = Decimal::from_str(size).map_err(js_err)?;
     if salt_hex.len() != 64
@@ -67,16 +67,16 @@ pub fn compute_commitment_wasm(
             salt_bytes.len()
         )));
     }
-    let salt_fr = crate::commitment::bytes_to_scalar(&salt_bytes);
+    let salt_fr = crate::commitment::bytes32_to_scalar(&salt_bytes).map_err(js_err)?;
     let inp = OrderCommitmentInput::from_decimals(trader_id, side, price_d, size_d, salt_fr)
         .map_err(js_err)?;
     Ok(hex::encode(scalar_to_be_bytes(commit_native(&inp))))
 }
 
 #[wasm_bindgen]
-pub fn derive_trader_id_wasm(commitment_key: &str) -> String {
-    let f = inner_derive_trader_id(commitment_key.as_bytes());
-    hex::encode(scalar_to_be_bytes(f))
+pub fn derive_trader_id_wasm(commitment_key: &str) -> Result<String, JsError> {
+    let f = inner_derive_trader_id(commitment_key.as_bytes()).map_err(js_err)?;
+    Ok(hex::encode(scalar_to_be_bytes(f)))
 }
 
 // Avoid pulling in `serde-wasm-bindgen` as a separate dep — JSON-string the
