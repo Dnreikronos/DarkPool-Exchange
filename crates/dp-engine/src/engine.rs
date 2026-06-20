@@ -10,8 +10,6 @@ use dp_settlement::{BalanceOracle, InsecureDevOracle, NoopSubmitter, Submitter};
 use dp_types::metrics::M_ORDERS_PLACED;
 use dp_types::{DarkPoolError, EventType, Order, Side};
 use parking_lot::{Mutex, RwLock};
-#[cfg(test)]
-use rand::RngCore;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -1163,8 +1161,12 @@ pub(crate) fn build_decrypted_ciphertext(
 ) -> (Vec<u8>, Vec<u8>) {
     // Random per call so two otherwise-identical orders still get distinct
     // commitments (the live client picks a fresh salt per order, #217).
-    let mut salt = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut salt);
+    let salt = {
+        use ark_bn254::Fr;
+        use ark_ff::UniformRand;
+
+        dp_zk::fr_to_bytes32(Fr::rand(&mut rand::rngs::OsRng))
+    };
     let d = dp_crypto::DecryptedOrder {
         trader,
         pair: pair.to_string(),
