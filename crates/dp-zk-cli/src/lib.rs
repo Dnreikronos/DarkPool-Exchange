@@ -202,8 +202,8 @@ mod tests {
 
     fn dummy_leg() -> OrderLegWitness {
         OrderLegWitness {
-            trader_id: "aa".repeat(32),
-            salt: "bb".repeat(32),
+            trader_id: "11".repeat(32),
+            salt: "22".repeat(32),
             balance: Decimal::new(1000, 0),
             position: "0".into(),
             limit_price: Decimal::new(100, 0),

@@ -132,6 +132,7 @@ fn compute_commitment_native(circuit: &CommitmentPreimageCircuit) -> Fr {
 /// the key material, so bump [`COMMITMENT_CIRCUIT_VERSION`] alongside it.
 fn nullifier_domain() -> Fr {
     crate::pedersen::bytes_to_scalar(b"DP/order-nullifier/v1")
+        .expect("nullifier domain tag is a canonical field encoding")
 }
 
 /// Native `poseidon(NULLIFIER_DOMAIN, commitment, salt)`. MUST stay byte-for-byte
@@ -454,8 +455,8 @@ mod tests {
 
     fn sample_circuit() -> CommitmentPreimageCircuit {
         let trader_id = crate::pedersen::derive_trader_id(b"alice").unwrap();
-        let trader_addr = bytes_to_scalar(b"alice");
-        let salt = bytes_to_scalar(&[0x22u8; 32]);
+        let trader_addr = bytes_to_scalar(b"alice").unwrap();
+        let salt = bytes_to_scalar(&[0x22u8; 32]).unwrap();
         CommitmentPreimageCircuit {
             trader_id,
             trader_addr,
@@ -570,9 +571,9 @@ mod tests {
         let (pk, _vk) = generate_keys(&mut rng).unwrap();
 
         let mut a = sample_circuit();
-        a.salt = bytes_to_scalar(&[0x01u8; 32]);
+        a.salt = bytes_to_scalar(&[0x01u8; 32]).unwrap();
         let mut b = sample_circuit();
-        b.salt = bytes_to_scalar(&[0x02u8; 32]);
+        b.salt = bytes_to_scalar(&[0x02u8; 32]).unwrap();
 
         let (pa, _) = prove_with_key(&pk, &a, &mut rng).unwrap();
         let (pb, _) = prove_with_key(&pk, &b, &mut rng).unwrap();

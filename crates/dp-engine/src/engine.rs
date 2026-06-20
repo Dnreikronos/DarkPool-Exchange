@@ -667,8 +667,10 @@ impl Engine {
         )?;
         if let Some(verifier) = self.inner.order_proof_verifier.read().clone() {
             let publics = dp_zk::commitment_circuit::OrderProofPublics {
-                commitment: dp_zk::pedersen::bytes_to_scalar(&secrets.commitment),
-                nullifier: dp_zk::pedersen::bytes_to_scalar(&secrets.nullifier),
+                commitment: dp_zk::pedersen::bytes32_to_scalar(&secrets.commitment)
+                    .map_err(|_| EngineError::Validation(DarkPoolError::InvalidOrderProof))?,
+                nullifier: dp_zk::pedersen::bytes32_to_scalar(&secrets.nullifier)
+                    .map_err(|_| EngineError::Validation(DarkPoolError::InvalidOrderProof))?,
             };
             verifier
                 .verify(&_unverified_proof, &publics)
@@ -786,7 +788,10 @@ impl Engine {
         order_ids
             .iter()
             .filter_map(|id| secrets.get(id))
-            .map(|s| dp_zk::pedersen::bytes_to_scalar(&s.commitment))
+            .map(|s| {
+                dp_zk::pedersen::bytes32_to_scalar(&s.commitment)
+                    .expect("engine-derived commitments are canonical field encodings")
+            })
             .collect()
     }
 
@@ -1018,11 +1023,13 @@ fn derive_order_secrets(
     position: i128,
     salt: [u8; 32],
 ) -> Result<OrderSecrets, EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
+    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr)
+        .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     let commitment_fr = compute_poseidon_commitment_fr(&trader_id, side, price, size, &salt)?;
     let nullifier_fr = dp_zk::commitment_circuit::compute_nullifier_native(
         commitment_fr,
-        dp_zk::pedersen::bytes_to_scalar(&salt),
+        dp_zk::pedersen::bytes32_to_scalar(&salt)
+            .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?,
     );
 
     // `balance`/`position` are read from the installed BalanceOracle by the
@@ -1049,7 +1056,8 @@ pub(crate) fn recompute_persisted_commitment(
     size: Decimal,
     salt: &[u8; 32],
 ) -> Result<[u8; 32], EngineError> {
-    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr);
+    let trader_id = dp_zk::pedersen::derive_trader_id_bytes(trader_addr)
+        .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     compute_poseidon_commitment(&trader_id, side, price, size, salt)
 }
 
@@ -1075,17 +1083,19 @@ pub(crate) fn parse_order_salt(salt_hex: &str) -> Result<[u8; 32], EngineError> 
     {
         return Err(EngineError::Validation(DarkPoolError::SaltInvalid));
     }
-    let bytes =
-        hex::decode(salt_hex).map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
-    bytes
+    let bytes: [u8; 32] = hex::decode(salt_hex)
+        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?
         .try_into()
-        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))
+        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
+    dp_zk::pedersen::bytes32_to_scalar(&bytes)
+        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
+    Ok(bytes)
 }
 
 /// Compute the Poseidon order commitment (matches the in-circuit gadget
 /// byte-for-byte). Inputs use the canonical ZK encodings:
 /// - `trader_id` and `salt` are 32 BE bytes mapped into Fr via modular
-///   reduction (same as `bytes_to_scalar`).
+///   canonical field decoding.
 /// - `price` / `size` go through `decimal_to_scalar` (1e8 fixed-point).
 /// - `side` 0 → Fr::zero, otherwise Fr::one.
 pub(crate) fn compute_poseidon_commitment(
@@ -1107,8 +1117,10 @@ fn compute_poseidon_commitment_fr(
     size: Decimal,
     salt: &[u8; 32],
 ) -> Result<ark_bn254::Fr, EngineError> {
-    let trader_fr = dp_zk::pedersen::bytes_to_scalar(trader_id);
-    let salt_fr = dp_zk::pedersen::bytes_to_scalar(salt);
+    let trader_fr = dp_zk::pedersen::bytes32_to_scalar(trader_id)
+        .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
+    let salt_fr = dp_zk::pedersen::bytes32_to_scalar(salt)
+        .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     let input = dp_zk::OrderCommitmentInput::from_decimals(trader_fr, side, price, size, salt_fr)
         .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?;
     Ok(dp_zk::commit_native(&input))

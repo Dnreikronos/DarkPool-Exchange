@@ -46,7 +46,7 @@ async fn place(
         price: Decimal::from(price),
         size: Decimal::from(10),
         commitment_key: key.into(),
-        salt: "ab".repeat(32),
+        salt: "01".repeat(32),
         ttl: Duration::from_secs(60).as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -97,7 +97,7 @@ async fn engine_subprocess_zk_pipeline() {
     // (Plaintext orders themselves use NoopDecrypter here so their JSON
     // body is in OrderPlaced::ciphertext — that's covered by the
     // dedicated XOR/event-store canary in `tests.rs`.)
-    let trader_id_bid = dp_zk::pedersen::derive_trader_id_bytes(bid_addr.as_slice());
+    let trader_id_bid = dp_zk::pedersen::derive_trader_id_bytes(bid_addr.as_slice()).unwrap();
     let trader_id_bid_hex = hex::encode(trader_id_bid);
     let raw = bincode::serialize(&events).unwrap();
     let leaked = raw.windows(trader_id_bid.len()).any(|w| w == trader_id_bid)

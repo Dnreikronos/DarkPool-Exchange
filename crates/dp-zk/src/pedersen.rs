@@ -11,7 +11,7 @@ use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_ff::{One, Zero};
 use rust_decimal::Decimal;
 
-use crate::encoding::{decimal_to_scalar, signed_to_scalar, EncodingError};
+use crate::encoding::{decimal_to_scalar, fr_to_bytes32, signed_to_scalar, EncodingError};
 
 /// Inputs absorbed by the order-leg commitment.
 #[derive(Clone, Debug)]
@@ -112,10 +112,9 @@ pub fn settlement_chain(acc0: Fr, rows: &[SettlementRow]) -> Fr {
 }
 
 /// Compute trader-id-from-key as `poseidon(commitment_key_bytes_as_scalar)`.
-/// Treats input bytes big-endian, modular reduces into Fr.
+/// Treats input bytes as a canonical big-endian Fr encoding.
 pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError> {
-    use ark_ff::PrimeField;
-    let scalar = Fr::from_be_bytes_mod_order(commitment_key_bytes);
+    let scalar = bytes_to_scalar(commitment_key_bytes)?;
     let cfg = poseidon_config();
     let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
     sponge.absorb(&vec![scalar]);
@@ -124,21 +123,43 @@ pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError
 
 /// Derive the canonical 32-byte trader-id (BE-encoded `derive_trader_id` output).
 /// This is the byte form persisted in [`crate::witness::OrderLegWitness`] and
-/// recovered in-circuit via `bytes_to_scalar` (a BE → Fr modular reduction).
-pub fn derive_trader_id_bytes(commitment_key_bytes: &[u8]) -> [u8; 32] {
+/// recovered in-circuit via `bytes32_to_scalar`.
+pub fn derive_trader_id_bytes(commitment_key_bytes: &[u8]) -> Result<[u8; 32], EncodingError> {
     use ark_ff::{BigInteger, PrimeField};
-    let f = derive_trader_id(commitment_key_bytes).expect("derive_trader_id is infallible");
+    let f = derive_trader_id(commitment_key_bytes)?;
     let bytes = f.into_bigint().to_bytes_be();
     let mut out = [0u8; 32];
     let take = bytes.len().min(32);
     out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
-    out
+    Ok(out)
 }
 
-/// Map raw hex bytes (e.g. salt) into Fr via modular reduction.
-pub fn bytes_to_scalar(b: &[u8]) -> Fr {
+/// Map a canonical big-endian byte encoding into Fr.
+///
+/// The old implementation used `from_be_bytes_mod_order`, which silently
+/// reduced 32-byte values at or above the BN254 Fr modulus. That made distinct
+/// byte encodings alias to the same field element. This boundary rejects
+/// overlong inputs and non-canonical bytes32 encodings before conversion.
+pub fn bytes_to_scalar(b: &[u8]) -> Result<Fr, EncodingError> {
     use ark_ff::PrimeField;
-    Fr::from_be_bytes_mod_order(b)
+    if b.len() > 32 {
+        return Err(EncodingError::FieldElementTooLong(b.len()));
+    }
+
+    let scalar = Fr::from_be_bytes_mod_order(b);
+    if b.len() == 32 && fr_to_bytes32(scalar) != b {
+        return Err(EncodingError::NonCanonicalFieldElement);
+    }
+
+    Ok(scalar)
+}
+
+/// Map an exact 32-byte canonical field encoding into Fr.
+pub fn bytes32_to_scalar(b: &[u8]) -> Result<Fr, EncodingError> {
+    if b.len() != 32 {
+        return Err(EncodingError::InvalidFieldElementLength { actual: b.len() });
+    }
+    bytes_to_scalar(b)
 }
 
 /// Build a notional scalar = price * size (both already encoded at 1e8). The
@@ -263,15 +284,35 @@ mod tests {
         let h = hash_two_native(Fr::from(1u64), Fr::from(2u64));
         assert_eq!(h, hash_two_native(Fr::from(1u64), Fr::from(2u64)));
 
-        // derive_trader_id over the empty key (modular reduction of 0).
+        // derive_trader_id over the empty key.
         let t_zero = derive_trader_id(&[]).unwrap();
         let t_zero2 = derive_trader_id(&[]).unwrap();
         assert_eq!(t_zero, t_zero2);
 
-        // derive_trader_id_bytes round-trips through bytes_to_scalar.
-        let bytes = derive_trader_id_bytes(b"alice");
-        let scalar = bytes_to_scalar(&bytes);
+        // derive_trader_id_bytes round-trips through bytes32_to_scalar.
+        let bytes = derive_trader_id_bytes(b"alice").unwrap();
+        let scalar = bytes32_to_scalar(&bytes).unwrap();
         let direct = derive_trader_id(b"alice").unwrap();
         assert_eq!(scalar, direct);
+    }
+
+    #[test]
+    fn bytes32_to_scalar_rejects_non_canonical_modulus() {
+        use ark_ff::{BigInteger, PrimeField};
+
+        let modulus = Fr::MODULUS.to_bytes_be();
+        assert_eq!(modulus.len(), 32);
+        assert!(matches!(
+            bytes32_to_scalar(&modulus),
+            Err(EncodingError::NonCanonicalFieldElement)
+        ));
+    }
+
+    #[test]
+    fn bytes_to_scalar_rejects_overlong_encoding() {
+        assert!(matches!(
+            bytes_to_scalar(&[0u8; 33]),
+            Err(EncodingError::FieldElementTooLong(33))
+        ));
     }
 }

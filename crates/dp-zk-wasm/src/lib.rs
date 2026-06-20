@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use dp_zk::commitment_circuit::{deserialize_pk, prove_with_key, CommitmentPreimageCircuit};
 use dp_zk::encoding::decimal_to_scalar;
-use dp_zk::pedersen::{bytes_to_scalar, derive_trader_id};
+use dp_zk::pedersen::{bytes32_to_scalar, bytes_to_scalar, derive_trader_id};
 
 #[derive(Deserialize)]
 struct WitnessInput {
@@ -35,7 +35,8 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
     }
     // `trader_id == poseidon(trader_addr)` (#216): the circuit binds the proof
     // to the verified on-chain address, matching the engine's derivation.
-    let trader_addr = bytes_to_scalar(&trader_addr_bytes);
+    let trader_addr =
+        bytes_to_scalar(&trader_addr_bytes).map_err(|e| format!("trader_addr: {e}"))?;
     let trader_id =
         derive_trader_id(&trader_addr_bytes).map_err(|e| format!("derive_trader_id: {e}"))?;
 
@@ -56,7 +57,7 @@ pub fn prove_order(witness_json: &str, pk_bytes: &[u8]) -> Result<ProveResult, S
             salt_bytes.len()
         ));
     }
-    let salt = bytes_to_scalar(&salt_bytes);
+    let salt = bytes32_to_scalar(&salt_bytes).map_err(|e| format!("salt_hex: {e}"))?;
 
     let circuit = CommitmentPreimageCircuit {
         trader_id,
@@ -157,7 +158,7 @@ mod tests {
             "side": 0,
             "price": "100",
             "size": "10",
-            "salt_hex": "bb".repeat(32)
+            "salt_hex": "11".repeat(32)
         })
         .to_string()
     }
@@ -180,7 +181,7 @@ mod tests {
 
         // The verifier derives the nullifier public input from the commitment and
         // the (known) salt — the same value the circuit bound.
-        let salt = bytes_to_scalar(&hex::decode("bb".repeat(32)).unwrap());
+        let salt = bytes32_to_scalar(&hex::decode("11".repeat(32)).unwrap()).unwrap();
         let publics = OrderProofPublics::derive(c, salt);
 
         // Verify against the canonical VK — never a prover-supplied one.
@@ -191,9 +192,9 @@ mod tests {
     fn commitment_matches_native() {
         let trader_addr = hex::decode("1111111111111111111111111111111111111111").unwrap();
         let trader_id = derive_trader_id(&trader_addr).unwrap();
-        let salt_hex = "bb".repeat(32);
+        let salt_hex = "11".repeat(32);
         let salt_bytes = hex::decode(&salt_hex).unwrap();
-        let salt = bytes_to_scalar(&salt_bytes);
+        let salt = bytes32_to_scalar(&salt_bytes).unwrap();
 
         let input = OrderCommitmentInput::from_decimals(
             trader_id,
@@ -226,7 +227,7 @@ mod tests {
             "side": 2,
             "price": "100",
             "size": "10",
-            "salt_hex": "bb".repeat(32)
+            "salt_hex": "11".repeat(32)
         })
         .to_string();
         let err = prove_order(&json, &[]).unwrap_err();
@@ -240,7 +241,7 @@ mod tests {
             "side": 0,
             "price": "100",
             "size": "10",
-            "salt_hex": "bb".repeat(32)
+            "salt_hex": "11".repeat(32)
         })
         .to_string();
         assert!(prove_order(&json, &[]).is_err());
@@ -253,7 +254,7 @@ mod tests {
             "side": 0,
             "price": "-100",
             "size": "10",
-            "salt_hex": "bb".repeat(32)
+            "salt_hex": "11".repeat(32)
         })
         .to_string();
         let err = prove_order(&json, &[]).unwrap_err();
@@ -281,7 +282,7 @@ mod tests {
         )
         .unwrap();
 
-        let salt = bytes_to_scalar(&hex::decode("bb".repeat(32)).unwrap());
+        let salt = bytes32_to_scalar(&hex::decode("11".repeat(32)).unwrap()).unwrap();
         let publics = OrderProofPublics::derive(c, salt);
 
         assert!(!verify_proof(&canonical_vk, &result.proof, &publics).unwrap());

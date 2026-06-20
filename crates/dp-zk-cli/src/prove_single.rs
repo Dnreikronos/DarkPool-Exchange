@@ -8,7 +8,7 @@ use ark_ff::{One, Zero};
 use clap::Parser;
 use dp_zk::commitment_circuit::{setup_and_prove, CommitmentPreimageCircuit};
 use dp_zk::encoding::decimal_to_scalar;
-use dp_zk::pedersen::bytes_to_scalar;
+use dp_zk::pedersen::{bytes32_to_scalar, bytes_to_scalar};
 use dp_zk::{commit_native, fr_to_bytes32, OrderCommitmentInput};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -99,7 +99,7 @@ pub fn generate_proof(
             salt_bytes.len()
         ));
     }
-    let salt = bytes_to_scalar(&salt_bytes);
+    let salt = bytes32_to_scalar(&salt_bytes).map_err(|e| format!("salt: {e}"))?;
 
     let limit_price =
         decimal_to_scalar(input.limit_price).map_err(|e| format!("limit_price: {e}"))?;
@@ -152,7 +152,7 @@ pub fn generate_proof(
 fn resolve_identity(input: &ProveSingleInput) -> Result<(ark_bn254::Fr, ark_bn254::Fr), String> {
     if let Some(addr) = input.trader_addr.as_ref() {
         let addr_bytes = decode_trader_addr(addr)?;
-        let trader_addr = bytes_to_scalar(&addr_bytes);
+        let trader_addr = bytes_to_scalar(&addr_bytes).map_err(|e| format!("trader_addr: {e}"))?;
         let trader_id = dp_zk::pedersen::derive_trader_id(&addr_bytes)
             .map_err(|e| format!("derive trader_id: {e}"))?;
         return Ok((trader_id, trader_addr));
@@ -162,7 +162,7 @@ fn resolve_identity(input: &ProveSingleInput) -> Result<(ark_bn254::Fr, ark_bn25
         .commitment_key
         .as_ref()
         .ok_or("trader_addr is required to prove the trader-identity binding")?;
-    let trader_addr = bytes_to_scalar(ck.as_bytes());
+    let trader_addr = bytes_to_scalar(ck.as_bytes()).map_err(|e| format!("commitment_key: {e}"))?;
     let trader_id = dp_zk::pedersen::derive_trader_id(ck.as_bytes())
         .map_err(|e| format!("derive trader_id: {e}"))?;
     Ok((trader_id, trader_addr))
@@ -274,7 +274,7 @@ mod tests {
         let output = generate_proof(&input, Some(42)).unwrap();
 
         let commitment_bytes = hex::decode(&output.commitment).unwrap();
-        let commitment = dp_zk::pedersen::bytes_to_scalar(&commitment_bytes);
+        let commitment = dp_zk::pedersen::bytes32_to_scalar(&commitment_bytes).unwrap();
 
         let proof_bytes = hex::decode(&output.proof).unwrap();
         let vk_bytes = hex::decode(&output.verification_key).unwrap();
@@ -282,7 +282,7 @@ mod tests {
         // The verifier derives the nullifier public input from the commitment
         // and the salt — the same value the circuit bound (#217).
         let salt_bytes = hex::decode(&output.scalars.salt).unwrap();
-        let salt = dp_zk::pedersen::bytes_to_scalar(&salt_bytes);
+        let salt = dp_zk::pedersen::bytes32_to_scalar(&salt_bytes).unwrap();
         let publics = dp_zk::commitment_circuit::OrderProofPublics::derive(commitment, salt);
 
         let valid =

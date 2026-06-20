@@ -21,6 +21,12 @@ pub enum EncodingError {
     Overflow(Decimal),
     #[error("decimal {0} loses precision beyond {DECIMAL_SCALE} dp")]
     Precision(Decimal),
+    #[error("field element encoding must be at most 32 bytes, got {0}")]
+    FieldElementTooLong(usize),
+    #[error("field element encoding must be exactly 32 bytes, got {actual}")]
+    InvalidFieldElementLength { actual: usize },
+    #[error("field element encoding is not canonical for BN254 Fr")]
+    NonCanonicalFieldElement,
 }
 
 /// Convert a non-negative decimal to a BN254 scalar.
