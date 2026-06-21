@@ -11,6 +11,7 @@ pub fn encrypt_order(
     payload: &OrderPayload,
 ) -> Result<Vec<u8>, ClientError> {
     validate_pubkey_len(operator_pubkey)?;
+    pin_darkpool_ecies_config();
     let plaintext = serde_json::to_vec(payload)?;
     ecies::encrypt(operator_pubkey, &plaintext).map_err(|e| ClientError::Encryption(e.to_string()))
 }
@@ -38,6 +39,15 @@ fn validate_pubkey_len(b: &[u8]) -> Result<(), ClientError> {
             "expected 33 (compressed) or 65 (uncompressed) SEC1 bytes, got {n}"
         ))),
     }
+}
+
+fn pin_darkpool_ecies_config() {
+    // `ecies` keeps these flags in process-global mutable state. Pin them at
+    // the encryption boundary so client ciphertext shape stays operator-compatible.
+    ecies::config::update_config(ecies::config::Config {
+        is_ephemeral_key_compressed: false,
+        is_hkdf_key_compressed: false,
+    });
 }
 
 #[cfg(test)]
