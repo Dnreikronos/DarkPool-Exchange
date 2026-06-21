@@ -65,6 +65,7 @@ impl Decrypter for EciesDecrypter {
         );
         Box::pin(
             async move {
+                pin_darkpool_ecies_config();
                 let plaintext = ecies::decrypt(&self.secret_key, ciphertext)
                     .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
                 let order: DecryptedOrder = serde_json::from_slice(&plaintext)?;
@@ -73,6 +74,15 @@ impl Decrypter for EciesDecrypter {
             .instrument(span),
         )
     }
+}
+
+fn pin_darkpool_ecies_config() {
+    // `ecies` keeps these flags in process-global mutable state. Pin them at
+    // the decryption boundary so operator parsing matches dp-client ciphertexts.
+    ecies::config::update_config(ecies::config::Config {
+        is_ephemeral_key_compressed: false,
+        is_hkdf_key_compressed: false,
+    });
 }
 
 pub fn load_operator_key_file(path: impl AsRef<Path>) -> Result<Vec<u8>, CryptoError> {

@@ -2408,6 +2408,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "serde_repr",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
