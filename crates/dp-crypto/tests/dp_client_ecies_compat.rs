@@ -1,7 +1,10 @@
+#[allow(unexpected_cfgs)]
 #[path = "../../dp-client/src/encrypt.rs"]
 mod encrypt;
+#[allow(dead_code, unexpected_cfgs)]
 #[path = "../../dp-client/src/error.rs"]
 mod error;
+#[allow(dead_code)]
 #[path = "../../dp-client/src/payload.rs"]
 mod payload;
 
