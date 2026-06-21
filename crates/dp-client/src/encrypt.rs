@@ -6,14 +6,20 @@ use crate::payload::OrderPayload;
 const SEC1_COMPRESSED: usize = 33;
 const SEC1_UNCOMPRESSED: usize = 65;
 
-pub fn encrypt_order(operator_pubkey: &[u8], payload: &OrderPayload) -> Result<Vec<u8>, ClientError> {
+pub fn encrypt_order(
+    operator_pubkey: &[u8],
+    payload: &OrderPayload,
+) -> Result<Vec<u8>, ClientError> {
     validate_pubkey_len(operator_pubkey)?;
     let plaintext = serde_json::to_vec(payload)?;
     ecies::encrypt(operator_pubkey, &plaintext).map_err(|e| ClientError::Encryption(e.to_string()))
 }
 
 pub fn parse_operator_pubkey_hex(hex_str: &str) -> Result<Vec<u8>, ClientError> {
-    let trimmed = hex_str.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let trimmed = hex_str
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
     let bytes = hex::decode(trimmed)?;
     validate_pubkey_len(&bytes)?;
     Ok(bytes)
@@ -67,9 +73,6 @@ mod tests {
     #[test]
     fn parse_accepts_uncompressed() {
         let raw = vec![0x04u8; 65];
-        assert_eq!(
-            parse_operator_pubkey_hex(&hex::encode(&raw)).unwrap(),
-            raw
-        );
+        assert_eq!(parse_operator_pubkey_hex(&hex::encode(&raw)).unwrap(), raw);
     }
 }
