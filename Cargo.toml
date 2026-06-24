@@ -10,6 +10,7 @@ members = [
     "crates/dp-settlement",
     "crates/dp-engine",
     "crates/dp-api",
+    "crates/dp-poseidon",
     "crates/dp-zk",
     "crates/dp-zk-cli",
     "crates/dp-zk-wasm",
