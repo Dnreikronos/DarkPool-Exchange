@@ -8,7 +8,7 @@ use ark_bn254::Fr;
 use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
 use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_ff::{BigInteger, One, PrimeField, Zero};
-use dp_poseidon::poseidon_config;
+pub use dp_poseidon::poseidon_config;
 use rust_decimal::Decimal;
 
 use crate::encoding::decimal_to_scalar;
