@@ -1,14 +1,14 @@
-//! Poseidon order-leg commitment. Copies the parameter set + absorption
-//! schedule from `dp_zk::pedersen` so client- and engine-side commitments
-//! agree byte-for-byte (verified by the interop test).
+//! Poseidon order-leg commitment. Uses the shared `dp-poseidon` parameter
+//! source so client- and engine-side commitments agree byte-for-byte.
 //!
 //! Kept in this crate (rather than depending on `dp-zk`) to avoid pulling
 //! ark-groth16 / rayon into the WASM build.
 
 use ark_bn254::Fr;
-use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
+use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
 use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_ff::{BigInteger, One, PrimeField, Zero};
+use dp_poseidon::poseidon_config;
 use rust_decimal::Decimal;
 
 use crate::encoding::decimal_to_scalar;
@@ -108,30 +108,6 @@ pub fn scalar_to_be_bytes(f: Fr) -> [u8; 32] {
     let take = bytes.len().min(32);
     out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
     out
-}
-
-pub fn poseidon_config() -> PoseidonConfig<Fr> {
-    use ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds;
-
-    let full_rounds = 8;
-    let partial_rounds = 57;
-    let alpha = 5u64;
-    let rate = 2;
-    let capacity = 1;
-    let modulus_bits = <Fr as PrimeField>::MODULUS_BIT_SIZE as u64;
-
-    let (ark, mds) =
-        find_poseidon_ark_and_mds::<Fr>(modulus_bits, rate, full_rounds, partial_rounds, 0);
-
-    PoseidonConfig::new(
-        full_rounds as usize,
-        partial_rounds as usize,
-        alpha,
-        mds,
-        ark,
-        rate,
-        capacity,
-    )
 }
 
 #[cfg(test)]

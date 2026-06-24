@@ -28,6 +28,7 @@ rand = "0.8"
 ark-ff = { version = "0.5", default-features = false, features = ["std"] }
 ark-bn254 = { version = "0.5", default-features = false, features = ["std", "curve"] }
 ark-crypto-primitives = { version = "0.5", default-features = false, features = ["std", "sponge"] }
+dp-poseidon = { path = "../dp-poseidon" }
 
 # CLI-only
 clap = { version = "4", features = ["derive", "env"], optional = true }

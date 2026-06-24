@@ -110,9 +110,8 @@ Reasons:
   envelope as Pedersen for our purposes.
 - ~20× cheaper in-circuit than a literal Pedersen commitment over
   Jubjub (no curve arithmetic).
-- Round constants and MDS matrix are deterministically derived via
-  `find_poseidon_ark_and_mds`, so prover + verifier instantiate
-  byte-identical configs.
+- Round constants and MDS matrix come from the shared `dp-poseidon`
+  parameter source, so prover + verifier instantiate byte-identical configs.
 
 ## Version-bump policy
 
