@@ -6,9 +6,10 @@
 //! literal Pedersen commitment over Jubjub.
 
 use ark_bn254::Fr;
-use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
+use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
 use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_ff::{One, Zero};
+pub use dp_poseidon::poseidon_config;
 use rust_decimal::Decimal;
 
 use crate::encoding::{decimal_to_scalar, fr_to_bytes32, signed_to_scalar, EncodingError};
@@ -174,34 +175,6 @@ pub fn notional_scalar(price: Decimal, size: Decimal) -> Result<Fr, EncodingErro
 /// `encoding`).
 pub fn signed_scalar(x: i128) -> Result<Fr, EncodingError> {
     signed_to_scalar(x)
-}
-
-/// Poseidon parameters for BN254 Fr, rate 2 capacity 1, 8 full + 57 partial
-/// rounds. Standard "x^5" S-box. Constants derived deterministically from
-/// the curve+rate via `find_poseidon_ark_and_mds` so the same config can be
-/// instantiated in-circuit.
-pub fn poseidon_config() -> PoseidonConfig<Fr> {
-    use ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds;
-
-    let full_rounds = 8;
-    let partial_rounds = 57;
-    let alpha = 5u64;
-    let rate = 2;
-    let capacity = 1;
-    let modulus_bits = <Fr as ark_ff::PrimeField>::MODULUS_BIT_SIZE as u64;
-
-    let (ark, mds) =
-        find_poseidon_ark_and_mds::<Fr>(modulus_bits, rate, full_rounds, partial_rounds, 0);
-
-    PoseidonConfig::new(
-        full_rounds as usize,
-        partial_rounds as usize,
-        alpha,
-        mds,
-        ark,
-        rate,
-        capacity,
-    )
 }
 
 #[cfg(test)]

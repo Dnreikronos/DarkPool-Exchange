@@ -655,6 +655,7 @@ dependencies = [
  "ark-ff",
  "base64",
  "clap",
+ "dp-poseidon",
  "ecies",
  "getrandom 0.2.17",
  "hex",
@@ -671,6 +672,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "dp-poseidon"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-crypto-primitives",
+ "ark-ff",
 ]
 
 [[package]]

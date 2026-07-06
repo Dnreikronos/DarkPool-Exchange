@@ -2485,6 +2485,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dp-poseidon"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-crypto-primitives",
+ "ark-ff 0.5.0",
+ "sha2",
+]
+
+[[package]]
 name = "dp-settlement"
 version = "0.1.0"
 dependencies = [
@@ -2546,6 +2556,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-snark",
  "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
+ "dp-poseidon",
  "folding-schemes",
  "hex",
  "rust_decimal",
