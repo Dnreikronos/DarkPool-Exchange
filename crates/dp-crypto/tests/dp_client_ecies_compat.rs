@@ -48,6 +48,8 @@ async fn dp_client_ciphertext_decrypts_after_config_drift() {
         size: Decimal::new(10, 1),
         commitment_key: "abc123".into(),
         salt: "11".repeat(32),
+        nonce: "22".repeat(32),
+        expires_at_unix_nanos: 4_102_444_800_000_000_000,
         ttl: 5_000_000_000,
     };
 
@@ -64,5 +66,10 @@ async fn dp_client_ciphertext_decrypts_after_config_drift() {
     assert_eq!(decrypted.size, payload.size);
     assert_eq!(decrypted.commitment_key, payload.commitment_key);
     assert_eq!(decrypted.salt, payload.salt);
+    assert_eq!(decrypted.nonce, payload.nonce);
+    assert_eq!(
+        decrypted.expires_at_unix_nanos,
+        payload.expires_at_unix_nanos
+    );
     assert_eq!(decrypted.ttl, payload.ttl);
 }

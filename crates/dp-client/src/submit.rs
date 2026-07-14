@@ -48,6 +48,12 @@ pub fn prepare_order_with_entropy(
     let trader_id_fr = derive_trader_id(&trader_addr)?;
     let trader_id = scalar_to_be_bytes(trader_id_fr);
     let salt = parse_payload_salt(&payload.salt)?;
+    parse_payload_nonce(&payload.nonce)?;
+    if payload.expires_at_unix_nanos <= 0 {
+        return Err(ClientError::InvalidPayload(
+            "expires_at_unix_nanos must be a positive Unix nanosecond timestamp".to_string(),
+        ));
+    }
     let salt_fr = bytes32_to_scalar(&salt)?;
 
     let inp = OrderCommitmentInput::from_decimals(
@@ -91,18 +97,26 @@ fn parse_trader_address(trader: &str) -> Result<[u8; 20], ClientError> {
 }
 
 fn parse_payload_salt(salt_hex: &str) -> Result<[u8; 32], ClientError> {
-    if salt_hex.len() != 64
-        || !salt_hex
+    parse_lowercase_hex32(salt_hex, "salt")
+}
+
+fn parse_payload_nonce(nonce_hex: &str) -> Result<[u8; 32], ClientError> {
+    parse_lowercase_hex32(nonce_hex, "nonce")
+}
+
+fn parse_lowercase_hex32(hex_value: &str, name: &str) -> Result<[u8; 32], ClientError> {
+    if hex_value.len() != 64
+        || !hex_value
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
-        return Err(ClientError::InvalidPayload(
-            "salt must be a 32-byte lowercase hex string".to_string(),
-        ));
+        return Err(ClientError::InvalidPayload(format!(
+            "{name} must be a 32-byte lowercase hex string"
+        )));
     }
-    let bytes = hex::decode(salt_hex)?;
+    let bytes = hex::decode(hex_value)?;
     bytes.try_into().map_err(|_| {
-        ClientError::InvalidPayload("salt must be a 32-byte lowercase hex string".to_string())
+        ClientError::InvalidPayload(format!("{name} must be a 32-byte lowercase hex string"))
     })
 }
 
@@ -128,6 +142,8 @@ mod tests {
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
             salt: "01".repeat(32),
+            nonce: "02".repeat(32),
+            expires_at_unix_nanos: 4_102_444_800_000_000_000,
             ttl: 5_000_000_000,
         }
     }
@@ -190,6 +206,26 @@ mod tests {
             let err = prepare_order(&pk, &p).unwrap_err();
             assert!(err.to_string().contains("salt"));
         }
+    }
+
+    #[test]
+    fn malformed_payload_nonce_is_rejected() {
+        let pk = fake_pubkey();
+        for nonce in ["".to_string(), "AB".repeat(32), "ab".repeat(31)] {
+            let mut p = sample();
+            p.nonce = nonce;
+            let err = prepare_order(&pk, &p).unwrap_err();
+            assert!(err.to_string().contains("nonce"));
+        }
+    }
+
+    #[test]
+    fn invalid_payload_expiry_is_rejected() {
+        let pk = fake_pubkey();
+        let mut p = sample();
+        p.expires_at_unix_nanos = 0;
+        let err = prepare_order(&pk, &p).unwrap_err();
+        assert!(err.to_string().contains("expires_at_unix_nanos"));
     }
 
     #[test]

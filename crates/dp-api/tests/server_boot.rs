@@ -81,8 +81,9 @@ async fn grpc_server_accepts_real_client() {
 
     let mut client = DarkPoolServiceClient::new(channel);
 
-    // Empty payload → InvalidArgument from validation. Verifies the request
-    // crossed the wire and reached the handler's validation layer.
+    // Empty payload → PermissionDenied before validation because PlaceOrder
+    // now requires a wallet identity. This still verifies the request crossed
+    // the wire and reached the handler.
     let err = client
         .place_order(PlaceOrderRequest {
             commitment: vec![],
@@ -90,8 +91,8 @@ async fn grpc_server_accepts_real_client() {
             encrypted_payload: vec![],
         })
         .await
-        .expect_err("empty PlaceOrder should fail validation");
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        .expect_err("empty PlaceOrder should fail without wallet identity");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
 
     // Valid public read crossing the wire: the registered pair is listed.
     let resp = client

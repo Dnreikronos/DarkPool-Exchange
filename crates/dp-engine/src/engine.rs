@@ -497,7 +497,7 @@ impl Engine {
         _client_commitment: Vec<u8>,
         _unverified_proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        caller: Option<alloy_primitives::Address>,
+        caller: alloy_primitives::Address,
     ) -> Result<Order, EngineError> {
         if ciphertext.len() > MAX_ENCRYPTED_PAYLOAD_BYTES {
             return Err(EngineError::Validation(
@@ -529,15 +529,13 @@ impl Engine {
             .await
             .map_err(EngineError::Decrypt)?;
 
-        if let Some(expected) = caller {
-            if decrypted.trader != expected {
-                return Err(EngineError::Validation(
-                    DarkPoolError::TraderAddressMismatch {
-                        expected: format!("{:#x}", expected),
-                        found: "***".to_string(),
-                    },
-                ));
-            }
+        if decrypted.trader != caller {
+            return Err(EngineError::Validation(
+                DarkPoolError::TraderAddressMismatch {
+                    expected: format!("{:#x}", caller),
+                    found: "***".to_string(),
+                },
+            ));
         }
 
         // Plaintext validity is checked before proof verification so malformed
@@ -610,16 +608,8 @@ impl Engine {
             }
         };
 
-        let default_ttl = self.inner.state.lock().default_ttl;
-        let ttl = if decrypted.ttl > 0 {
-            Duration::from_nanos(decrypted.ttl as u64).min(MAX_TTL)
-        } else {
-            default_ttl
-        };
-
         let now = Utc::now();
-        let expires_at = now
-            + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::seconds(600));
+        let expires_at = validate_order_freshness(decrypted.expires_at_unix_nanos, now)?;
 
         let mut order = Order {
             id: Uuid::new_v4(),
@@ -644,6 +634,7 @@ impl Engine {
         // against — rather than minting a server-side salt the client cannot
         // know (#153). `trader_id` stays bound to the verified on-chain address.
         let salt = parse_order_salt(&decrypted.salt)?;
+        let nonce = parse_order_nonce(&decrypted.nonce)?;
         // Read the trader's settlement-locked balance for the asset this leg
         // spends from the installed BalanceOracle (#213). Clone the Arc out so
         // the parking_lot read guard is not held across the await; a real
@@ -689,6 +680,7 @@ impl Engine {
             _unverified_proof,
             ciphertext,
             nullifier,
+            order_nonce_digest(order.trader, &nonce),
         ) {
             Ok(seq) => order.seq = seq,
             Err(e) => return Err(e),
@@ -814,6 +806,7 @@ impl Engine {
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
         nullifier: [u8; 32],
+        order_nonce_digest: [u8; 32],
     ) -> Result<u64, EngineError> {
         // Hash the ciphertext now, before it is moved into the event below;
         // this is the replay/spent-set key (#233).
@@ -863,6 +856,9 @@ impl Engine {
         if state.spent_nullifiers.contains(&nullifier) {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
+        if state.spent_order_nonces.contains(&order_nonce_digest) {
+            return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        }
         Self::ensure_order_capacity(&state, order.trader)?;
         self.inner.store.append(&mut events)?;
         let evt = &events[0];
@@ -883,6 +879,7 @@ impl Engine {
         // live spent-set and a replay rebuilt from the log stay in lockstep.
         state.seen_ciphertexts.insert(digest);
         state.spent_nullifiers.insert(nullifier);
+        state.spent_order_nonces.insert(order_nonce_digest);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(assigned_seq)
     }
@@ -1069,25 +1066,77 @@ pub(crate) fn ciphertext_digest(ciphertext: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// SHA-256 domain-separated digest of `(trader, authenticated plaintext nonce)`.
+/// This is the durable freshness spent-set key for #233.
+pub(crate) fn order_nonce_digest(trader: alloy_primitives::Address, nonce: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"darkpool/order-nonce/v1");
+    h.update(trader.as_slice());
+    h.update(nonce);
+    h.finalize().into()
+}
+
 /// Decode the client's `salt` (lowercase hex inside the ciphertext, #217) into
 /// the 32 raw bytes the commitment and nullifier are derived from. A malformed
 /// salt is a malformed order, surfaced to the client as `SaltInvalid` rather
 /// than an internal fault.
 pub(crate) fn parse_order_salt(salt_hex: &str) -> Result<[u8; 32], EngineError> {
-    if salt_hex.len() != 64
-        || !salt_hex
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
-        return Err(EngineError::Validation(DarkPoolError::SaltInvalid));
-    }
-    let bytes: [u8; 32] = hex::decode(salt_hex)
-        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?
-        .try_into()
-        .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
+    let bytes = parse_lowercase_hex32(salt_hex, DarkPoolError::SaltInvalid)?;
     dp_zk::pedersen::bytes32_to_scalar(&bytes)
         .map_err(|_| EngineError::Validation(DarkPoolError::SaltInvalid))?;
     Ok(bytes)
+}
+
+/// Decode the authenticated freshness nonce (#233). It uses the same canonical
+/// 32-byte lowercase-hex shape as `salt`, but it is tracked independently as a
+/// per-trader replay token.
+pub(crate) fn parse_order_nonce(nonce_hex: &str) -> Result<[u8; 32], EngineError> {
+    parse_lowercase_hex32(nonce_hex, DarkPoolError::OrderNonceInvalid)
+}
+
+fn parse_lowercase_hex32(hex_value: &str, err: DarkPoolError) -> Result<[u8; 32], EngineError> {
+    if hex_value.len() != 64
+        || !hex_value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(EngineError::Validation(err));
+    }
+    hex::decode(hex_value)
+        .map_err(|_| EngineError::Validation(err.clone()))?
+        .try_into()
+        .map_err(|_| EngineError::Validation(err))
+}
+
+pub(crate) fn order_expiry_from_unix_nanos(
+    nanos: i64,
+) -> Result<chrono::DateTime<Utc>, EngineError> {
+    if nanos <= 0 {
+        return Err(EngineError::Validation(DarkPoolError::OrderExpiryInvalid));
+    }
+    let secs = nanos.div_euclid(1_000_000_000);
+    let nsec = nanos.rem_euclid(1_000_000_000) as u32;
+    chrono::DateTime::<Utc>::from_timestamp(secs, nsec)
+        .ok_or(EngineError::Validation(DarkPoolError::OrderExpiryInvalid))
+}
+
+fn validate_order_freshness(
+    expires_at_unix_nanos: i64,
+    now: chrono::DateTime<Utc>,
+) -> Result<chrono::DateTime<Utc>, EngineError> {
+    let expires_at = order_expiry_from_unix_nanos(expires_at_unix_nanos)?;
+    if expires_at <= now {
+        return Err(EngineError::Validation(DarkPoolError::OrderExpired));
+    }
+    let max_expires_at = now
+        + chrono::Duration::from_std(MAX_TTL)
+            .map_err(|_| EngineError::Validation(DarkPoolError::OrderExpiryInvalid))?;
+    if expires_at > max_expires_at {
+        return Err(EngineError::Validation(DarkPoolError::OrderExpiryTooFar {
+            max_seconds: MAX_TTL.as_secs(),
+        }));
+    }
+    Ok(expires_at)
 }
 
 /// Compute the Poseidon order commitment (matches the in-circuit gadget
@@ -1175,6 +1224,16 @@ pub(crate) fn build_decrypted_ciphertext(
         size,
         commitment_key: commitment_key.to_string(),
         salt: hex::encode(salt),
+        nonce: {
+            use ark_bn254::Fr;
+            use ark_ff::UniformRand;
+
+            hex::encode(dp_zk::fr_to_bytes32(Fr::rand(&mut rand::rngs::OsRng)))
+        },
+        expires_at_unix_nanos: (Utc::now()
+            + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::seconds(600)))
+        .timestamp_nanos_opt()
+        .unwrap(),
         ttl: ttl.as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
