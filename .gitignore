@@ -26,6 +26,10 @@ Thumbs.db
 *.swo
 *~
 
+# local agent tooling
+.claude/
+AGENTS.md
+
 # debug logs
 npm-debug.log*
 yarn-debug.log*
