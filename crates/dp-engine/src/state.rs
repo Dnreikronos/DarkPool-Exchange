@@ -195,6 +195,10 @@ pub(crate) struct SerializableState {
     /// Public nullifiers already admitted. A projection rebuilt from
     /// `OrderPlaced` ciphertext salts and captured in v3+ snapshots.
     pub spent_nullifiers: HashSet<[u8; 32]>,
+    /// SHA-256 digests of `(trader, nonce)` for every admitted order (#233).
+    /// Rebuilt from `OrderPlaced` ciphertexts and captured in snapshots.
+    #[serde(default)]
+    pub spent_order_nonces: HashSet<[u8; 32]>,
 }
 
 pub(crate) struct EngineState {
@@ -215,6 +219,10 @@ pub(crate) struct EngineState {
     pub seen_ciphertexts: HashSet<[u8; 32]>,
     /// Cryptographic per-order replay keys derived from `(commitment, salt)`.
     pub spent_nullifiers: HashSet<[u8; 32]>,
+    /// Authenticated per-trader freshness nonces from admitted plaintext orders
+    /// (#233). Unlike ciphertexts, this also rejects replay attempts that
+    /// re-encrypt equivalent order intent with a fresh ECIES envelope and salt.
+    pub spent_order_nonces: HashSet<[u8; 32]>,
     pub submit_timeout: Duration,
     pub min_backoff: Duration,
     pub max_backoff: Duration,
@@ -231,6 +239,7 @@ impl EngineState {
             pending_batches: HashMap::new(),
             seen_ciphertexts: HashSet::new(),
             spent_nullifiers: HashSet::new(),
+            spent_order_nonces: HashSet::new(),
             submit_timeout: DEFAULT_SUBMIT_TIMEOUT,
             min_backoff: DEFAULT_MIN_BACKOFF,
             max_backoff: DEFAULT_MAX_BACKOFF,
@@ -249,6 +258,7 @@ impl EngineState {
         // it replays the log (or restores it from a snapshot).
         self.seen_ciphertexts.clear();
         self.spent_nullifiers.clear();
+        self.spent_order_nonces.clear();
     }
 
     pub fn pair_config(&self, pair: &str) -> Option<&PairConfig> {
@@ -267,6 +277,7 @@ impl EngineState {
             pending_batches: self.pending_batches.clone(),
             seen_ciphertexts: self.seen_ciphertexts.clone(),
             spent_nullifiers: self.spent_nullifiers.clone(),
+            spent_order_nonces: self.spent_order_nonces.clone(),
         }
     }
 
@@ -280,6 +291,7 @@ impl EngineState {
         self.pending_batches = snap.pending_batches;
         self.seen_ciphertexts = snap.seen_ciphertexts;
         self.spent_nullifiers = snap.spent_nullifiers;
+        self.spent_order_nonces = snap.spent_order_nonces;
     }
 }
 

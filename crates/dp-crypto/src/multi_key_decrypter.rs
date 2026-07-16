@@ -321,6 +321,8 @@ mod tests {
             size: Decimal::new(5, 0),
             commitment_key: "ck-multi".into(),
             salt: "44".repeat(32),
+            nonce: "55".repeat(32),
+            expires_at_unix_nanos: 4_102_444_800_000_000_000,
             ttl: 3_000_000_000,
         }
     }

@@ -32,6 +32,12 @@ fn cli_bin() -> PathBuf {
     workspace.join("target/debug/dp-zk-cli")
 }
 
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::seconds(600))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 async fn place(
     engine: &Engine,
     side: Side,
@@ -47,11 +53,17 @@ async fn place(
         size: Decimal::from(10),
         commitment_key: key.into(),
         salt: "01".repeat(32),
+        nonce: {
+            let mut nonce = [0u8; 32];
+            nonce[..20].copy_from_slice(trader.as_slice());
+            hex::encode(nonce)
+        },
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: Duration::from_secs(60).as_nanos() as i64,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, trader)
         .await
         .unwrap();
 }

@@ -28,6 +28,8 @@ pub struct OrderPayload {
     pub size: Decimal,
     pub commitment_key: String,
     pub salt: String,
+    pub nonce: String,
+    pub expires_at_unix_nanos: i64,
     pub ttl: i64,
 }
 
@@ -45,6 +47,8 @@ mod tests {
             size: Decimal::new(10, 1),
             commitment_key: "abc123".into(),
             salt: "01".repeat(32),
+            nonce: "02".repeat(32),
+            expires_at_unix_nanos: 4_102_444_800_000_000_000,
             ttl: 5_000_000_000,
         };
         let json = serde_json::to_string(&p).unwrap();
@@ -54,6 +58,8 @@ mod tests {
         assert!(json.contains("\"price\":\"2500.00\""));
         assert!(json.contains("\"size\":\"1.0\""));
         assert!(json.contains("\"salt\":\"0101"));
+        assert!(json.contains("\"nonce\":\"0202"));
+        assert!(json.contains("\"expires_at_unix_nanos\":4102444800000000000"));
         assert!(json.contains("\"ttl\":5000000000"));
     }
 }

@@ -66,6 +66,7 @@ async fn place_order_missing_fields_400() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(Address::ZERO))
                 .body(Body::from(
                     r#"{"commitment":"","proof":"","encryptedPayload":""}"#,
                 ))
@@ -121,6 +122,12 @@ fn canonical_salt(n: u64) -> String {
     hex::encode(bytes)
 }
 
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::minutes(10))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 #[tokio::test]
 async fn rest_place_get_cancel_round_trip() {
     let (app, _engine) = registered_app();
@@ -132,6 +139,8 @@ async fn rest_place_get_cancel_round_trip() {
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
         salt: canonical_salt(1),
+        nonce: canonical_salt(1),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -150,6 +159,7 @@ async fn rest_place_get_cancel_round_trip() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(d.trader))
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -206,6 +216,8 @@ async fn rest_place_order_bad_salt_returns_400() {
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
         salt: "AB".repeat(32),
+        nonce: canonical_salt(2),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -223,6 +235,7 @@ async fn rest_place_order_bad_salt_returns_400() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(d.trader))
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -249,6 +262,8 @@ async fn rest_list_orders_is_scoped_to_caller() {
             size: "1".parse().unwrap(),
             commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
             salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            nonce: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -274,6 +289,7 @@ async fn rest_list_orders_is_scoped_to_caller() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
+                    .extension(AuthenticatedIdentity::Wallet(trader))
                     .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )
@@ -547,6 +563,8 @@ async fn sse_stream_receives_auction_events() {
             size: "1".parse().unwrap(),
             commitment_key: format!("sse-{}-{}", side as u8, price),
             salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            nonce: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -576,6 +594,7 @@ async fn sse_stream_receives_auction_events() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
+                    .extension(AuthenticatedIdentity::Wallet(trader))
                     .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )

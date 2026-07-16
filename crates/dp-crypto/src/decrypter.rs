@@ -53,6 +53,8 @@ mod tests {
             size: Decimal::new(1, 0),
             commitment_key: "key1".into(),
             salt: "33".repeat(32),
+            nonce: "44".repeat(32),
+            expires_at_unix_nanos: 4_102_444_800_000_000_000,
             ttl: 10_000_000_000,
         };
         let json = serde_json::to_vec(&order).unwrap();

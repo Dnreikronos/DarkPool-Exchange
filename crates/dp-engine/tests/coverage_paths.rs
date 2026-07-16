@@ -127,6 +127,24 @@ fn dec(s: &str) -> Decimal {
     Decimal::from_str_exact(s).unwrap()
 }
 
+fn future_expiry_nanos() -> i64 {
+    (Utc::now() + chrono::Duration::seconds(600))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
+fn near_expiry_nanos() -> i64 {
+    (Utc::now() + chrono::Duration::milliseconds(1))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
+fn next_nonce_hex() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    format!("{:064x}", SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
 fn engine_with_store(store: Arc<dyn Store>) -> Engine {
     let engine = Engine::new(store, Duration::from_millis(50));
     engine.set_decrypter(Arc::new(JsonDecrypter));
@@ -134,19 +152,22 @@ fn engine_with_store(store: Arc<dyn Store>) -> Engine {
 }
 
 async fn place(engine: &Engine, pair: &str, side: Side, price: &str, size: &str, key: &str) {
+    let trader = Address::ZERO;
     let d = DecryptedOrder {
-        trader: Address::ZERO,
+        trader,
         pair: pair.into(),
         side,
         price: dec(price),
         size: dec(size),
         commitment_key: key.into(),
         salt: "01".repeat(32),
+        nonce: next_nonce_hex(),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, trader)
         .await
         .unwrap();
 }
@@ -171,11 +192,13 @@ async fn tick_collects_and_emits_expired_orders() {
         size: dec("1"),
         commitment_key: "expiring".into(),
         salt: "01".repeat(32),
+        nonce: next_nonce_hex(),
+        expires_at_unix_nanos: near_expiry_nanos(),
         ttl: 1,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, d.trader)
         .await
         .unwrap();
 
@@ -250,6 +273,8 @@ async fn recover_returns_commitment_mismatch_for_tampered_event() {
         size: dec("1"),
         commitment_key: "k".into(),
         salt: "01".repeat(32),
+        nonce: next_nonce_hex(),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
@@ -275,10 +300,10 @@ async fn recover_returns_commitment_mismatch_for_tampered_event() {
     );
 }
 
-// ---------- recover: default ttl when ciphertext encodes ttl=0 ----------
+// ---------- recover: authenticated expiry when ciphertext encodes ttl=0 ----------
 
 #[tokio::test]
-async fn recover_uses_default_ttl_when_decrypted_ttl_is_zero() {
+async fn recover_uses_authenticated_expiry_when_decrypted_ttl_is_zero() {
     let store: Arc<dyn Store> = Arc::new(MemStore::new());
     let engine = engine_with_store(store.clone());
     engine
@@ -292,17 +317,19 @@ async fn recover_uses_default_ttl_when_decrypted_ttl_is_zero() {
         size: dec("1"),
         commitment_key: "k".into(),
         salt: "01".repeat(32),
+        nonce: next_nonce_hex(),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 0,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, d.trader)
         .await
         .unwrap();
 
     let engine2 = engine_with_store(store);
     engine2.recover().await.unwrap();
-    // Order is recovered with default TTL (24h by default), so it remains active.
+    // Order is recovered from the authenticated absolute expiry, so it remains active.
     assert_eq!(engine2.active_order_count(), 1);
 }
 

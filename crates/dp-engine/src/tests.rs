@@ -34,6 +34,12 @@ fn make_engine() -> (Engine, Arc<MemStore>) {
     (engine, store)
 }
 
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::seconds(600))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 fn dec(n: i64) -> Decimal {
     Decimal::new(n, 0)
 }
@@ -137,7 +143,7 @@ async fn place_order_rejects_oversized_encrypted_payload_in_engine() {
             vec![0u8; 32],
             vec![],
             vec![0u8; crate::engine::MAX_ENCRYPTED_PAYLOAD_BYTES + 1],
-            None,
+            Address::ZERO,
         )
         .await
         .unwrap_err();
@@ -281,7 +287,10 @@ async fn persist_order_enforces_process_active_order_cap() {
             vec![0u8; 32],
             vec![],
             vec![9, 9, 9],
-            [9u8; 32],
+            crate::engine::ReplayProtection {
+                nullifier: [9u8; 32],
+                order_nonce_digest: [10u8; 32],
+            },
         )
         .unwrap_err();
 
@@ -618,11 +627,13 @@ async fn place_encrypted_order_noop_round_trip() {
         size: dec(1),
         commitment_key: "k".into(),
         salt: "01".repeat(32),
+        nonce: "02".repeat(32),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     let order = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .unwrap();
     assert_eq!(order.pair, "BTC-USD");
@@ -639,11 +650,13 @@ async fn place_encrypted_order_uses_engine_derived_commitment() {
         size: dec(1),
         commitment_key: "k".into(),
         salt: "01".repeat(32),
+        nonce: "02".repeat(32),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     let _order = engine
-        .place_encrypted_order(vec![0xAB; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0xAB; 32], vec![], ct, Address::ZERO)
         .await
         .expect("engine no longer rejects on client commitment");
 
@@ -700,11 +713,22 @@ fn parse_order_salt_rejects_non_canonical_field_encoding() {
     ));
 }
 
+#[test]
+fn parse_order_nonce_requires_lowercase_32_byte_hex() {
+    assert!(crate::engine::parse_order_nonce(&"01".repeat(32)).is_ok());
+    for nonce in ["AB".repeat(32), "zz".repeat(32), "ab".repeat(31)] {
+        assert!(matches!(
+            crate::engine::parse_order_nonce(&nonce),
+            Err(EngineError::Validation(DarkPoolError::OrderNonceInvalid))
+        ));
+    }
+}
+
 #[tokio::test]
 async fn place_encrypted_order_bad_ciphertext() {
     let (engine, _) = make_engine();
     let r = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], b"not json".to_vec(), None)
+        .place_encrypted_order(vec![0u8; 32], vec![], b"not json".to_vec(), Address::ZERO)
         .await;
     assert!(r.is_err());
 }
@@ -712,8 +736,8 @@ async fn place_encrypted_order_bad_ciphertext() {
 /// The canonical encrypted order on `pair`, shared by the `place_encrypted_order`
 /// tests. `NoopDecrypter`/`CountingDecrypter` parse the order straight from this
 /// JSON, so the plaintext round-trips.
-fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
-    serde_json::to_vec(&DecryptedOrder {
+fn sample_order_for(pair: &str) -> DecryptedOrder {
+    DecryptedOrder {
         trader: Address::ZERO,
         pair: pair.into(),
         side: Side::Buy,
@@ -721,9 +745,14 @@ fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
         size: dec(1),
         commitment_key: "k".into(),
         salt: "01".repeat(32),
+        nonce: "02".repeat(32),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
-    })
-    .unwrap()
+    }
+}
+
+fn sample_order_ciphertext_for(pair: &str) -> Vec<u8> {
+    serde_json::to_vec(&sample_order_for(pair)).unwrap()
 }
 
 /// The canonical order on the default `BTC-USD` pair. Real ECIES is randomized,
@@ -735,7 +764,7 @@ fn sample_order_ciphertext() -> Vec<u8> {
 /// Submit the canonical order, expecting admission.
 async fn admit_sample_order(engine: &Engine, ct: Vec<u8>) {
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .expect("first submission is admitted");
 }
@@ -743,7 +772,7 @@ async fn admit_sample_order(engine: &Engine, ct: Vec<u8>) {
 /// Resubmit `ct` and assert it is rejected as a #233 replay.
 async fn expect_replay_rejected(engine: &Engine, ct: Vec<u8>) {
     let err = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .unwrap_err();
     assert!(
@@ -763,7 +792,7 @@ async fn place_encrypted_order_rejects_caller_address_mismatch() {
         .parse()
         .unwrap();
     let r = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(wrong_caller))
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, wrong_caller)
         .await;
     assert!(r.is_err());
     let msg = r.unwrap_err().to_string();
@@ -775,10 +804,114 @@ async fn place_encrypted_order_accepts_matching_caller() {
     let (engine, _) = make_engine();
     let ct = sample_order_ciphertext();
     let order = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, Some(Address::ZERO))
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .expect("matching caller should succeed");
     assert_eq!(order.trader, Address::ZERO);
+}
+
+#[tokio::test]
+async fn place_encrypted_order_rejects_invalid_nonce() {
+    let (engine, _) = make_engine();
+    let mut d = sample_order_for("BTC-USD");
+    d.nonce = "AB".repeat(32);
+    let err = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&d).unwrap(),
+            d.trader,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::OrderNonceInvalid)
+    ));
+}
+
+#[tokio::test]
+async fn place_encrypted_order_rejects_expired_plaintext() {
+    let (engine, store) = make_engine();
+    let mut d = sample_order_for("BTC-USD");
+    d.expires_at_unix_nanos = (chrono::Utc::now() - chrono::Duration::seconds(1))
+        .timestamp_nanos_opt()
+        .unwrap();
+
+    let err = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&d).unwrap(),
+            d.trader,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::OrderExpired)
+    ));
+    assert_eq!(count_events(store.as_ref(), EventType::OrderPlaced), 0);
+}
+
+#[tokio::test]
+async fn place_encrypted_order_uses_authenticated_expiry() {
+    let (engine, _) = make_engine();
+    let mut d = sample_order_for("BTC-USD");
+    let expected_expiry = chrono::Utc::now() + chrono::Duration::seconds(30);
+    d.expires_at_unix_nanos = expected_expiry.timestamp_nanos_opt().unwrap();
+    d.ttl = 600_000_000_000;
+
+    let order = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&d).unwrap(),
+            d.trader,
+        )
+        .await
+        .expect("fresh order should be admitted");
+
+    assert_eq!(
+        order.expires_at.timestamp_nanos_opt(),
+        Some(d.expires_at_unix_nanos)
+    );
+}
+
+#[tokio::test]
+async fn repeated_plaintext_nonce_is_rejected_with_distinct_ciphertext_and_salt() {
+    let (engine, _) = make_engine();
+    let mut first = sample_order_for("BTC-USD");
+    first.salt = "03".repeat(32);
+    let mut second = first.clone();
+    second.salt = "04".repeat(32);
+    second.commitment_key = "different-ciphertext".into();
+
+    engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&first).unwrap(),
+            first.trader,
+        )
+        .await
+        .expect("first nonce use should be admitted");
+
+    let err = engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&second).unwrap(),
+            second.trader,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::DuplicateOrder)
+    ));
 }
 
 #[tokio::test]
@@ -789,7 +922,7 @@ async fn verified_order_proof_is_admitted() {
     engine.set_order_proof_verifier(Arc::new(verifier));
 
     let order = engine
-        .place_encrypted_order(commitment, proof, serde_json::to_vec(&d).unwrap(), None)
+        .place_encrypted_order(commitment, proof, serde_json::to_vec(&d).unwrap(), d.trader)
         .await
         .expect("valid proof should admit order");
     assert_eq!(order.trader, d.trader);
@@ -807,7 +940,7 @@ async fn invalid_order_proof_is_rejected() {
             commitment,
             vec![0xAA; 32],
             serde_json::to_vec(&d).unwrap(),
-            None,
+            d.trader,
         )
         .await
         .unwrap_err();
@@ -831,7 +964,7 @@ async fn clear_order_proof_verifier_restores_unverified_local_mode() {
             commitment,
             vec![0xAA; 32],
             serde_json::to_vec(&d).unwrap(),
-            None,
+            d.trader,
         )
         .await
         .expect("cleared verifier should allow local unverified mode");
@@ -851,7 +984,7 @@ async fn repeated_nullifier_is_rejected_even_with_distinct_ciphertext() {
             commitment.clone(),
             proof.clone(),
             serde_json::to_vec(&d).unwrap(),
-            None,
+            d.trader,
         )
         .await
         .expect("first order admitted");
@@ -861,7 +994,7 @@ async fn repeated_nullifier_is_rejected_even_with_distinct_ciphertext() {
             commitment,
             proof,
             serde_json::to_string_pretty(&d).unwrap().into_bytes(),
-            None,
+            d.trader,
         )
         .await
         .unwrap_err();
@@ -886,7 +1019,7 @@ async fn repeated_nullifier_is_rejected_after_recovery() {
             commitment.clone(),
             proof.clone(),
             serde_json::to_vec(&d).unwrap(),
-            None,
+            d.trader,
         )
         .await
         .expect("first order admitted");
@@ -899,7 +1032,7 @@ async fn repeated_nullifier_is_rejected_after_recovery() {
             commitment,
             proof,
             serde_json::to_string_pretty(&d).unwrap().into_bytes(),
-            None,
+            d.trader,
         )
         .await
         .unwrap_err();
@@ -955,6 +1088,49 @@ async fn replayed_ciphertext_rejected_after_recovery() {
     expect_replay_rejected(&recovered, ct).await;
 }
 
+#[tokio::test]
+async fn repeated_plaintext_nonce_is_rejected_after_recovery_with_distinct_ciphertext_and_salt() {
+    let store = Arc::new(MemStore::new());
+    let engine = Engine::new(store.clone(), Duration::from_millis(50));
+    engine
+        .register_pair_with_event("BTC-USD", crate::state::PairConfig::default())
+        .expect("register pair");
+
+    let mut first = sample_order_for("BTC-USD");
+    first.salt = "03".repeat(32);
+    first.nonce = "09".repeat(32);
+    let mut second = first.clone();
+    second.salt = "04".repeat(32);
+    second.commitment_key = "distinct-ciphertext-after-recovery".into();
+
+    engine
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&first).unwrap(),
+            first.trader,
+        )
+        .await
+        .expect("first nonce use should be admitted");
+
+    let recovered = Engine::new(store, Duration::from_millis(50));
+    recovered.recover().await.expect("recover from log");
+
+    let err = recovered
+        .place_encrypted_order(
+            vec![0u8; 32],
+            vec![],
+            serde_json::to_vec(&second).unwrap(),
+            second.trader,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Validation(DarkPoolError::DuplicateOrder)
+    ));
+}
+
 /// Regression: admin registers via `Pair::parse` (canonical upper-case),
 /// but traders may send any casing. The trader path must canonicalise
 /// before the registry lookup — otherwise `eth/usdc` 404s against an
@@ -969,7 +1145,7 @@ async fn place_encrypted_order_canonicalises_lowercase_pair() {
 
     let ct = sample_order_ciphertext_for("eth/usdc");
     let order = engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .expect("lowercase pair canonicalises and matches registry");
 
@@ -997,12 +1173,14 @@ async fn event_store_contains_no_plaintext() {
         size: Decimal::new(987654321, 4),
         commitment_key: commitment_key.into(),
         salt: "01".repeat(32),
+        nonce: "02".repeat(32),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let plain = serde_json::to_vec(&d).unwrap();
     let ct = xor.encrypt(&plain);
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
         .await
         .unwrap();
 
@@ -1650,6 +1828,12 @@ async fn full_pipeline_encrypted_order_to_settlement() {
                 size: dec(1),
                 commitment_key: key.into(),
                 salt: "01".repeat(32),
+                nonce: {
+                    let mut nonce = [0u8; 32];
+                    nonce[..20].copy_from_slice(trader.as_slice());
+                    hex::encode(nonce)
+                },
+                expires_at_unix_nanos: future_expiry_nanos(),
                 ttl: 60_000_000_000,
             };
             let plaintext = serde_json::to_vec(&order).unwrap();
@@ -1663,11 +1847,11 @@ async fn full_pipeline_encrypted_order_to_settlement() {
         encrypt_order(Address::repeat_byte(2), Side::Sell, dec(1900), "ask-key");
 
     let bid_order = engine
-        .place_encrypted_order(bid_commit, vec![], bid_ct, None)
+        .place_encrypted_order(bid_commit, vec![], bid_ct, Address::repeat_byte(1))
         .await
         .unwrap();
     let ask_order = engine
-        .place_encrypted_order(ask_commit, vec![], ask_ct, None)
+        .place_encrypted_order(ask_commit, vec![], ask_ct, Address::repeat_byte(2))
         .await
         .unwrap();
     assert_eq!(bid_order.pair, "ETH-USD");
@@ -1799,7 +1983,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
-                [1u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(
@@ -1835,7 +2022,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
-                [1u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(matches!(
@@ -1858,7 +2048,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![],
-                [1u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(matches!(

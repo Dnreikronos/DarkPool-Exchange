@@ -40,6 +40,18 @@ fn bench_events() -> usize {
         .unwrap_or(DEFAULT_EVENTS)
 }
 
+fn canonical_hex32(n: u64) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&n.to_be_bytes());
+    hex::encode(bytes)
+}
+
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::hours(12))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 struct JsonDecrypter;
 
 impl Decrypter for JsonDecrypter {
@@ -77,14 +89,16 @@ async fn populate_store(engine: &Engine, n: usize) {
             price: Decimal::new(100 + (i as i64 % 7), 0),
             size: Decimal::new(1, 0),
             commitment_key: format!("ck-{i}"),
-            salt: "01".repeat(32),
+            salt: canonical_hex32(i as u64 + 1),
+            nonce: canonical_hex32(i as u64 + 1),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         let ct = serde_json::to_vec(&order).unwrap();
         // Engine recomputes the commitment internally; supplying an
         // empty placeholder here is allowed by `place_encrypted_order`.
         engine
-            .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+            .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
             .await
             .expect("place");
     }

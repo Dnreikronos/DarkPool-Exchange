@@ -399,7 +399,7 @@ impl Engine {
         &self,
         ev: &Event,
         decrypter: &dyn Decrypter,
-        default_ttl: Duration,
+        _default_ttl: Duration,
         matches_by_auction: &mut HashMap<Uuid, Vec<OrphanMatch>>,
         auction_timestamps: &mut HashMap<Uuid, DateTime<Utc>>,
         placed_orders: &mut HashMap<Uuid, Order>,
@@ -446,14 +446,11 @@ impl Engine {
                         order_id: *order_id,
                     });
                 }
-                let ttl = if decrypted.ttl > 0 {
-                    Duration::from_nanos(decrypted.ttl as u64).min(crate::engine::MAX_TTL)
-                } else {
-                    default_ttl
-                };
-                let expires_at = ev.timestamp
-                    + chrono::Duration::from_std(ttl)
-                        .unwrap_or_else(|_| chrono::Duration::seconds(600));
+                let nonce = crate::engine::parse_order_nonce(&decrypted.nonce).map_err(|_| {
+                    EngineError::Validation(dp_types::DarkPoolError::OrderNonceInvalid)
+                })?;
+                let expires_at =
+                    crate::engine::order_expiry_from_unix_nanos(decrypted.expires_at_unix_nanos)?;
                 // Mirror the live path's canonicalisation
                 // (`Engine::place_encrypted_order`). Otherwise an event with
                 // pre-canonicalisation or trader-cased `pair` ("eth/usdc")
@@ -497,6 +494,9 @@ impl Engine {
                     .seen_ciphertexts
                     .insert(crate::engine::ciphertext_digest(ciphertext));
                 state.spent_nullifiers.insert(nullifier);
+                state
+                    .spent_order_nonces
+                    .insert(crate::engine::order_nonce_digest(decrypted.trader, &nonce));
             }
             EventData::OrderCancelled { .. } | EventData::OrderExpired { .. } => {
                 self.inner.state.lock().book.apply(ev);

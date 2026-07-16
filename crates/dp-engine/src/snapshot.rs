@@ -331,6 +331,7 @@ mod tests {
             pending_batches: HashMap::new(),
             seen_ciphertexts: Default::default(),
             spent_nullifiers: Default::default(),
+            spent_order_nonces: Default::default(),
         }
     }
 

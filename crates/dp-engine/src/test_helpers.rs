@@ -394,5 +394,7 @@ pub async fn place_plaintext_order_as(
         commitment_key,
         ttl,
     );
-    engine.place_encrypted_order(commit, vec![], ct, None).await
+    engine
+        .place_encrypted_order(commit, vec![], ct, trader)
+        .await
 }

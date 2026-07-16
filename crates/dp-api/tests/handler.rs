@@ -57,6 +57,12 @@ fn canonical_salt(n: u64) -> String {
     hex::encode(bytes)
 }
 
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::minutes(10))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 fn build_req(d: &DecryptedOrder) -> PlaceOrderRequest {
     let ct = serde_json::to_vec(d).unwrap();
     build_req_from_ciphertext(ct)
@@ -83,6 +89,8 @@ fn valid_decrypted() -> DecryptedOrder {
         size: Decimal::from(10),
         commitment_key: format!("ck-{}", n),
         salt: canonical_salt(n),
+        nonce: canonical_salt(n),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     }
 }
@@ -103,19 +111,20 @@ async fn place_test_order(
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
         salt: canonical_salt(n),
+        nonce: canonical_salt(n),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 600_000_000_000,
     };
     let resp = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .expect("place_order")
         .into_inner();
     resp.order.unwrap().id
 }
 
-/// Place an order owned by a specific trader. No caller identity is set on
-/// the place request (caller `None` skips the trader/caller binding check),
-/// so the order lands in the book with `trader == owner`.
+/// Place an order owned by a specific trader. The request carries the owner's
+/// wallet identity so placement satisfies the mandatory trader/caller binding.
 async fn place_test_order_as(
     h: &ApiHandler,
     owner: Address,
@@ -133,10 +142,12 @@ async fn place_test_order_as(
         size: size.parse().unwrap(),
         commitment_key: format!("test-key-{}", n),
         salt: canonical_salt(n),
+        nonce: canonical_salt(n),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 600_000_000_000,
     };
     let resp = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .expect("place_order")
         .into_inner();
@@ -157,8 +168,9 @@ fn wallet_req<T>(inner: T, wallet: Address) -> Request<T> {
 #[tokio::test]
 async fn place_order_success() {
     let h = new_handler();
+    let d = valid_decrypted();
     let resp = h
-        .place_order(Request::new(build_req(&valid_decrypted())))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .unwrap()
         .into_inner();
@@ -183,7 +195,7 @@ async fn place_order_validation_errors() {
         let mut d = valid_decrypted();
         mutate(&mut d);
         let err = h
-            .place_order(Request::new(build_req(&d)))
+            .place_order(wallet_req(build_req(&d), d.trader))
             .await
             .err()
             .unwrap_or_else(|| panic!("{} should fail", name));
@@ -194,12 +206,14 @@ async fn place_order_validation_errors() {
 #[tokio::test]
 async fn place_order_missing_salt_is_invalid_argument() {
     let h = new_handler();
-    let mut v = serde_json::to_value(valid_decrypted()).unwrap();
+    let d = valid_decrypted();
+    let mut v = serde_json::to_value(&d).unwrap();
     v.as_object_mut().unwrap().remove("salt");
     let err = h
-        .place_order(Request::new(build_req_from_ciphertext(
-            serde_json::to_vec(&v).unwrap(),
-        )))
+        .place_order(wallet_req(
+            build_req_from_ciphertext(serde_json::to_vec(&v).unwrap()),
+            d.trader,
+        ))
         .await
         .err()
         .unwrap();
@@ -209,12 +223,14 @@ async fn place_order_missing_salt_is_invalid_argument() {
 #[tokio::test]
 async fn place_order_non_string_salt_is_invalid_argument() {
     let h = new_handler();
-    let mut v = serde_json::to_value(valid_decrypted()).unwrap();
+    let d = valid_decrypted();
+    let mut v = serde_json::to_value(&d).unwrap();
     v["salt"] = serde_json::json!(0);
     let err = h
-        .place_order(Request::new(build_req_from_ciphertext(
-            serde_json::to_vec(&v).unwrap(),
-        )))
+        .place_order(wallet_req(
+            build_req_from_ciphertext(serde_json::to_vec(&v).unwrap()),
+            d.trader,
+        ))
         .await
         .err()
         .unwrap();
@@ -227,7 +243,7 @@ async fn place_order_bad_salt_hex_is_invalid_argument() {
     let mut d = valid_decrypted();
     d.salt = "zz".repeat(32);
     let err = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .err()
         .unwrap();
@@ -241,7 +257,7 @@ async fn place_order_wrong_length_salt_is_invalid_argument() {
     let mut d = valid_decrypted();
     d.salt = "ab".repeat(31);
     let err = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .err()
         .unwrap();
@@ -255,7 +271,7 @@ async fn place_order_empty_salt_is_invalid_argument() {
     let mut d = valid_decrypted();
     d.salt.clear();
     let err = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .err()
         .unwrap();
@@ -269,7 +285,7 @@ async fn place_order_uppercase_salt_is_invalid_argument() {
     let mut d = valid_decrypted();
     d.salt = "AB".repeat(32);
     let err = h
-        .place_order(Request::new(build_req(&d)))
+        .place_order(wallet_req(build_req(&d), d.trader))
         .await
         .err()
         .unwrap();
@@ -280,9 +296,14 @@ async fn place_order_uppercase_salt_is_invalid_argument() {
 #[tokio::test]
 async fn place_order_missing_commitment() {
     let h = new_handler();
-    let mut req = build_req(&valid_decrypted());
+    let d = valid_decrypted();
+    let mut req = build_req(&d);
     req.commitment.clear();
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
+    let err = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert_eq!(err.message(), MSG_COMMITMENT_REQUIRED);
 }
@@ -290,9 +311,14 @@ async fn place_order_missing_commitment() {
 #[tokio::test]
 async fn place_order_missing_ciphertext() {
     let h = new_handler();
-    let mut req = build_req(&valid_decrypted());
+    let d = valid_decrypted();
+    let mut req = build_req(&d);
     req.encrypted_payload.clear();
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
+    let err = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert_eq!(err.message(), MSG_CIPHERTEXT_REQUIRED);
 }
@@ -300,9 +326,14 @@ async fn place_order_missing_ciphertext() {
 #[tokio::test]
 async fn place_order_ciphertext_too_large() {
     let h = new_handler();
-    let mut req = build_req(&valid_decrypted());
+    let d = valid_decrypted();
+    let mut req = build_req(&d);
     req.encrypted_payload = vec![0u8; MAX_CIPHERTEXT_BYTES + 1];
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
+    let err = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert_eq!(err.message(), MSG_CIPHERTEXT_TOO_LARGE);
 }
@@ -321,25 +352,39 @@ async fn place_order_accepts_any_nonempty_commitment() {
         proof: stub_proof(),
         encrypted_payload: ct,
     };
-    let resp = h.place_order(Request::new(req)).await.unwrap().into_inner();
+    let resp = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .unwrap()
+        .into_inner();
     assert!(resp.order.is_some());
 }
 
 #[tokio::test]
 async fn place_order_missing_proof() {
     let h = new_handler();
-    let mut req = build_req(&valid_decrypted());
+    let d = valid_decrypted();
+    let mut req = build_req(&d);
     req.proof.clear();
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
+    let err = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
 }
 
 #[tokio::test]
 async fn place_order_proof_too_large() {
     let h = new_handler();
-    let mut req = build_req(&valid_decrypted());
+    let d = valid_decrypted();
+    let mut req = build_req(&d);
     req.proof = vec![0u8; MAX_PROOF_BYTES + 1];
-    let err = h.place_order(Request::new(req)).await.err().unwrap();
+    let err = h
+        .place_order(wallet_req(req, d.trader))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert_eq!(err.message(), MSG_PROOF_TOO_LARGE);
 }
