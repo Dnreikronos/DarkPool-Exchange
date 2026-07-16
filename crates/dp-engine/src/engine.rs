@@ -55,6 +55,12 @@ impl Drop for OrderSecrets {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReplayProtection {
+    pub nullifier: [u8; 32],
+    pub order_nonce_digest: [u8; 32],
+}
+
 /// Lock-ordering invariant for [`Inner`]:
 ///
 /// **secrets → state.** When both must be held, acquire `secrets` first,
@@ -679,8 +685,10 @@ impl Engine {
             commitment,
             _unverified_proof,
             ciphertext,
-            nullifier,
-            order_nonce_digest(order.trader, &nonce),
+            ReplayProtection {
+                nullifier,
+                order_nonce_digest: order_nonce_digest(order.trader, &nonce),
+            },
         ) {
             Ok(seq) => order.seq = seq,
             Err(e) => return Err(e),
@@ -805,8 +813,7 @@ impl Engine {
         commitment: Vec<u8>,
         proof: Vec<u8>,
         ciphertext: Vec<u8>,
-        nullifier: [u8; 32],
-        order_nonce_digest: [u8; 32],
+        replay: ReplayProtection,
     ) -> Result<u64, EngineError> {
         // Hash the ciphertext now, before it is moved into the event below;
         // this is the replay/spent-set key (#233).
@@ -853,10 +860,13 @@ impl Engine {
         if state.seen_ciphertexts.contains(&digest) {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
-        if state.spent_nullifiers.contains(&nullifier) {
+        if state.spent_nullifiers.contains(&replay.nullifier) {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
-        if state.spent_order_nonces.contains(&order_nonce_digest) {
+        if state
+            .spent_order_nonces
+            .contains(&replay.order_nonce_digest)
+        {
             return Err(EngineError::Validation(DarkPoolError::DuplicateOrder));
         }
         Self::ensure_order_capacity(&state, order.trader)?;
@@ -878,8 +888,8 @@ impl Engine {
         // Record the digest only after the event is durably appended, so the
         // live spent-set and a replay rebuilt from the log stay in lockstep.
         state.seen_ciphertexts.insert(digest);
-        state.spent_nullifiers.insert(nullifier);
-        state.spent_order_nonces.insert(order_nonce_digest);
+        state.spent_nullifiers.insert(replay.nullifier);
+        state.spent_order_nonces.insert(replay.order_nonce_digest);
         metrics::counter!(M_ORDERS_PLACED, "side" => side_label).increment(1);
         Ok(assigned_seq)
     }

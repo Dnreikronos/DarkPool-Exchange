@@ -287,8 +287,10 @@ async fn persist_order_enforces_process_active_order_cap() {
             vec![0u8; 32],
             vec![],
             vec![9, 9, 9],
-            [9u8; 32],
-            [10u8; 32],
+            crate::engine::ReplayProtection {
+                nullifier: [9u8; 32],
+                order_nonce_digest: [10u8; 32],
+            },
         )
         .unwrap_err();
 
@@ -1981,8 +1983,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
-                [1u8; 32],
-                [2u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(
@@ -2018,8 +2022,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![1, 2, 3],
-                [1u8; 32],
-                [2u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(matches!(
@@ -2042,8 +2048,10 @@ mod delist_toctou {
                 vec![0u8; 32],
                 vec![],
                 vec![],
-                [1u8; 32],
-                [2u8; 32],
+                crate::engine::ReplayProtection {
+                    nullifier: [1u8; 32],
+                    order_nonce_digest: [2u8; 32],
+                },
             )
             .unwrap_err();
         assert!(matches!(
