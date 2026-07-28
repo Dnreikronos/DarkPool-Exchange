@@ -1,13 +1,19 @@
 /* @ts-self-types="./dp_zk_wasm.d.ts" */
 
 /**
+ * `pk_bytes` is the canonical proving-key blob, loaded by the caller from
+ * the ceremony asset. Returns `[proof_len(4) | commitment_len(4) | proof |
+ * commitment]` — no verifying key crosses the boundary (issue #212).
  * @param {string} witness_json
+ * @param {Uint8Array} pk_bytes
  * @returns {Uint8Array}
  */
-export function prove_order_wasm(witness_json) {
+export function prove_order_wasm(witness_json, pk_bytes) {
     const ptr0 = passStringToWasm0(witness_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.prove_order_wasm(ptr0, len0);
+    const ptr1 = passArray8ToWasm0(pk_bytes, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.prove_order_wasm(ptr0, len0, ptr1, len1);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -169,6 +175,13 @@ function handleError(f, args) {
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

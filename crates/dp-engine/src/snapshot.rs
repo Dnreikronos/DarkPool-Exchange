@@ -1,19 +1,29 @@
 use std::time::{Duration, Instant};
 
+use dp_crypto::SnapshotCipher;
 use dp_event::{EventError, SnapshotStore};
-use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::engine::Engine;
 use crate::state::SerializableState;
 
-/// Magic bytes that prefix every snapshot envelope. Bumping the suffix
-/// (e.g. `DPS2`) reserves space for a format break later — current
-/// readers reject any non-`DPS1` magic with [`SnapshotError::BadMagic`].
-const MAGIC: &[u8; 4] = b"DPS1";
-const ENVELOPE_VERSION: u32 = 1;
-const HEADER_LEN: usize = 4 /* magic */ + 4 /* version */ + 8 /* seq */ + 4 /* blob_len */ + 32 /* sha256 */;
+/// Magic bytes that prefix every snapshot envelope. `DPS2` marks the
+/// encrypted-at-rest format (#203): the payload is XChaCha20-Poly1305
+/// ciphertext, not plaintext bincode. Readers reject any non-`DPS2` magic
+/// with [`SnapshotError::BadMagic`] — a stray `DPS1` (plaintext) envelope is
+/// treated as corrupt and the recover path falls back to event replay.
+const MAGIC: &[u8; 4] = b"DPS2";
+// Version 3 adds the persistent spent-nullifier projection. Older encrypted
+// snapshots may contain live orders without their replay keys, so they must be
+// rejected and rebuilt from the event log instead of deserializing with defaults.
+const ENVELOPE_VERSION: u32 = 3;
+/// Bytes bound into the AEAD tag as associated data: `magic || version || seq`.
+/// Binding the seq stops a sealed blob from being relabeled under another seq.
+const AAD_LEN: usize = 4 /* magic */ + 4 /* version */ + 8 /* seq */;
+/// Fixed envelope prefix: the [`AAD_LEN`] header plus a 4-byte sealed length.
+/// The sealed payload (nonce || ciphertext+tag) follows.
+const HEADER_LEN: usize = AAD_LEN + 4 /* sealed_len */;
 
 /// Errors raised while encoding / decoding a snapshot envelope. The
 /// recover path catches all of these and falls back to a full event
@@ -22,14 +32,25 @@ const HEADER_LEN: usize = 4 /* magic */ + 4 /* version */ + 8 /* seq */ + 4 /* b
 pub enum SnapshotError {
     #[error("snapshot envelope too small: {len} bytes (need at least {HEADER_LEN})")]
     Truncated { len: usize },
-    #[error("bad snapshot magic: expected DPS1")]
+    #[error("bad snapshot magic: expected DPS2")]
     BadMagic,
     #[error("unsupported snapshot envelope version: {0}")]
     UnsupportedVersion(u32),
-    #[error("snapshot blob_len {declared} does not match payload {actual}")]
+    #[error("snapshot sealed_len {declared} does not match payload {actual}")]
     LengthMismatch { declared: usize, actual: usize },
-    #[error("snapshot checksum mismatch — payload corrupt or truncated")]
-    ChecksumMismatch,
+    /// AEAD open failed: the payload is corrupt, truncated, tampered, or was
+    /// sealed under a different key. The recover path treats this exactly like
+    /// any other corrupt envelope (try an older one, else fall back to replay).
+    #[error("snapshot decryption/authentication failed — corrupt, tampered, or wrong key")]
+    Decrypt,
+    /// AEAD seal failed while writing — an internal cipher error, not a
+    /// recoverable condition. Surfaced so the snapshotter logs and retries.
+    #[error("snapshot encryption failed: {0}")]
+    Encrypt(String),
+    /// No [`SnapshotCipher`] was installed. Fail closed rather than write or
+    /// read a plaintext snapshot. The boot path must configure a snapshot key.
+    #[error("no snapshot cipher configured — refusing plaintext snapshots at rest")]
+    CipherMissing,
     #[error(transparent)]
     Bincode(#[from] bincode::Error),
     #[error(transparent)]
@@ -73,33 +94,50 @@ impl Default for SnapshotConfig {
     }
 }
 
-/// Encode a [`SerializableState`] + its watermark `seq` into the
-/// on-disk envelope. The blob carries its own SHA-256 so the recover
-/// path can drop corrupted snapshots and fall back to event replay.
+/// Encode a [`SerializableState`] + its watermark `seq` into the on-disk
+/// envelope. The serialized state is sealed with `cipher` (XChaCha20-Poly1305)
+/// so the store never holds plaintext order data (#203). The Poly1305 tag is
+/// the integrity check — a tampered payload fails [`decode_envelope`] and the
+/// recover path falls back to event replay.
+///
+/// Layout: `magic(4) | version(4) | seq(8) | sealed_len(4) | sealed`, where
+/// `sealed = nonce(24) || ciphertext+tag`. The `magic||version||seq` prefix is
+/// the AEAD associated data, so neither the version nor the seq can be altered
+/// without failing the tag.
 pub(crate) fn encode_envelope(
     state: &SerializableState,
     seq: u64,
+    cipher: &SnapshotCipher,
 ) -> Result<Vec<u8>, SnapshotError> {
     let blob = bincode::serialize(state)?;
-    let blob_len = u32::try_from(blob.len()).map_err(|_| SnapshotError::LengthMismatch {
-        declared: u32::MAX as usize,
-        actual: blob.len(),
-    })?;
-    let digest = Sha256::digest(&blob);
 
-    let mut out = Vec::with_capacity(HEADER_LEN + blob.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&ENVELOPE_VERSION.to_be_bytes());
-    out.extend_from_slice(&seq.to_be_bytes());
-    out.extend_from_slice(&blob_len.to_be_bytes());
-    out.extend_from_slice(&digest);
-    out.extend_from_slice(&blob);
+    let mut header = Vec::with_capacity(AAD_LEN);
+    header.extend_from_slice(MAGIC);
+    header.extend_from_slice(&ENVELOPE_VERSION.to_be_bytes());
+    header.extend_from_slice(&seq.to_be_bytes());
+
+    let sealed = cipher
+        .seal(&blob, &header)
+        .map_err(|e| SnapshotError::Encrypt(e.to_string()))?;
+    let sealed_len = u32::try_from(sealed.len()).map_err(|_| SnapshotError::LengthMismatch {
+        declared: u32::MAX as usize,
+        actual: sealed.len(),
+    })?;
+
+    let mut out = Vec::with_capacity(HEADER_LEN + sealed.len());
+    out.extend_from_slice(&header); // magic || version || seq (== AAD)
+    out.extend_from_slice(&sealed_len.to_be_bytes());
+    out.extend_from_slice(&sealed);
     Ok(out)
 }
 
-/// Decode an envelope produced by [`encode_envelope`], verifying the
-/// magic, version, declared length, and SHA-256 checksum.
-pub(crate) fn decode_envelope(bytes: &[u8]) -> Result<(u64, SerializableState), SnapshotError> {
+/// Decode an envelope produced by [`encode_envelope`], verifying the magic,
+/// version, declared length, then opening the AEAD payload with `cipher`. A
+/// failed open (corruption, tamper, wrong key) maps to [`SnapshotError::Decrypt`].
+pub(crate) fn decode_envelope(
+    bytes: &[u8],
+    cipher: &SnapshotCipher,
+) -> Result<(u64, SerializableState), SnapshotError> {
     if bytes.len() < HEADER_LEN {
         return Err(SnapshotError::Truncated { len: bytes.len() });
     }
@@ -111,20 +149,21 @@ pub(crate) fn decode_envelope(bytes: &[u8]) -> Result<(u64, SerializableState), 
         return Err(SnapshotError::UnsupportedVersion(version));
     }
     let seq = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-    let blob_len = u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize;
-    let checksum = &bytes[20..52];
+    let sealed_len = u32::from_be_bytes(bytes[16..20].try_into().unwrap()) as usize;
     let payload = &bytes[HEADER_LEN..];
-    if payload.len() != blob_len {
+    if payload.len() != sealed_len {
         return Err(SnapshotError::LengthMismatch {
-            declared: blob_len,
+            declared: sealed_len,
             actual: payload.len(),
         });
     }
-    let digest = Sha256::digest(payload);
-    if &digest[..] != checksum {
-        return Err(SnapshotError::ChecksumMismatch);
-    }
-    let state: SerializableState = bincode::deserialize(payload)?;
+    // AAD is the stored magic||version||seq prefix verbatim — any flip there
+    // (e.g. a relabeled seq) fails the tag below rather than being trusted.
+    let aad = &bytes[0..AAD_LEN];
+    let blob = cipher
+        .open(payload, aad)
+        .map_err(|_| SnapshotError::Decrypt)?;
+    let state: SerializableState = bincode::deserialize(&blob)?;
     Ok((seq, state))
 }
 
@@ -147,6 +186,16 @@ pub(crate) async fn run_snapshotter(
         info!("snapshotter started without a SnapshotStore — task exiting");
         return;
     };
+    // Fail closed: a store without a cipher would mean plaintext order data at
+    // rest. Refuse to run rather than leak (#203). The boot path guarantees a
+    // cipher whenever a durable store is configured.
+    if engine.snapshot_cipher_clone().is_none() {
+        warn!(
+            "snapshotter started without a SnapshotCipher — refusing to write \
+             plaintext snapshots; task exiting (set DARKPOOL_SNAPSHOT_KEY_URI)"
+        );
+        return;
+    }
 
     // Sub-tick at the smaller of (interval, 1s) so the event-delta
     // trigger can fire promptly for high-throughput deploys without
@@ -218,12 +267,19 @@ pub(crate) fn take_snapshot(
     config: &SnapshotConfig,
     seq_hint: u64,
 ) -> Result<u64, SnapshotError> {
+    // Fail closed: never write a snapshot without a cipher to seal it. The
+    // boot path installs one whenever a store is wired; this guards against a
+    // library misuse writing plaintext order data to disk.
+    let cipher = engine
+        .snapshot_cipher_clone()
+        .ok_or(SnapshotError::CipherMissing)?;
+
     // Capture under lock — clone the persistable subset and pick a seq
     // *while holding the lock* so the snapshot reflects exactly the
     // event the engine had observed at capture time.
     let (state, seq) = engine.capture_snapshot_state(seq_hint);
 
-    let envelope = encode_envelope(&state, seq)?;
+    let envelope = encode_envelope(&state, seq, &cipher)?;
     snapshot_store.write(seq, &envelope)?;
 
     // Compact the event log behind the new watermark. `retain_events`
@@ -259,11 +315,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use dp_crypto::SnapshotCipher;
     use dp_event::{MemSnapshotStore, MemStore};
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::state::SerializableState;
+    use crate::state::{PairConfig, SerializableState};
     use dp_book::OrderBook;
 
     fn empty_state() -> SerializableState {
@@ -272,27 +329,64 @@ mod tests {
             pair_tokens: HashMap::new(),
             auction_log: Vec::new(),
             pending_batches: HashMap::new(),
+            seen_ciphertexts: Default::default(),
+            spent_nullifiers: Default::default(),
+            spent_order_nonces: Default::default(),
         }
+    }
+
+    /// Deterministic cipher for envelope tests. Real deploys load a key via
+    /// `DARKPOOL_SNAPSHOT_KEY_URI`; tests fix the key so failures are stable.
+    fn test_cipher() -> Arc<SnapshotCipher> {
+        Arc::new(SnapshotCipher::from_bytes(&[7u8; 32]).unwrap())
     }
 
     fn bare_engine() -> crate::engine::Engine {
         let store = Arc::new(MemStore::new());
-        crate::engine::Engine::new(store, Duration::from_millis(50))
+        let engine = crate::engine::Engine::new(store, Duration::from_millis(50));
+        engine.set_snapshot_cipher(Some(test_cipher()));
+        engine
     }
 
     #[test]
     fn envelope_round_trip() {
+        let c = test_cipher();
         let s = empty_state();
-        let env = encode_envelope(&s, 1234).unwrap();
-        let (seq, _back) = decode_envelope(&env).unwrap();
+        let env = encode_envelope(&s, 1234, &c).unwrap();
+        let (seq, _back) = decode_envelope(&env, &c).unwrap();
         assert_eq!(seq, 1234);
     }
 
     #[test]
+    fn envelope_hides_plaintext() {
+        // A pair key is a cleartext string field in the serialized state. The
+        // unencrypted bincode contains it verbatim; the sealed envelope must
+        // not. The first assert keeps the second honest (proves the marker is
+        // really in the plaintext form, so a passing canary means something).
+        const MARKER: &str = "MARKER-SECRET-PAIR";
+        let mut s = empty_state();
+        s.pair_tokens
+            .insert(MARKER.to_string(), PairConfig::default());
+
+        let plain = bincode::serialize(&s).unwrap();
+        assert!(
+            plain.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+            "marker must appear in the unencrypted bincode"
+        );
+
+        let env = encode_envelope(&s, 1, &test_cipher()).unwrap();
+        assert!(
+            !env.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()),
+            "plaintext pair key leaked into the encrypted envelope"
+        );
+    }
+
+    #[test]
     fn detects_truncation() {
-        let env = encode_envelope(&empty_state(), 1).unwrap();
+        let c = test_cipher();
+        let env = encode_envelope(&empty_state(), 1, &c).unwrap();
         let half = &env[..env.len() / 2];
-        let err = decode_envelope(half).unwrap_err();
+        let err = decode_envelope(half, &c).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -304,19 +398,21 @@ mod tests {
 
     #[test]
     fn detects_bad_magic() {
-        let mut env = encode_envelope(&empty_state(), 1).unwrap();
+        let c = test_cipher();
+        let mut env = encode_envelope(&empty_state(), 1, &c).unwrap();
         env[0] = b'X';
-        let err = decode_envelope(&env).unwrap_err();
+        let err = decode_envelope(&env, &c).unwrap_err();
         assert!(matches!(err, SnapshotError::BadMagic), "got {err:?}");
     }
 
     #[test]
     fn detects_unsupported_version() {
-        let mut env = encode_envelope(&empty_state(), 1).unwrap();
+        let c = test_cipher();
+        let mut env = encode_envelope(&empty_state(), 1, &c).unwrap();
         // Version sits at bytes 4..8 in big-endian.
         let bad_ver: u32 = 0xDEAD;
         env[4..8].copy_from_slice(&bad_ver.to_be_bytes());
-        let err = decode_envelope(&env).unwrap_err();
+        let err = decode_envelope(&env, &c).unwrap_err();
         assert!(
             matches!(err, SnapshotError::UnsupportedVersion(v) if v == bad_ver),
             "got {err:?}",
@@ -324,17 +420,27 @@ mod tests {
     }
 
     #[test]
-    fn detects_corruption_in_payload() {
-        let mut env = encode_envelope(&empty_state(), 1).unwrap();
-        // Mid-payload flip — outside the header, so length and magic
-        // still look OK; only the checksum catches it.
+    fn rejects_pre_nullifier_snapshot_version() {
+        let c = test_cipher();
+        let mut env = encode_envelope(&empty_state(), 1, &c).unwrap();
+        env[4..8].copy_from_slice(&2u32.to_be_bytes());
+        let err = decode_envelope(&env, &c).unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::UnsupportedVersion(2)),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn detects_tampered_ciphertext() {
+        let c = test_cipher();
+        let mut env = encode_envelope(&empty_state(), 1, &c).unwrap();
+        // Flip the last byte (inside the Poly1305 tag) — length and magic
+        // still look OK, so only the AEAD open catches it.
         let last = env.len() - 1;
         env[last] ^= 0xFF;
-        let err = decode_envelope(&env).unwrap_err();
-        assert!(
-            matches!(err, SnapshotError::ChecksumMismatch),
-            "got {err:?}"
-        );
+        let err = decode_envelope(&env, &c).unwrap_err();
+        assert!(matches!(err, SnapshotError::Decrypt), "got {err:?}");
     }
 
     #[test]
@@ -359,7 +465,7 @@ mod tests {
         let snap_store = MemSnapshotStore::new();
         // Pre-populate 4 old envelopes at seqs 1..4.
         for s in [1u64, 2, 3, 4] {
-            let env = encode_envelope(&empty_state(), s).unwrap();
+            let env = encode_envelope(&empty_state(), s, &test_cipher()).unwrap();
             snap_store.write(s, &env).unwrap();
         }
         let cfg = SnapshotConfig {
@@ -446,5 +552,44 @@ mod tests {
         )
         .await
         .expect("snapshotter without store must return immediately");
+    }
+
+    #[test]
+    fn take_snapshot_without_cipher_fails_closed() {
+        // An engine with a store but no cipher must refuse to write rather
+        // than emit a plaintext snapshot (#203).
+        let store = Arc::new(MemStore::new());
+        let engine = crate::engine::Engine::new(store, Duration::from_millis(50));
+        let snap_store = MemSnapshotStore::new();
+        let err = take_snapshot(&engine, &snap_store, &SnapshotConfig::default(), 0).unwrap_err();
+        assert!(matches!(err, SnapshotError::CipherMissing), "got {err:?}");
+        assert!(
+            snap_store.list_seqs().unwrap().is_empty(),
+            "fail-closed must not write any envelope"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_snapshotter_exits_without_cipher() {
+        let store = Arc::new(MemStore::new());
+        let engine = crate::engine::Engine::new(store, Duration::from_millis(50));
+        let snap_store = Arc::new(MemSnapshotStore::new());
+        engine.set_snapshot_store(Some(snap_store.clone()));
+        // Store wired but no cipher → fail closed, write nothing, exit.
+        let cfg = SnapshotConfig {
+            every_events: 0,
+            ..SnapshotConfig::default()
+        };
+        let cancel = CancellationToken::new();
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            run_snapshotter(engine, cfg, cancel),
+        )
+        .await
+        .expect("snapshotter without cipher must return immediately");
+        assert!(
+            snap_store.list_seqs().unwrap().is_empty(),
+            "fail-closed must not write plaintext"
+        );
     }
 }

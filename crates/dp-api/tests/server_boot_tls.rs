@@ -18,6 +18,7 @@ use dp_api::pb::dark_pool_service_server::DarkPoolServiceServer;
 use dp_api::pb::ListPairsRequest;
 use dp_api::rest;
 use dp_api::tls;
+use dp_api::validation::PLACE_ORDER_BODY_LIMIT;
 use dp_engine::Engine;
 use dp_event::MemStore;
 use tempfile::TempDir;
@@ -132,10 +133,12 @@ async fn start_grpc(mode: &TlsMode) -> GrpcServer {
         if let Some(tls) = tls_cfg {
             b = b.tls_config(tls).expect("tls_config");
         }
-        b.add_service(DarkPoolServiceServer::new(handler))
-            .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
-            .await
-            .expect("grpc server");
+        b.add_service(
+            DarkPoolServiceServer::new(handler).max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+        )
+        .serve_with_incoming_shutdown(incoming, async move { server_cancel.cancelled().await })
+        .await
+        .expect("grpc server");
     });
     GrpcServer { addr, cancel, task }
 }

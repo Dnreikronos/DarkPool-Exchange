@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use alloy_primitives::Address;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use dp_crypto::{CryptoError, DecryptedOrder, Decrypter};
+use dp_crypto::{CryptoError, DecryptedOrder, Decrypter, SnapshotCipher};
 use dp_engine::{Engine, SnapshotConfig};
 use dp_event::{Event, MemSnapshotStore, MemStore, SnapshotStore, Store};
 use dp_types::Side;
@@ -38,6 +38,18 @@ fn bench_events() -> usize {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_EVENTS)
+}
+
+fn canonical_hex32(n: u64) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&n.to_be_bytes());
+    hex::encode(bytes)
+}
+
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::hours(12))
+        .timestamp_nanos_opt()
+        .unwrap()
 }
 
 struct JsonDecrypter;
@@ -56,6 +68,11 @@ impl Decrypter for JsonDecrypter {
 fn build_engine(store: Arc<dyn Store>) -> Engine {
     let engine = Engine::new(store, Duration::from_secs(60));
     engine.set_decrypter(Arc::new(JsonDecrypter));
+    // Fixed key so the snapshot writer and the `from_snapshot` restorer arm
+    // share it and the sealed envelope round-trips (#203).
+    engine.set_snapshot_cipher(Some(Arc::new(
+        SnapshotCipher::from_bytes(&[7u8; 32]).unwrap(),
+    )));
     engine.register_pair_without_event(
         "BTC-USD".into(),
         dp_engine::PairConfig::new(Address::repeat_byte(1), Address::repeat_byte(2)),
@@ -72,13 +89,16 @@ async fn populate_store(engine: &Engine, n: usize) {
             price: Decimal::new(100 + (i as i64 % 7), 0),
             size: Decimal::new(1, 0),
             commitment_key: format!("ck-{i}"),
+            salt: canonical_hex32(i as u64 + 1),
+            nonce: canonical_hex32(i as u64 + 1),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         let ct = serde_json::to_vec(&order).unwrap();
         // Engine recomputes the commitment internally; supplying an
         // empty placeholder here is allowed by `place_encrypted_order`.
         engine
-            .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+            .place_encrypted_order(vec![0u8; 32], vec![], ct, Address::ZERO)
             .await
             .expect("place");
     }

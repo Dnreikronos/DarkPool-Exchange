@@ -4,6 +4,7 @@ use std::time::Duration;
 use alloy_primitives::Address;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::Extension;
 use dp_api::auth::AuthenticatedIdentity;
 use dp_api::handler::ApiHandler;
 use dp_api::rest;
@@ -65,6 +66,7 @@ async fn place_order_missing_fields_400() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(Address::ZERO))
                 .body(Body::from(
                     r#"{"commitment":"","proof":"","encryptedPayload":""}"#,
                 ))
@@ -114,6 +116,18 @@ fn encrypt_b64(order: &dp_crypto::DecryptedOrder) -> String {
     STANDARD.encode(serde_json::to_vec(order).unwrap())
 }
 
+fn canonical_salt(n: u64) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[24..].copy_from_slice(&n.to_be_bytes());
+    hex::encode(bytes)
+}
+
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::minutes(10))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
 #[tokio::test]
 async fn rest_place_get_cancel_round_trip() {
     let (app, _engine) = registered_app();
@@ -124,6 +138,9 @@ async fn rest_place_get_cancel_round_trip() {
         price: "1800".parse().unwrap(),
         size: "1".parse().unwrap(),
         commitment_key: "k1".into(),
+        salt: canonical_salt(1),
+        nonce: canonical_salt(1),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     use base64::engine::general_purpose::STANDARD;
@@ -142,6 +159,7 @@ async fn rest_place_get_cancel_round_trip() {
                 .method("POST")
                 .uri("/v1/orders")
                 .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(d.trader))
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -187,6 +205,47 @@ async fn rest_place_get_cancel_round_trip() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn rest_place_order_bad_salt_returns_400() {
+    let (app, _engine) = registered_app();
+    let d = dp_crypto::DecryptedOrder {
+        trader: alloy_primitives::Address::ZERO,
+        pair: "ETH/USDC".into(),
+        side: dp_types::Side::Buy,
+        price: "1800".parse().unwrap(),
+        size: "1".parse().unwrap(),
+        commitment_key: "k1".into(),
+        salt: "AB".repeat(32),
+        nonce: canonical_salt(2),
+        expires_at_unix_nanos: future_expiry_nanos(),
+        ttl: 60_000_000_000,
+    };
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let body = serde_json::json!({
+        "commitment": STANDARD.encode([0u8; 32]),
+        "proof": STANDARD.encode(b"proof"),
+        "encryptedPayload": encrypt_b64(&d),
+    })
+    .to_string();
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/orders")
+                .header("content-type", "application/json")
+                .extension(AuthenticatedIdentity::Wallet(d.trader))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_to_json(resp.into_body()).await;
+    assert!(json["message"].as_str().unwrap().contains("salt"));
+}
+
 /// `GET /v1/orders` returns only the authenticated caller's own orders,
 /// and nothing at all without a wallet identity. There is no public book.
 #[tokio::test]
@@ -202,6 +261,9 @@ async fn rest_list_orders_is_scoped_to_caller() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("k-{}-{}-{}", trader, side as u8, price),
+            salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            nonce: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -227,6 +289,7 @@ async fn rest_list_orders_is_scoped_to_caller() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
+                    .extension(AuthenticatedIdentity::Wallet(trader))
                     .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )
@@ -320,7 +383,8 @@ async fn router_with_middleware_enforces_api_key() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // With api key in query param → 200
+    // Query-string api keys must never authenticate. They leak through
+    // browser history, Referer headers, and proxy logs.
     let resp = app
         .clone()
         .oneshot(
@@ -331,10 +395,9 @@ async fn router_with_middleware_enforces_api_key() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
-    // With percent-encoded api key in query param → 200
-    // "mw-key" percent-encoded: "mw%2Dkey"
+    // Percent-encoding must not make query-string credentials acceptable.
     let resp = app
         .oneshot(
             Request::builder()
@@ -344,7 +407,7 @@ async fn router_with_middleware_enforces_api_key() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ---------- SSE auction stream ----------
@@ -370,7 +433,8 @@ async fn sse_stream_returns_event_stream_content_type() {
     let engine = Engine::new(store, Duration::from_secs(1));
     engine.register_pair_without_event("ETH/USDC".into(), dp_engine::PairConfig::default());
     let handler = ApiHandler::new(engine);
-    let app = rest::router(std::sync::Arc::new(handler));
+    let app =
+        rest::router(std::sync::Arc::new(handler)).layer(Extension(rest::SseStreamLimiter::new(4)));
 
     let resp = app
         .oneshot(
@@ -393,7 +457,7 @@ async fn sse_stream_returns_event_stream_content_type() {
 
 #[tokio::test]
 async fn sse_stream_no_pair_filter_returns_200() {
-    let app = new_app();
+    let app = new_app().layer(Extension(rest::SseStreamLimiter::new(4)));
     let resp = app
         .oneshot(
             Request::builder()
@@ -407,8 +471,83 @@ async fn sse_stream_no_pair_filter_returns_200() {
 }
 
 #[tokio::test]
+async fn sse_stream_fails_closed_without_limiter() {
+    let app = new_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_to_json(resp.into_body()).await;
+    assert_eq!(json["message"], "auction stream limiter is not configured");
+}
+
+#[tokio::test]
+async fn sse_stream_limit_is_per_client_key_and_releases_on_drop() {
+    let app = new_app().layer(Extension(rest::SseStreamLimiter::new(1)));
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let different_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "other-stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(different_key.status(), StatusCode::OK);
+
+    drop(first);
+    let after_drop = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auctions/stream")
+                .header("x-api-key", "stream-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_drop.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn sse_stream_receives_auction_events() {
     let (app, engine) = registered_app();
+    let app = app.layer(Extension(rest::SseStreamLimiter::new(4)));
 
     // Place crossing orders so the auction tick produces a match. Distinct
     // traders per leg: self-trade prevention keys on `trader` (#168), so a
@@ -423,6 +562,9 @@ async fn sse_stream_receives_auction_events() {
             price: price.parse().unwrap(),
             size: "1".parse().unwrap(),
             commitment_key: format!("sse-{}-{}", side as u8, price),
+            salt: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            nonce: canonical_salt(u64::from(side as u8) << 8 | u64::from(trader[19])),
+            expires_at_unix_nanos: future_expiry_nanos(),
             ttl: 60_000_000_000,
         };
         serde_json::json!({
@@ -452,6 +594,7 @@ async fn sse_stream_receives_auction_events() {
                     .method("POST")
                     .uri("/v1/orders")
                     .header("content-type", "application/json")
+                    .extension(AuthenticatedIdentity::Wallet(trader))
                     .body(Body::from(make_body(trader, side, price)))
                     .unwrap(),
             )

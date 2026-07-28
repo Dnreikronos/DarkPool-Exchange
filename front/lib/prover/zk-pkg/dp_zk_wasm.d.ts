@@ -1,13 +1,18 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export function prove_order_wasm(witness_json: string): Uint8Array;
+/**
+ * `pk_bytes` is the canonical proving-key blob, loaded by the caller from
+ * the ceremony asset. Returns `[proof_len(4) | commitment_len(4) | proof |
+ * commitment]` — no verifying key crosses the boundary (issue #212).
+ */
+export function prove_order_wasm(witness_json: string, pk_bytes: Uint8Array): Uint8Array;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly prove_order_wasm: (a: number, b: number) => [number, number, number];
+    readonly prove_order_wasm: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

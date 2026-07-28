@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use alloy_primitives::U256;
 use chrono::{DateTime, Utc};
-use dp_crypto::Decrypter;
+use dp_crypto::{Decrypter, SnapshotCipher};
 use dp_event::{Event, EventData, EventError, SnapshotStore, Store};
 use dp_types::{EventType, Order, Pair};
 use rust_decimal::Decimal;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::engine::Engine;
 use crate::error::EngineError;
-use crate::snapshot::decode_envelope;
+use crate::snapshot::{decode_envelope, SnapshotError};
 use crate::state::{try_build_settlement_row, AuctionExecutedRecord, PairConfig, PendingBatch};
 
 /// Result of the snapshot recovery probe. Drives the recover() control
@@ -34,7 +34,8 @@ enum SnapshotRecoveryOutcome {
 /// Apply a decoded snapshot and populate `placed_orders` from the restored
 /// book. Logs whether this was a first-attempt or fallback recovery, and
 /// warns when the envelope's self-reported seq disagrees with the store key
-/// (the envelope value is authoritative because it is checksum-covered).
+/// (the envelope value is authoritative: the seq is bound into the AEAD
+/// associated data, so a tampered seq fails the tag rather than being trusted).
 fn apply_and_log_snapshot(
     engine: &Engine,
     placed_orders: &mut HashMap<Uuid, Order>,
@@ -61,7 +62,7 @@ fn apply_and_log_snapshot(
             envelope_seq = decoded_seq,
             store_key,
             "snapshot envelope seq disagrees with store key — \
-             trusting envelope (checksum-covered)"
+             trusting envelope (seq is AEAD-tag-authenticated)"
         );
     }
 }
@@ -72,6 +73,7 @@ fn apply_and_log_snapshot(
 fn try_restore_from_snapshots(
     engine: &Engine,
     snap_store: &dyn SnapshotStore,
+    cipher: Option<&SnapshotCipher>,
     placed_orders: &mut HashMap<Uuid, Order>,
 ) -> SnapshotRecoveryOutcome {
     let seqs = match snap_store.list_seqs() {
@@ -81,7 +83,19 @@ fn try_restore_from_snapshots(
     if seqs.is_empty() {
         return SnapshotRecoveryOutcome::NoneAvailable;
     }
+    // Envelopes are AEAD-sealed (#203); without a cipher they cannot be read.
+    // Treat that as "all corrupt" so the caller applies the same safety net it
+    // uses for genuinely unreadable envelopes (full replay only when the event
+    // log still covers seq 1, else refuse to boot).
+    let Some(cipher) = cipher else {
+        tracing::error!(
+            "snapshot envelopes present but no SnapshotCipher configured — cannot \
+             decrypt; set DARKPOOL_SNAPSHOT_KEY_URI. Falling back to event replay."
+        );
+        return SnapshotRecoveryOutcome::AllCorrupt;
+    };
     let mut attempts = 0usize;
+    let mut decrypt_failures = 0usize;
     for &seq in seqs.iter().rev() {
         let bytes = match snap_store.read_at(seq) {
             Ok(Some(b)) => b,
@@ -92,7 +106,7 @@ fn try_restore_from_snapshots(
             }
         };
         attempts += 1;
-        match decode_envelope(&bytes) {
+        match decode_envelope(&bytes, cipher) {
             Ok((decoded_seq, snap_state)) => {
                 apply_and_log_snapshot(
                     engine,
@@ -105,6 +119,14 @@ fn try_restore_from_snapshots(
                 return SnapshotRecoveryOutcome::Restored(decoded_seq);
             }
             Err(e) => {
+                // An AEAD-open failure is indistinguishable from on-disk
+                // corruption at this layer — that's inherent to AEAD. But if
+                // *every* envelope fails this exact way, the likeliest cause is
+                // the wrong snapshot key, not real corruption; count it so the
+                // post-loop summary can surface that hint.
+                if matches!(e, SnapshotError::Decrypt) {
+                    decrypt_failures += 1;
+                }
                 tracing::warn!(error = ?e, seq, "snapshot envelope corrupt; trying older");
                 // `decode_envelope` is pure and runs before
                 // `apply_snapshot_state`, so the engine's state was never
@@ -112,6 +134,20 @@ fn try_restore_from_snapshots(
                 // is also untouched on this branch for the same reason.
             }
         }
+    }
+    // Every envelope failed to decode. When all failures were AEAD-open
+    // failures — no BadMagic / Truncated / version / length mismatch mixed in —
+    // the envelopes are well-formed but unreadable under this key, the classic
+    // signature of a wrong or freshly-rotated snapshot key. Surface a targeted
+    // hint so the operator checks the key before assuming the snapshots are
+    // lost; the caller still applies its usual safety net regardless.
+    if attempts > 0 && decrypt_failures == attempts {
+        tracing::error!(
+            envelopes = attempts,
+            "every snapshot envelope failed AEAD authentication — as consistent \
+             with a WRONG snapshot key (check DARKPOOL_SNAPSHOT_KEY_URI or a recent \
+             key rotation) as with on-disk corruption"
+        );
     }
     SnapshotRecoveryOutcome::AllCorrupt
 }
@@ -168,6 +204,7 @@ impl Engine {
         }
 
         let decrypter = self.inner.decrypter.read().clone();
+        let snapshot_cipher = self.inner.snapshot_cipher.read().clone();
         let aggregator = self.inner.aggregator.read().clone();
         let store = self.inner.store.clone();
 
@@ -212,8 +249,12 @@ impl Engine {
         //   3. Only when the event log still starts at seq 1 do we fall
         //      back to a full replay.
         if let Some(snap_store) = self.inner.snapshot_store.read().clone() {
-            let restored =
-                try_restore_from_snapshots(self, snap_store.as_ref(), &mut placed_orders);
+            let restored = try_restore_from_snapshots(
+                self,
+                snap_store.as_ref(),
+                snapshot_cipher.as_deref(),
+                &mut placed_orders,
+            );
             match restored {
                 SnapshotRecoveryOutcome::Restored(seq) => {
                     if !event_log_continuous_after(store.as_ref(), seq)? {
@@ -358,7 +399,7 @@ impl Engine {
         &self,
         ev: &Event,
         decrypter: &dyn Decrypter,
-        default_ttl: Duration,
+        _default_ttl: Duration,
         matches_by_auction: &mut HashMap<Uuid, Vec<OrphanMatch>>,
         auction_timestamps: &mut HashMap<Uuid, DateTime<Utc>>,
         placed_orders: &mut HashMap<Uuid, Order>,
@@ -368,7 +409,6 @@ impl Engine {
                 order_id,
                 commitment,
                 ciphertext,
-                salt_nonce,
                 ..
             } => {
                 let decrypted = decrypter.decrypt(ciphertext).await.map_err(|source| {
@@ -377,40 +417,40 @@ impl Engine {
                         source,
                     }
                 })?;
-                // A persisted salt_nonce of != 32 bytes cannot be the one the
-                // commitment was originally derived from. Surface the bad
-                // length as a distinct error instead of silently falling back
-                // to a zero nonce — the zero fallback would have produced a
-                // misleading `RecoverCommitmentMismatch` for every affected
-                // event, hiding the actual corruption.
-                let nonce: [u8; 32] = salt_nonce.as_slice().try_into().map_err(|_| {
-                    EngineError::RecoverSaltNonceLen {
+                // The salt is the client's, carried in the ciphertext (#217), so
+                // recovery decodes it from the decrypted order and recomputes the
+                // identical commitment the live path persisted. A malformed salt
+                // is corruption — surface it distinctly instead of letting it
+                // masquerade as a `RecoverCommitmentMismatch`.
+                let salt = crate::engine::parse_order_salt(&decrypted.salt).map_err(|_| {
+                    EngineError::RecoverSaltInvalid {
                         order_id: *order_id,
-                        len: salt_nonce.len(),
                     }
                 })?;
                 let recomputed = crate::engine::recompute_persisted_commitment(
-                    *order_id,
                     decrypted.trader.as_slice(),
-                    &decrypted.commitment_key,
                     decrypted.side as u8,
                     decrypted.price,
                     decrypted.size,
-                    &nonce,
+                    &salt,
                 )?;
+                let nullifier =
+                    dp_zk::fr_to_bytes32(dp_zk::commitment_circuit::compute_nullifier_native(
+                        dp_zk::pedersen::bytes32_to_scalar(&recomputed)
+                            .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?,
+                        dp_zk::pedersen::bytes32_to_scalar(&salt)
+                            .map_err(|e| EngineError::CommitmentEncoding(e.to_string()))?,
+                    ));
                 if recomputed.as_slice() != commitment.as_slice() {
                     return Err(EngineError::RecoverCommitmentMismatch {
                         order_id: *order_id,
                     });
                 }
-                let ttl = if decrypted.ttl > 0 {
-                    Duration::from_nanos(decrypted.ttl as u64).min(crate::engine::MAX_TTL)
-                } else {
-                    default_ttl
-                };
-                let expires_at = ev.timestamp
-                    + chrono::Duration::from_std(ttl)
-                        .unwrap_or_else(|_| chrono::Duration::seconds(600));
+                let nonce = crate::engine::parse_order_nonce(&decrypted.nonce).map_err(|_| {
+                    EngineError::Validation(dp_types::DarkPoolError::OrderNonceInvalid)
+                })?;
+                let expires_at =
+                    crate::engine::order_expiry_from_unix_nanos(decrypted.expires_at_unix_nanos)?;
                 // Mirror the live path's canonicalisation
                 // (`Engine::place_encrypted_order`). Otherwise an event with
                 // pre-canonicalisation or trader-cased `pair` ("eth/usdc")
@@ -447,6 +487,16 @@ impl Engine {
                 // logs always emit `PairRegistered` first.
                 state.pair_tokens.entry(pair_key).or_default();
                 state.book.insert_order(order);
+                // Rebuild the replay spent-set from the log so a recovered
+                // engine rejects the same ciphertext replays a live one would
+                // (#233). Same hash helper as the live path keeps them aligned.
+                state
+                    .seen_ciphertexts
+                    .insert(crate::engine::ciphertext_digest(ciphertext));
+                state.spent_nullifiers.insert(nullifier);
+                state
+                    .spent_order_nonces
+                    .insert(crate::engine::order_nonce_digest(decrypted.trader, &nonce));
             }
             EventData::OrderCancelled { .. } | EventData::OrderExpired { .. } => {
                 self.inner.state.lock().book.apply(ev);
@@ -568,6 +618,8 @@ impl Engine {
                 min_order_size,
                 tick_size,
                 auction_interval_ms,
+                base_decimals,
+                quote_decimals,
             } => {
                 let mut state = self.inner.state.lock();
                 state.book.apply(ev);
@@ -587,6 +639,8 @@ impl Engine {
                     crate::state::PairConfig {
                         base_token: base,
                         quote_token: quote,
+                        base_decimals: *base_decimals,
+                        quote_decimals: *quote_decimals,
                         min_order_size: *min_order_size,
                         tick_size: *tick_size,
                         auction_interval: auction_interval_ms.map(Duration::from_millis),
@@ -951,7 +1005,6 @@ mod tests {
                 commitment: vec![],
                 proof: vec![],
                 ciphertext: vec![],
-                salt_nonce: vec![0u8; 32],
             },
         }
     }

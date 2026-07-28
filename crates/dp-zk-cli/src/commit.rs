@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use dp_zk::encoding::decimal_to_scalar;
-use dp_zk::pedersen::{bytes_to_scalar, commit_native, OrderCommitmentInput};
+use dp_zk::pedersen::{bytes32_to_scalar, commit_native, OrderCommitmentInput};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -73,7 +73,7 @@ pub fn compute_commitment(input: &CommitInput) -> Result<String, String> {
             salt_bytes.len()
         ));
     }
-    let salt = bytes_to_scalar(&salt_bytes);
+    let salt = bytes32_to_scalar(&salt_bytes).map_err(|e| format!("salt: {e}"))?;
 
     let limit_price =
         decimal_to_scalar(input.limit_price).map_err(|e| format!("limit_price: {e}"))?;
@@ -107,7 +107,7 @@ fn resolve_trader_id(input: &CommitInput) -> Result<ark_bn254::Fr, String> {
                 bytes.len()
             ));
         }
-        Ok(bytes_to_scalar(&bytes))
+        bytes32_to_scalar(&bytes).map_err(|e| format!("trader_id: {e}"))
     } else if let Some(ref ck) = input.commitment_key {
         dp_zk::pedersen::derive_trader_id(ck.as_bytes())
             .map_err(|e| format!("derive trader_id: {e}"))
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn explicit_trader_id_matches_derived() {
         let ck = "bid_key";
-        let tid_bytes = dp_zk::pedersen::derive_trader_id_bytes(ck.as_bytes());
+        let tid_bytes = dp_zk::pedersen::derive_trader_id_bytes(ck.as_bytes()).unwrap();
         let tid_hex = hex::encode(tid_bytes);
 
         let with_ck = CommitInput {
@@ -179,14 +179,14 @@ mod tests {
     fn different_salt_different_commitment() {
         let base = CommitInput {
             trader_id: None,
-            salt: "aa".repeat(32),
+            salt: "01".repeat(32),
             side: 0,
             limit_price: Decimal::from(100),
             size: Decimal::from(10),
             commitment_key: Some("key".into()),
         };
         let other = CommitInput {
-            salt: "bb".repeat(32),
+            salt: "02".repeat(32),
             ..CommitInput {
                 trader_id: None,
                 salt: String::new(),

@@ -35,6 +35,51 @@ pub enum DarkPoolError {
     CannotSuspendDelistedPair(String),
     #[error("trader address mismatch: expected {expected}, found {found}")]
     TraderAddressMismatch { expected: String, found: String },
+    /// The same encrypted order payload was submitted more than once. ECIES is
+    /// randomized, so a byte-identical ciphertext is a replay of a captured
+    /// submission, not a fresh order (#233).
+    #[error("duplicate order: this encrypted payload was already submitted")]
+    DuplicateOrder,
+    /// The decrypted order's `salt` is not a 32-byte lowercase-hex string. The
+    /// client must send a well-formed blinding salt — the engine re-derives the
+    /// commitment and nullifier from it (#217), so a malformed salt is a
+    /// malformed order, not an internal fault.
+    #[error("invalid salt: expected 32-byte lowercase hex")]
+    SaltInvalid,
+    /// The decrypted order's `nonce` is not a 32-byte lowercase-hex string.
+    /// This authenticated plaintext nonce is the per-trader freshness token for
+    /// replay rejection (#233).
+    #[error("invalid order nonce: expected 32-byte lowercase hex")]
+    OrderNonceInvalid,
+    /// The decrypted order's authenticated absolute expiry is malformed.
+    #[error("invalid order expiry")]
+    OrderExpiryInvalid,
+    /// The decrypted order's authenticated absolute expiry is already in the
+    /// past, so the ciphertext is no longer fresh (#233).
+    #[error("order expired")]
+    OrderExpired,
+    /// The decrypted order's authenticated expiry is too far in the future.
+    #[error("order expiry exceeds max freshness window ({max_seconds} seconds)")]
+    OrderExpiryTooFar { max_seconds: u64 },
+    /// The per-order Groth16 proof does not verify against the decrypted order
+    /// fields and client salt under the operator-pinned canonical verifying key.
+    #[error("invalid order proof")]
+    InvalidOrderProof,
+    /// The encrypted payload is too large to retain in the resting book or
+    /// durable event log. API handlers also reject this earlier, but the engine
+    /// owns the invariant for every caller path (#225).
+    #[error("encrypted_payload exceeds max size ({max} bytes)")]
+    EncryptedPayloadTooLarge { max: usize },
+    /// A single trader has reached the active resting-order ceiling. This
+    /// bounds per-trader book and ZK-secret growth until orders match, expire,
+    /// or are cancelled (#225).
+    #[error("too many resting orders for trader (max {max})")]
+    TooManyRestingOrdersForTrader { max: usize },
+    /// Process-wide safety valve for the live book. The per-trader cap limits a
+    /// single address, while this keeps aggregate book/secrets memory bounded
+    /// even across many traders (#225).
+    #[error("order book capacity exceeded (max {max})")]
+    OrderBookCapacityExceeded { max: usize },
 }
 
 #[cfg(test)]
@@ -53,6 +98,16 @@ mod tests {
             ),
             (DarkPoolError::LimitMustBePositive, "limit must be > 0"),
             (DarkPoolError::OrderNotFound, "order not found"),
+            (
+                DarkPoolError::DuplicateOrder,
+                "duplicate order: this encrypted payload was already submitted",
+            ),
+            (
+                DarkPoolError::OrderNonceInvalid,
+                "invalid order nonce: expected 32-byte lowercase hex",
+            ),
+            (DarkPoolError::OrderExpiryInvalid, "invalid order expiry"),
+            (DarkPoolError::OrderExpired, "order expired"),
         ];
         for (err, expected) in cases {
             assert_eq!(err.to_string(), expected);

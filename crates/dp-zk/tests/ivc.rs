@@ -60,7 +60,7 @@ fn sample_witness() -> (BatchWitness, Vec<Decimal>, Vec<Decimal>) {
         },
         ask: OrderLegWitness {
             trader_id: trader_id_hex(&ask_addr),
-            salt: "44".repeat(32),
+            salt: "11".repeat(32),
             balance: Decimal::from(1_000_000),
             position: "0".into(),
             limit_price: Decimal::from(95),

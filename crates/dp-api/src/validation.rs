@@ -12,7 +12,12 @@ use crate::pb::PlaceOrderRequest;
 //     are well under 1 KB; 128 KiB tolerates future schema growth and any
 //     framing overhead.
 pub const MAX_PROOF_BYTES: usize = 64 * 1024;
-pub const MAX_CIPHERTEXT_BYTES: usize = 128 * 1024;
+pub const MAX_CIPHERTEXT_BYTES: usize = dp_engine::MAX_ENCRYPTED_PAYLOAD_BYTES;
+
+// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON
+// envelope. Also caps the gRPC decode frame before prost allocates and
+// decodes an oversized PlaceOrder request.
+pub const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
 
 pub const MSG_COMMITMENT_REQUIRED: &str = "commitment is required";
 pub const MSG_PROOF_REQUIRED: &str = "proof is required";
@@ -25,12 +30,10 @@ pub const MSG_INVALID_API_KEY: &str = "invalid api key";
 pub const MSG_MISSING_METADATA: &str = "missing metadata";
 pub const MSG_RATE_LIMIT_EXCEEDED: &str = "rate limit exceeded";
 
-/// Bounds-check the proof field. This is a payload-size / non-empty guard
-/// ONLY — it performs **no cryptographic verification** (issue #158). The
-/// per-order proof is accepted unverified; order validity is operator-enforced
-/// by re-deriving the commitment from the decrypted payload in
-/// `Engine::place_encrypted_order`. A verified per-order proof is deferred to
-/// ADR 0001 / issues #97-#98.
+/// Bounds-check the proof field before the encrypted payload reaches the
+/// engine. Cryptographic verification happens after decryption in
+/// `Engine::place_encrypted_order`, where the operator derives the proof's
+/// commitment/nullifier public inputs from plaintext order fields.
 pub fn validate_proof(proof: &[u8]) -> Result<(), Status> {
     if proof.is_empty() {
         return Err(Status::invalid_argument(MSG_PROOF_REQUIRED));

@@ -90,6 +90,8 @@ pub fn pair_config_to_proto(pair: &str, cfg: &PairConfig) -> pb::PairInfo {
         tick_size: cfg.tick_size.to_string(),
         auction_interval_ms: cfg.auction_interval.map(auction_interval_to_proto_ms),
         status: pair_status_to_proto(cfg.status),
+        base_decimals: Some(u32::from(cfg.base_decimals)),
+        quote_decimals: Some(u32::from(cfg.quote_decimals)),
     }
 }
 

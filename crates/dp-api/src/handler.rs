@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::time::Duration;
 
 use dp_engine::AuctionNotification;
 use dp_engine::Engine;
@@ -35,6 +36,10 @@ fn caller_address<T>(req: &Request<T>) -> Option<alloy_primitives::Address> {
         })
 }
 
+fn required_wallet_address<T>(req: &Request<T>) -> Result<alloy_primitives::Address, Status> {
+    caller_address(req).ok_or_else(|| Status::permission_denied("wallet authentication required"))
+}
+
 /// Map one BroadcastStream item to an outgoing auction event:
 /// - Ok matches the pair filter → forward as event.
 /// - Ok doesn't match the pair filter → drop.
@@ -61,11 +66,20 @@ fn map_broadcast_item(
 #[derive(Clone)]
 pub struct ApiHandler {
     pub engine: Engine,
+    auction_stream_timeout: Option<Duration>,
 }
 
 impl ApiHandler {
     pub fn new(engine: Engine) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            auction_stream_timeout: None,
+        }
+    }
+
+    pub fn with_auction_stream_timeout(mut self, timeout: Duration) -> Self {
+        self.auction_stream_timeout = Some(timeout);
+        self
     }
 }
 
@@ -78,7 +92,7 @@ impl DarkPoolService for ApiHandler {
         &self,
         req: Request<PlaceOrderRequest>,
     ) -> Result<Response<PlaceOrderResponse>, Status> {
-        let caller = caller_address(&req);
+        let caller = required_wallet_address(&req)?;
         let req = req.into_inner();
         validate_place_order(&req)?;
         let order = self
@@ -215,7 +229,14 @@ impl DarkPoolService for ApiHandler {
         let rx = self.engine.subscribe();
         let stream =
             BroadcastStream::new(rx).filter_map(move |item| map_broadcast_item(&pair, item));
-        Ok(Response::new(Box::pin(stream)))
+        let stream: Self::StreamAuctionsStream = match self.auction_stream_timeout {
+            Some(timeout) => Box::pin(futures_util::StreamExt::take_until(
+                stream,
+                tokio::time::sleep(timeout),
+            )),
+            None => Box::pin(stream),
+        };
+        Ok(Response::new(stream))
     }
 
     async fn list_pairs(
@@ -280,5 +301,28 @@ mod tests {
         let out = map_broadcast_item("ETH/USDC", Ok(notif("ETH/USDC")));
         let item = out.expect("matching pair forwarded");
         assert!(item.is_ok());
+    }
+
+    #[tokio::test]
+    async fn place_order_requires_wallet_identity() {
+        let engine = Engine::new(
+            std::sync::Arc::new(dp_event::MemStore::new()),
+            Duration::from_millis(50),
+        );
+        let handler = ApiHandler::new(engine);
+        let mut req = Request::new(PlaceOrderRequest {
+            commitment: vec![1],
+            proof: vec![1],
+            encrypted_payload: vec![1],
+        });
+        req.extensions_mut().insert(AuthenticatedIdentity::ApiKey);
+
+        let err = handler
+            .place_order(req)
+            .await
+            .expect_err("API-key identity must not place trader orders");
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert_eq!(err.message(), "wallet authentication required");
     }
 }

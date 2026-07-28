@@ -92,6 +92,19 @@ fn parse_decimal_nonneg(s: &str, field: &str) -> Result<Decimal, Status> {
     Ok(d)
 }
 
+/// Validate an optional proto `decimals` field into a `u8`. Absent defaults to
+/// 18 (the ERC20 default); values above 30 are rejected — no real ERC20 exceeds
+/// that, and the settlement-side `10**decimals` would be nonsensical (#211).
+fn parse_decimals(v: Option<u32>, field: &str) -> Result<u8, Status> {
+    match v {
+        None => Ok(18),
+        Some(d) if d <= 30 => Ok(d as u8),
+        Some(d) => Err(Status::invalid_argument(format!(
+            "{field} must be <= 30, got {d}"
+        ))),
+    }
+}
+
 #[tonic::async_trait]
 impl DarkPoolAdminService for AdminApiHandler {
     async fn register_pair(
@@ -114,10 +127,14 @@ impl DarkPoolAdminService for AdminApiHandler {
         let auction_interval = req
             .auction_interval_ms
             .map(|ms| std::time::Duration::from_millis(ms as u64));
+        let base_decimals = parse_decimals(req.base_decimals, "base_decimals")?;
+        let quote_decimals = parse_decimals(req.quote_decimals, "quote_decimals")?;
 
         let cfg = PairConfig {
             base_token: base,
             quote_token: quote,
+            base_decimals,
+            quote_decimals,
             min_order_size,
             tick_size,
             auction_interval,

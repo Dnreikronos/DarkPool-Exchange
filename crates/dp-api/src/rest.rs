@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{Extension, MatchedPath, Path, Query, State};
-use axum::http::{header, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode};
+use axum::extract::{ConnectInfo, Extension, MatchedPath, Path, Query, State};
+use axum::http::{
+    header, HeaderMap, HeaderName, HeaderValue, Method, Request as AxumRequest, StatusCode,
+};
 use axum::middleware::from_fn_with_state;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -12,7 +16,9 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use metrics_exporter_prometheus::PrometheusHandle;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::BroadcastStream;
 use tonic::{Code, Request};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -32,15 +38,72 @@ use crate::pb::{
     ListOrdersRequest, ListPairsAdminRequest, ListPairsRequest, PlaceOrderRequest,
     RegisterPairRequest, SuspendPairRequest,
 };
-use crate::ratelimit::{ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore};
+use crate::ratelimit::{
+    client_key, ratelimit_axum_mw, ratelimit_ip_axum_mw, ClientKey, RateLimitCore, TrustedProxies,
+};
 use crate::readiness::ReadinessProbes;
 use crate::siwe::SiweState;
-use crate::validation::{validate_pair_known, MAX_CIPHERTEXT_BYTES, MAX_PROOF_BYTES};
+use crate::validation::{validate_pair_known, PLACE_ORDER_BODY_LIMIT};
 use dp_crypto::{KeyStatus, MultiKeyDecrypter};
 
 pub type SharedHandler = Arc<ApiHandler>;
 pub type SharedAdminHandler = Arc<AdminApiHandler>;
 pub type SharedKeyAdminHandler = Arc<KeyAdminHandler>;
+
+#[derive(Clone, Debug)]
+pub struct SseStreamLimiter {
+    max_per_key: usize,
+    semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
+}
+
+impl SseStreamLimiter {
+    pub fn new(max_per_key: usize) -> Self {
+        Self {
+            max_per_key,
+            semaphores: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn try_acquire(&self, key: String) -> Option<SseStreamPermit> {
+        let semaphore = {
+            let mut semaphores = self.semaphores.lock();
+            semaphores.retain(|_, sem| {
+                sem.available_permits() < self.max_per_key || Arc::strong_count(sem) > 1
+            });
+            semaphores
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_key)))
+                .clone()
+        };
+        let permit = semaphore.clone().try_acquire_owned().ok()?;
+        Some(SseStreamPermit {
+            key,
+            semaphore,
+            limiter: self.clone(),
+            permit: Some(permit),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct SseStreamPermit {
+    key: String,
+    semaphore: Arc<Semaphore>,
+    limiter: SseStreamLimiter,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for SseStreamPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        let mut semaphores = self.limiter.semaphores.lock();
+        if self.semaphore.available_permits() == self.limiter.max_per_key
+            && Arc::strong_count(&self.semaphore) <= 2
+        {
+            semaphores.remove(&self.key);
+        }
+    }
+}
 
 #[derive(Clone)]
 struct MakeRequestUlid;
@@ -51,10 +114,6 @@ impl MakeRequestId for MakeRequestUlid {
         Some(RequestId::new(HeaderValue::from_str(&id).unwrap()))
     }
 }
-
-// Slack above raw byte caps to absorb base64 inflation (~4/3) plus JSON envelope.
-// Rejects oversized requests before JSON parse + base64 decode burn CPU.
-const PLACE_ORDER_BODY_LIMIT: usize = (MAX_PROOF_BYTES + MAX_CIPHERTEXT_BYTES) * 2;
 
 pub fn router(handler: SharedHandler) -> Router {
     let place_order =
@@ -195,6 +254,7 @@ pub fn router_with_ops(
     ops: OpsState,
     cors_origins: &[String],
     siwe_state: Option<SiweState>,
+    sse_streams_per_key: usize,
 ) -> Router {
     let mut base = router_with_admin(
         handler,
@@ -229,7 +289,9 @@ pub fn router_with_ops(
     let traced = base
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUlid));
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUlid))
+        .layer(Extension(ratelimit.trusted_proxies().clone()))
+        .layer(Extension(SseStreamLimiter::new(sse_streams_per_key)));
 
     if cors_origins.is_empty() {
         return traced;
@@ -557,6 +619,8 @@ struct PairInfoJson {
     tick_size: String,
     auction_interval_ms: Option<u32>,
     status: String,
+    base_decimals: Option<u32>,
+    quote_decimals: Option<u32>,
 }
 
 impl From<pb::PairInfo> for PairInfoJson {
@@ -575,6 +639,8 @@ impl From<pb::PairInfo> for PairInfoJson {
             tick_size: p.tick_size,
             auction_interval_ms: p.auction_interval_ms,
             status: status.to_string(),
+            base_decimals: p.base_decimals,
+            quote_decimals: p.quote_decimals,
         }
     }
 }
@@ -597,6 +663,10 @@ struct RegisterPairJson {
     tick_size: String,
     #[serde(default)]
     auction_interval_ms: Option<u32>,
+    #[serde(default)]
+    base_decimals: Option<u32>,
+    #[serde(default)]
+    quote_decimals: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -790,12 +860,35 @@ async fn rest_get_auction_history(
 async fn rest_stream_auctions(
     State(h): State<SharedHandler>,
     Query(q): Query<AuctionStreamQuery>,
+    headers: HeaderMap,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    identity: Option<Extension<AuthenticatedIdentity>>,
+    limiter: Option<Extension<SseStreamLimiter>>,
+    trusted: Option<Extension<TrustedProxies>>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let pair = if q.pair.is_empty() {
         String::new()
     } else {
         validate_pair_known(&h.engine, &q.pair)?.into_string()
     };
+    let Some(Extension(limiter)) = limiter else {
+        return Err(ApiError(tonic::Status::internal(
+            "auction stream limiter is not configured",
+        )));
+    };
+    let trusted_default = TrustedProxies::none();
+    let trusted = trusted
+        .as_ref()
+        .map(|Extension(t)| t)
+        .unwrap_or(&trusted_default);
+    let identity = identity.as_ref().map(|Extension(i)| i);
+    let peer = peer.map(|ConnectInfo(addr)| addr);
+    let key = client_key(identity, &headers, peer, trusted);
+    let permit = Some(limiter.try_acquire(key).ok_or_else(|| {
+        ApiError(tonic::Status::resource_exhausted(
+            "too many open auction streams for client key",
+        ))
+    })?);
     let rx = h.engine.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(move |item| {
         let pair = pair.clone();
@@ -816,6 +909,10 @@ async fn rest_stream_auctions(
                 }
             }
         }
+    });
+    let stream = stream.map(move |event| {
+        let _permit = &permit;
+        event
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
@@ -841,6 +938,8 @@ async fn rest_register_pair(
         min_order_size: body.min_order_size,
         tick_size: body.tick_size,
         auction_interval_ms: body.auction_interval_ms,
+        base_decimals: body.base_decimals,
+        quote_decimals: body.quote_decimals,
     };
     let resp = h.register_pair(Request::new(req)).await?.into_inner();
     Ok(Json(RegisterPairRespJson {
@@ -1154,9 +1253,13 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: pb::PairStatus::Active as i32,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_ACTIVE");
+        assert_eq!(json.base_decimals, None);
+        assert_eq!(json.quote_decimals, None);
     }
 
     #[test]
@@ -1169,10 +1272,14 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: Some(5000),
             status: pb::PairStatus::Suspended as i32,
+            base_decimals: Some(18),
+            quote_decimals: Some(6),
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_SUSPENDED");
         assert_eq!(json.auction_interval_ms, Some(5000));
+        assert_eq!(json.base_decimals, Some(18));
+        assert_eq!(json.quote_decimals, Some(6));
     }
 
     #[test]
@@ -1185,6 +1292,8 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: pb::PairStatus::Delisted as i32,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_DELISTED");
@@ -1200,6 +1309,8 @@ mod tests {
             tick_size: "0.01".into(),
             auction_interval_ms: None,
             status: 99,
+            base_decimals: None,
+            quote_decimals: None,
         };
         let json: PairInfoJson = p.into();
         assert_eq!(json.status, "PAIR_STATUS_UNSPECIFIED");

@@ -14,10 +14,12 @@ use dp_api::ratelimit::{RateLimitCore, RateLimitLayer, TrustedProxies};
 use dp_api::readiness::{aggregator_probe, store_probe, ReadinessProbes};
 use dp_api::rest::{self, OpsState};
 use dp_api::tls;
+use dp_api::validation::PLACE_ORDER_BODY_LIMIT;
 use dp_crypto::{
     decrypter_from_uri, validate_key_id, EciesDecrypter, KeyEntry, KeyStatus, MultiKeyDecrypter,
+    SnapshotCipher,
 };
-use dp_engine::{Engine, PairConfig, PairStatus, SnapshotConfig};
+use dp_engine::{Engine, Groth16OrderProofVerifier, PairConfig, PairStatus, SnapshotConfig};
 use dp_event::{
     FileSnapshotStore, FileStore, MemSnapshotStore, MemStore, PgSnapshotStore, PgStore,
     SnapshotStore, Store,
@@ -25,8 +27,11 @@ use dp_event::{
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -44,6 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     cfg.validate_siwe_config()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     cfg.validate_admin_auth()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_server_limits()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    cfg.validate_settlement_transport()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
 
     // Resolve the TLS posture up-front: half-configured TLS (cert
@@ -72,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let store: Arc<dyn Store> = if let Some(url) = cfg.event_db_url() {
         info!(url = %sanitize_db_url(url), "event log: postgres");
-        Arc::new(PgStore::connect(url).await?)
+        Arc::new(PgStore::connect_with_timeout(url, cfg.request_timeout).await?)
     } else if let Some(path) = cfg.event_log_path() {
         info!(path = %path, "event log: file");
         Arc::new(FileStore::open(path)?)
@@ -108,6 +117,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let engine = Engine::new(store.clone(), cfg.auction_interval);
     engine.set_snapshot_store(snapshot_store.clone());
+
+    if let Some(path) = cfg.order_proof_vk_path() {
+        let verifier = Groth16OrderProofVerifier::from_file(path)?;
+        engine.set_order_proof_verifier(Arc::new(verifier));
+        info!(path = %path, "order proof verifier: canonical VK loaded");
+    } else if cfg.allow_unverified_order_proofs {
+        warn!(
+            "DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true — per-order proofs will not be \
+             cryptographically verified. Local/dev only; do not use in production."
+        );
+    } else {
+        return Err(
+            "DARKPOOL_ORDER_PROOF_VK must point to commitment_vk.bin. To run an unsafe local \
+             fixture without per-order proof verification, set \
+             DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true."
+                .into(),
+        );
+    }
+
+    // Snapshot-at-rest encryption (#203). A snapshot store without a cipher
+    // would persist cleartext order data (trader / price / size), so fail
+    // closed for durable backends and use a process-lifetime key for the
+    // non-durable in-memory store.
+    if snapshot_store.is_some() {
+        let cipher = if let Some(uri) = cfg.snapshot_key_uri_str() {
+            let c = SnapshotCipher::from_key_uri(uri)?;
+            info!(uri = %sanitize_uri_for_log(uri), "snapshot cipher: key loaded");
+            c
+        } else if cfg.event_db_url().is_some() || cfg.snapshot_dir_path().is_some() {
+            return Err(
+                "snapshots are enabled with a durable store but DARKPOOL_SNAPSHOT_KEY_URI \
+                 is unset — refusing to write plaintext order data at rest. Set a snapshot \
+                 key (e.g. file:/path/to/key.hex) or disable snapshots \
+                 (DARKPOOL_SNAPSHOT_ENABLED=false)."
+                    .into(),
+            );
+        } else {
+            warn!(
+                "snapshot store is in-memory and DARKPOOL_SNAPSHOT_KEY_URI is unset — using \
+                 an ephemeral per-process snapshot key. In-memory snapshots are not durable \
+                 across restarts; configure a durable store + key URI for real recovery."
+            );
+            SnapshotCipher::generate_ephemeral()
+        };
+        engine.set_snapshot_cipher(Some(Arc::new(cipher)));
+    }
 
     // Always construct a MultiKeyDecrypter and wire it to the engine
     // so admin-time rotation does not require restarting the process.
@@ -216,30 +271,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "DARKPOOL_ETH_RPC and DARKPOOL_SIGNER_KEY_URI are set but \
                  DARKPOOL_CONTRACT_ADDR is missing — cannot build EthSubmitter",
             )?;
+            let (settlement_rpc, tx_transport) =
+                if let Some(private_rpc) = cfg.settlement_private_rpc_url() {
+                    (
+                        private_rpc,
+                        dp_settlement::SettlementTxTransport::PrivateRpc,
+                    )
+                } else {
+                    warn!(
+                        "DARKPOOL_ALLOW_PUBLIC_SETTLEMENT=true — settlement calldata will be \
+                         sent through DARKPOOL_ETH_RPC and may expose the full cleared book in \
+                         the public mempool. Local/dev only."
+                    );
+                    (rpc, dp_settlement::SettlementTxTransport::PublicMempool)
+                };
 
-            let provider = alloy_provider::ProviderBuilder::new()
+            let read_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            let submit_provider = alloy_provider::ProviderBuilder::new()
                 .wallet(signer.wallet())
-                .connect_http(
-                    rpc.parse()
-                        .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
-                );
+                .connect_http(settlement_rpc.parse().map_err(|e| {
+                    if tx_transport == dp_settlement::SettlementTxTransport::PrivateRpc {
+                        format!("bad DARKPOOL_SETTLEMENT_PRIVATE_RPC URL: {e}")
+                    } else {
+                        format!("bad DARKPOOL_ETH_RPC URL: {e}")
+                    }
+                })?);
 
             let submitter_cfg = dp_settlement::EthSubmitterConfig {
-                rpc_url: rpc.to_string(),
                 signer,
                 contract_address: contract_addr.to_string(),
                 chain_id: cfg.chain_id,
                 gas_limit: Some(cfg.submit_gas),
+                tx_transport,
             };
 
-            let submitter = dp_settlement::EthSubmitter::new(provider, &submitter_cfg)?;
+            let submitter = dp_settlement::EthSubmitter::with_submit_provider(
+                read_provider,
+                submit_provider,
+                &submitter_cfg,
+            )?;
             engine.set_submitter(Arc::new(submitter));
 
             info!(
-                rpc = %rpc,
+                read_rpc = %rpc,
                 contract = %contract_addr,
                 chain_id = cfg.chain_id,
+                tx_transport = tx_transport.as_str(),
                 "batch submitter: on-chain (EthSubmitter)"
+            );
+
+            // Value-bearing deployment: fail closed on the InsecureDevOracle
+            // default. The matching circuit's solvency witness must come from
+            // real on-chain `reserved` collateral, not a fabricated 1B balance
+            // (#213). A read-only provider (no signer needed for eth_call) backs
+            // the oracle; a bad address/URL aborts boot rather than serving
+            // traffic whose solvency proof attests nothing about real funds.
+            let oracle_contract = contract_addr
+                .parse::<alloy_primitives::Address>()
+                .map_err(|e| format!("bad DARKPOOL_CONTRACT_ADDR: {e}"))?;
+            let oracle_provider = alloy_provider::ProviderBuilder::new().connect_http(
+                rpc.parse()
+                    .map_err(|e| format!("bad DARKPOOL_ETH_RPC URL: {e}"))?,
+            );
+            engine.set_balance_oracle(Arc::new(dp_settlement::ChainBalanceOracle::new(
+                oracle_provider,
+                oracle_contract,
+            )));
+            info!(
+                contract = %contract_addr,
+                "balance oracle: on-chain (reads reserved[trader][asset])"
             );
         } else {
             warn!(
@@ -365,10 +468,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     rl_core.start_cleanup(cancel.clone(), Duration::from_secs(60));
 
+    let request_timeout = cfg.request_timeout;
+    let http2_max_concurrent_streams = cfg.http2_max_concurrent_streams;
+    let global_concurrency = Arc::new(Semaphore::new(cfg.max_concurrent_requests));
+    info!(
+        request_timeout = ?request_timeout,
+        max_concurrent_requests = cfg.max_concurrent_requests,
+        http2_max_concurrent_streams,
+        sse_streams_per_key = cfg.sse_streams_per_key,
+        "server request guardrails enabled"
+    );
+
     let auth = AuthLayer::from_core(auth_core.clone());
     let ratelimit = RateLimitLayer::from_core(rl_core.clone());
 
-    let handler = ApiHandler::new(engine.clone());
+    let handler = ApiHandler::new(engine.clone()).with_auction_stream_timeout(request_timeout);
     let admin_handler = AdminApiHandler::new(engine.clone());
     let key_admin_handler = KeyAdminHandler::new(multi.clone());
     let shared = Arc::new(handler.clone());
@@ -379,6 +493,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let grpc_addr = cfg.grpc_addr;
     let grpc_auth = auth.clone();
     let grpc_rl = ratelimit.clone();
+    let grpc_concurrency = GlobalConcurrencyLimitLayer::with_semaphore(global_concurrency.clone());
+    let grpc_request_timeout = request_timeout;
+    let grpc_http2_max_concurrent_streams = http2_max_concurrent_streams;
     // The admin service is intentionally NOT mounted on the gRPC port:
     // the gRPC listener authenticates with the trader API key set, which
     // would let any trader call RegisterPair/SuspendPair/DelistPair if the
@@ -390,7 +507,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let grpc_tls_enabled = grpc_tls.is_some();
     let grpc_handle = tokio::spawn(async move {
         info!(addr = %grpc_addr, tls = grpc_tls_enabled, "gRPC server starting");
-        let mut builder = Server::builder();
+        let mut builder = Server::builder()
+            .timeout(grpc_request_timeout)
+            .max_concurrent_streams(Some(grpc_http2_max_concurrent_streams))
+            .layer(grpc_concurrency);
         if let Some(tls) = grpc_tls {
             builder = builder
                 .tls_config(tls)
@@ -399,7 +519,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         builder
             .layer(grpc_auth)
             .layer(grpc_rl)
-            .add_service(DarkPoolServiceServer::new(handler))
+            .add_service(
+                DarkPoolServiceServer::new(handler)
+                    .max_decoding_message_size(PLACE_ORDER_BODY_LIMIT),
+            )
             .serve_with_shutdown(grpc_addr, async move { grpc_cancel.cancelled().await })
             .await
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
@@ -458,7 +581,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ops,
         &cors_origins,
         siwe_state,
-    );
+        cfg.sse_streams_per_key,
+    )
+    .layer(RequestBodyTimeoutLayer::new(request_timeout))
+    .layer(TimeoutLayer::new(request_timeout))
+    .layer(GlobalConcurrencyLimitLayer::with_semaphore(
+        global_concurrency.clone(),
+    ));
     let http_addr = cfg.http_addr;
     let http_cancel = cancel.clone();
     let rest_tls = tls::axum_rustls_config(&tls_mode).await?;
@@ -482,16 +611,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
         let result = match rest_tls {
             Some(cfg) => {
-                axum_server::bind_rustls(http_addr, cfg)
-                    .handle(server_handle)
-                    .serve(make_svc)
-                    .await
+                let mut server = axum_server::bind_rustls(http_addr, cfg);
+                server
+                    .http_builder()
+                    .http1()
+                    .timer(hyper_util::rt::TokioTimer::new())
+                    .header_read_timeout(Some(request_timeout));
+                server
+                    .http_builder()
+                    .http2()
+                    .max_concurrent_streams(Some(http2_max_concurrent_streams));
+                server.handle(server_handle).serve(make_svc).await
             }
             None => {
-                axum_server::bind(http_addr)
-                    .handle(server_handle)
-                    .serve(make_svc)
-                    .await
+                let mut server = axum_server::bind(http_addr);
+                server
+                    .http_builder()
+                    .http1()
+                    .timer(hyper_util::rt::TokioTimer::new())
+                    .header_read_timeout(Some(request_timeout));
+                server
+                    .http_builder()
+                    .http2()
+                    .max_concurrent_streams(Some(http2_max_concurrent_streams));
+                server.handle(server_handle).serve(make_svc).await
             }
         };
         result.map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
@@ -631,6 +774,26 @@ struct PairSeedEntry {
     tick_size: String,
     #[serde(default, alias = "auctionIntervalMs")]
     auction_interval_ms: Option<u64>,
+    /// On-chain ERC20 decimals of each token (#211). Omit to default to 18.
+    #[serde(default, alias = "baseDecimals")]
+    base_decimals: Option<u8>,
+    #[serde(default, alias = "quoteDecimals")]
+    quote_decimals: Option<u8>,
+}
+
+/// Validate an optional seed `decimals` field, mirroring the `<= 30` bound the
+/// admin `register_pair` RPC enforces, so a JSON seed cannot persist a pair the
+/// operator API would itself refuse to register. Absent defaults to 18.
+fn seed_decimals(
+    v: Option<u8>,
+    field: &str,
+    pair: &str,
+) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
+    match v {
+        None => Ok(18),
+        Some(d) if d <= 30 => Ok(d),
+        Some(d) => Err(format!("pair seed {pair}: {field} must be <= 30, got {d}").into()),
+    }
 }
 
 /// Apply the `DARKPOOL_PAIR_SEED_JSON` seed. Each entry becomes a
@@ -662,9 +825,13 @@ fn seed_pairs_from_json(
             Decimal::from_str(e.tick_size.trim())
                 .map_err(|err| format!("pair seed {}: bad tick_size: {err}", e.pair))?
         };
+        let base_decimals = seed_decimals(e.base_decimals, "base_decimals", &e.pair)?;
+        let quote_decimals = seed_decimals(e.quote_decimals, "quote_decimals", &e.pair)?;
         let cfg = PairConfig {
             base_token: base,
             quote_token: quote,
+            base_decimals,
+            quote_decimals,
             min_order_size: min,
             tick_size: tick,
             auction_interval: e.auction_interval_ms.map(Duration::from_millis),

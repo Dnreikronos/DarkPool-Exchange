@@ -6,12 +6,13 @@
 //! literal Pedersen commitment over Jubjub.
 
 use ark_bn254::Fr;
-use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
+use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
 use ark_crypto_primitives::sponge::CryptographicSponge;
 use ark_ff::{One, Zero};
+pub use dp_poseidon::poseidon_config;
 use rust_decimal::Decimal;
 
-use crate::encoding::{decimal_to_scalar, signed_to_scalar, EncodingError};
+use crate::encoding::{decimal_to_scalar, fr_to_bytes32, signed_to_scalar, EncodingError};
 
 /// Inputs absorbed by the order-leg commitment.
 #[derive(Clone, Debug)]
@@ -76,11 +77,45 @@ pub fn hash_root_native(elements: &[Fr]) -> Fr {
     sponge.squeeze_field_elements::<Fr>(1)[0]
 }
 
+/// One settled match, as the field elements the settlement chain hashes (#153).
+/// All four are already in the circuit's domain: `bid_addr`/`ask_addr` are the
+/// settlement addresses read as `uint256(address)` (`Fr::from_be_bytes_mod_order`
+/// of the 20 address bytes), and `price`/`size` are 1e8 fixed-point integers
+/// (see [`crate::encoding::decimal_to_scalar`]).
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementRow {
+    pub bid_addr: Fr,
+    pub ask_addr: Fr,
+    pub price: Fr,
+    pub size: Fr,
+}
+
+/// Fold the settlement hash-chain the on-chain `settleAuction` must reproduce
+/// from `matches[]` to bind settlement to the proof (#153). Starting from
+/// `acc0`, each row advances the chain by
+/// `acc = poseidon(acc, bid_addr, ask_addr, price, size)`.
+///
+/// This is the single source of truth for that chain: the in-circuit gadget
+/// (`step_circuit::settlement_acc`), this native helper, and the Solidity
+/// `PoseidonBN254.hashSettlementChain` must all agree byte-for-byte. `rows`
+/// must contain exactly the active matches, in the order they were proved —
+/// the chain is order-sensitive by design, so any reorder or substitution
+/// yields a different accumulator.
+pub fn settlement_chain(acc0: Fr, rows: &[SettlementRow]) -> Fr {
+    let cfg = poseidon_config();
+    let mut acc = acc0;
+    for r in rows {
+        let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
+        sponge.absorb(&vec![acc, r.bid_addr, r.ask_addr, r.price, r.size]);
+        acc = sponge.squeeze_field_elements::<Fr>(1)[0];
+    }
+    acc
+}
+
 /// Compute trader-id-from-key as `poseidon(commitment_key_bytes_as_scalar)`.
-/// Treats input bytes big-endian, modular reduces into Fr.
+/// Treats input bytes as a canonical big-endian Fr encoding.
 pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError> {
-    use ark_ff::PrimeField;
-    let scalar = Fr::from_be_bytes_mod_order(commitment_key_bytes);
+    let scalar = bytes_to_scalar(commitment_key_bytes)?;
     let cfg = poseidon_config();
     let mut sponge = PoseidonSponge::<Fr>::new(&cfg);
     sponge.absorb(&vec![scalar]);
@@ -89,21 +124,43 @@ pub fn derive_trader_id(commitment_key_bytes: &[u8]) -> Result<Fr, EncodingError
 
 /// Derive the canonical 32-byte trader-id (BE-encoded `derive_trader_id` output).
 /// This is the byte form persisted in [`crate::witness::OrderLegWitness`] and
-/// recovered in-circuit via `bytes_to_scalar` (a BE → Fr modular reduction).
-pub fn derive_trader_id_bytes(commitment_key_bytes: &[u8]) -> [u8; 32] {
+/// recovered in-circuit via `bytes32_to_scalar`.
+pub fn derive_trader_id_bytes(commitment_key_bytes: &[u8]) -> Result<[u8; 32], EncodingError> {
     use ark_ff::{BigInteger, PrimeField};
-    let f = derive_trader_id(commitment_key_bytes).expect("derive_trader_id is infallible");
+    let f = derive_trader_id(commitment_key_bytes)?;
     let bytes = f.into_bigint().to_bytes_be();
     let mut out = [0u8; 32];
     let take = bytes.len().min(32);
     out[32 - take..].copy_from_slice(&bytes[bytes.len() - take..]);
-    out
+    Ok(out)
 }
 
-/// Map raw hex bytes (e.g. salt) into Fr via modular reduction.
-pub fn bytes_to_scalar(b: &[u8]) -> Fr {
+/// Map a canonical big-endian byte encoding into Fr.
+///
+/// The old implementation used `from_be_bytes_mod_order`, which silently
+/// reduced 32-byte values at or above the BN254 Fr modulus. That made distinct
+/// byte encodings alias to the same field element. This boundary rejects
+/// overlong inputs and non-canonical bytes32 encodings before conversion.
+pub fn bytes_to_scalar(b: &[u8]) -> Result<Fr, EncodingError> {
     use ark_ff::PrimeField;
-    Fr::from_be_bytes_mod_order(b)
+    if b.len() > 32 {
+        return Err(EncodingError::FieldElementTooLong(b.len()));
+    }
+
+    let scalar = Fr::from_be_bytes_mod_order(b);
+    if b.len() == 32 && fr_to_bytes32(scalar) != b {
+        return Err(EncodingError::NonCanonicalFieldElement);
+    }
+
+    Ok(scalar)
+}
+
+/// Map an exact 32-byte canonical field encoding into Fr.
+pub fn bytes32_to_scalar(b: &[u8]) -> Result<Fr, EncodingError> {
+    if b.len() != 32 {
+        return Err(EncodingError::InvalidFieldElementLength { actual: b.len() });
+    }
+    bytes_to_scalar(b)
 }
 
 /// Build a notional scalar = price * size (both already encoded at 1e8). The
@@ -118,34 +175,6 @@ pub fn notional_scalar(price: Decimal, size: Decimal) -> Result<Fr, EncodingErro
 /// `encoding`).
 pub fn signed_scalar(x: i128) -> Result<Fr, EncodingError> {
     signed_to_scalar(x)
-}
-
-/// Poseidon parameters for BN254 Fr, rate 2 capacity 1, 8 full + 57 partial
-/// rounds. Standard "x^5" S-box. Constants derived deterministically from
-/// the curve+rate via `find_poseidon_ark_and_mds` so the same config can be
-/// instantiated in-circuit.
-pub fn poseidon_config() -> PoseidonConfig<Fr> {
-    use ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds;
-
-    let full_rounds = 8;
-    let partial_rounds = 57;
-    let alpha = 5u64;
-    let rate = 2;
-    let capacity = 1;
-    let modulus_bits = <Fr as ark_ff::PrimeField>::MODULUS_BIT_SIZE as u64;
-
-    let (ark, mds) =
-        find_poseidon_ark_and_mds::<Fr>(modulus_bits, rate, full_rounds, partial_rounds, 0);
-
-    PoseidonConfig::new(
-        full_rounds as usize,
-        partial_rounds as usize,
-        alpha,
-        mds,
-        ark,
-        rate,
-        capacity,
-    )
 }
 
 #[cfg(test)]
@@ -228,15 +257,35 @@ mod tests {
         let h = hash_two_native(Fr::from(1u64), Fr::from(2u64));
         assert_eq!(h, hash_two_native(Fr::from(1u64), Fr::from(2u64)));
 
-        // derive_trader_id over the empty key (modular reduction of 0).
+        // derive_trader_id over the empty key.
         let t_zero = derive_trader_id(&[]).unwrap();
         let t_zero2 = derive_trader_id(&[]).unwrap();
         assert_eq!(t_zero, t_zero2);
 
-        // derive_trader_id_bytes round-trips through bytes_to_scalar.
-        let bytes = derive_trader_id_bytes(b"alice");
-        let scalar = bytes_to_scalar(&bytes);
+        // derive_trader_id_bytes round-trips through bytes32_to_scalar.
+        let bytes = derive_trader_id_bytes(b"alice").unwrap();
+        let scalar = bytes32_to_scalar(&bytes).unwrap();
         let direct = derive_trader_id(b"alice").unwrap();
         assert_eq!(scalar, direct);
+    }
+
+    #[test]
+    fn bytes32_to_scalar_rejects_non_canonical_modulus() {
+        use ark_ff::{BigInteger, PrimeField};
+
+        let modulus = Fr::MODULUS.to_bytes_be();
+        assert_eq!(modulus.len(), 32);
+        assert!(matches!(
+            bytes32_to_scalar(&modulus),
+            Err(EncodingError::NonCanonicalFieldElement)
+        ));
+    }
+
+    #[test]
+    fn bytes_to_scalar_rejects_overlong_encoding() {
+        assert!(matches!(
+            bytes_to_scalar(&[0u8; 33]),
+            Err(EncodingError::FieldElementTooLong(33))
+        ));
     }
 }

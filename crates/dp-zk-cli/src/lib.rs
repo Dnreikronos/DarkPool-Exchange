@@ -187,6 +187,9 @@ pub fn run_prover_io<R: Read, W: Write>(
 
 pub mod cli;
 pub mod commit;
+pub mod export_poseidon;
+// Demo/fixtures-only: pulls dp-zk's unsound per-proof setup (issue #212).
+#[cfg(feature = "fixtures")]
 pub mod prove_single;
 pub mod setup_commitment;
 pub use cli::{run_prover, run_prover_cli};
@@ -199,8 +202,8 @@ mod tests {
 
     fn dummy_leg() -> OrderLegWitness {
         OrderLegWitness {
-            trader_id: "aa".repeat(32),
-            salt: "bb".repeat(32),
+            trader_id: "11".repeat(32),
+            salt: "22".repeat(32),
             balance: Decimal::new(1000, 0),
             position: "0".into(),
             limit_price: Decimal::new(100, 0),

@@ -25,6 +25,18 @@ fn dec(s: &str) -> Decimal {
     Decimal::from_str_exact(s).unwrap()
 }
 
+fn future_expiry_nanos() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::seconds(600))
+        .timestamp_nanos_opt()
+        .unwrap()
+}
+
+fn next_nonce_hex() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    format!("{:064x}", SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
 fn new_engine() -> Engine {
     let store = Arc::new(MemStore::new());
     let engine = Engine::new(store, Duration::from_millis(50));
@@ -54,18 +66,22 @@ async fn place(
     size: &str,
     key: &str,
 ) -> Result<dp_types::Order, dp_engine::EngineError> {
+    let trader = next_trader();
     let d = DecryptedOrder {
-        trader: next_trader(),
+        trader,
         pair: pair.into(),
         side,
         price: dec(price),
         size: dec(size),
         commitment_key: key.into(),
+        salt: "01".repeat(32),
+        nonce: next_nonce_hex(),
+        expires_at_unix_nanos: future_expiry_nanos(),
         ttl: 60_000_000_000,
     };
     let ct = serde_json::to_vec(&d).unwrap();
     engine
-        .place_encrypted_order(vec![0u8; 32], vec![], ct, None)
+        .place_encrypted_order(vec![0u8; 32], vec![], ct, trader)
         .await
 }
 
@@ -99,6 +115,8 @@ async fn place_rejects_below_min_order_size() {
     let cfg = PairConfig {
         base_token: Address::ZERO,
         quote_token: Address::ZERO,
+        base_decimals: 18,
+        quote_decimals: 18,
         min_order_size: dec("1"),
         tick_size: Decimal::ZERO,
         auction_interval: None,
@@ -118,6 +136,8 @@ async fn place_rejects_off_tick_price() {
     let cfg = PairConfig {
         base_token: Address::ZERO,
         quote_token: Address::ZERO,
+        base_decimals: 18,
+        quote_decimals: 18,
         min_order_size: Decimal::ZERO,
         tick_size: dec("0.05"),
         auction_interval: None,

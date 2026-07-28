@@ -128,11 +128,14 @@ impl OrderLegWitness {
     pub fn trader_addr_bytes(&self) -> Result<Vec<u8>, hex::FromHexError> {
         hex::decode(self.trader_addr.trim_start_matches("0x"))
     }
-    /// Map the trader's address bytes to an Fr via `from_be_bytes_mod_order`.
-    /// Mirrors `pedersen::derive_trader_id`'s input projection, so the circuit
-    /// derives the same `trader_id` the engine commits to.
-    pub fn trader_addr_scalar(&self) -> Result<Fr, hex::FromHexError> {
-        Ok(crate::pedersen::bytes_to_scalar(&self.trader_addr_bytes()?))
+    /// Map the trader's address bytes to a canonical Fr encoding. Mirrors
+    /// `pedersen::derive_trader_id`'s input projection, so the circuit derives
+    /// the same `trader_id` the engine commits to.
+    pub fn trader_addr_scalar(&self) -> Result<Fr, String> {
+        let bytes = self
+            .trader_addr_bytes()
+            .map_err(|e| format!("hex decode: {e}"))?;
+        crate::pedersen::bytes_to_scalar(&bytes).map_err(|e| e.to_string())
     }
 }
 
@@ -158,7 +161,7 @@ mod tests {
                 },
                 ask: OrderLegWitness {
                     trader_id: "22".repeat(32),
-                    salt: "33".repeat(32),
+                    salt: "11".repeat(32),
                     balance: Decimal::from(2000),
                     position: "0".into(),
                     limit_price: Decimal::from(99),

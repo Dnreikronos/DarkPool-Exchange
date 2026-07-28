@@ -11,21 +11,26 @@
 //
 // Environment:
 //   DARKPOOL_REST_URL  (default: http://127.0.0.1:8080)
-//   DARKPOOL_API_KEY   (default: empty — works when server has no keys configured)
+//   DARKPOOL_API_KEY   unsupported here: EventSource cannot send x-api-key
+//                      without putting credentials in the URL.
 
 const BASE = process.env.DARKPOOL_REST_URL ?? "http://127.0.0.1:8080";
 const API_KEY = process.env.DARKPOOL_API_KEY ?? "";
+if (API_KEY) {
+  console.error(
+    "DARKPOOL_API_KEY is not supported by this EventSource test; run against an unauthenticated local server.",
+  );
+  process.exit(1);
+}
 
 const WANT = 3;
 const TIMEOUT_MS = 120_000;
 
 const params = new URLSearchParams();
 params.set("pair", "ETH/USDC");
-if (API_KEY) params.set("apiKey", API_KEY);
 
 const url = `${BASE}/v1/auctions/stream?${params}`;
-const safeUrl = API_KEY ? url.replace(API_KEY, "***") : url;
-console.log(`Connecting to ${safeUrl}`);
+console.log(`Connecting to ${url}`);
 console.log(`Waiting for ${WANT} auction events…\n`);
 
 const events = [];

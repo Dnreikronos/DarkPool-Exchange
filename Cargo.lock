@@ -2070,6 +2070,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -2319,6 +2320,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "humantime",
+ "hyper-util",
  "ipnet",
  "jsonwebtoken",
  "k256",
@@ -2328,7 +2330,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
- "percent-encoding",
  "prost",
  "rand 0.8.6",
  "rcgen",
@@ -2396,6 +2397,7 @@ version = "0.1.0"
 dependencies = [
  "age",
  "alloy-primitives",
+ "chacha20poly1305",
  "dp-types",
  "ecies",
  "hex",
@@ -2406,6 +2408,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "serde_repr",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -2427,6 +2430,7 @@ dependencies = [
  "arc-swap",
  "ark-bn254",
  "ark-ff 0.5.0",
+ "ark-groth16",
  "bincode",
  "chrono",
  "criterion",
@@ -2478,6 +2482,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "dp-poseidon"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-crypto-primitives",
+ "ark-ff 0.5.0",
+ "sha2",
 ]
 
 [[package]]
@@ -2542,6 +2556,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-snark",
  "ark-std 0.5.0 (git+https://github.com/arkworks-rs/std)",
+ "dp-poseidon",
  "folding-schemes",
  "hex",
  "rust_decimal",
@@ -2558,6 +2573,7 @@ name = "dp-zk-cli"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
+ "ark-crypto-primitives",
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
@@ -6738,6 +6754,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -6755,6 +6772,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
  "tracing",

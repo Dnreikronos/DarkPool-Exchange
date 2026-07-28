@@ -15,7 +15,7 @@ use folding_schemes::{frontend::FCircuit, Error};
 
 use crate::encoding::SCALE_FACTOR_I128;
 use crate::merkle::{admitted_set_proof, admitted_set_root, MerkleProof, MERKLE_DEPTH};
-use crate::pedersen::{bytes_to_scalar, commit_native, poseidon_config, OrderCommitmentInput};
+use crate::pedersen::{bytes32_to_scalar, commit_native, poseidon_config, OrderCommitmentInput};
 use crate::witness::BatchWitness;
 use crate::ZkError;
 
@@ -172,26 +172,30 @@ impl AuctionExternalInputs {
         let mut matches = Vec::with_capacity(batch_size);
 
         for (i, m) in witness.matches.iter().enumerate() {
-            let bid_trader = bytes_to_scalar(
-                &m.bid
-                    .trader_id_bytes()
-                    .map_err(|e| ZkError::Witness(format!("bid trader_id: {e}")))?,
-            );
-            let bid_salt = bytes_to_scalar(
-                &m.bid
-                    .salt_bytes()
-                    .map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?,
-            );
-            let ask_trader = bytes_to_scalar(
-                &m.ask
-                    .trader_id_bytes()
-                    .map_err(|e| ZkError::Witness(format!("ask trader_id: {e}")))?,
-            );
-            let ask_salt = bytes_to_scalar(
-                &m.ask
-                    .salt_bytes()
-                    .map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?,
-            );
+            let bid_trader_bytes = m
+                .bid
+                .trader_id_bytes()
+                .map_err(|e| ZkError::Witness(format!("bid trader_id: {e}")))?;
+            let bid_trader = bytes32_to_scalar(&bid_trader_bytes)
+                .map_err(|e| ZkError::Witness(format!("bid trader_id: {e}")))?;
+            let bid_salt_bytes = m
+                .bid
+                .salt_bytes()
+                .map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?;
+            let bid_salt = bytes32_to_scalar(&bid_salt_bytes)
+                .map_err(|e| ZkError::Witness(format!("bid salt: {e}")))?;
+            let ask_trader_bytes = m
+                .ask
+                .trader_id_bytes()
+                .map_err(|e| ZkError::Witness(format!("ask trader_id: {e}")))?;
+            let ask_trader = bytes32_to_scalar(&ask_trader_bytes)
+                .map_err(|e| ZkError::Witness(format!("ask trader_id: {e}")))?;
+            let ask_salt_bytes = m
+                .ask
+                .salt_bytes()
+                .map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?;
+            let ask_salt = bytes32_to_scalar(&ask_salt_bytes)
+                .map_err(|e| ZkError::Witness(format!("ask salt: {e}")))?;
 
             matches.push(CircuitMatchNative {
                 bid_trader,
@@ -891,7 +895,7 @@ mod tests {
             },
             ask: OrderLegWitness {
                 trader_id: trader_id_hex(&ask_addr),
-                salt: "44".repeat(32),
+                salt: "11".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(95),
@@ -941,28 +945,24 @@ mod tests {
         vec![Fr::zero(), Fr::zero(), policy_hash, Fr::zero(), Fr::zero()]
     }
 
-    /// Native mirror of the in-circuit settlement hash-chain (#153): folds
-    /// each active match's `(bid_addr, ask_addr, price_8, size_8)` tuple into a
-    /// running Poseidon chain starting from `acc0`. This is the value the
-    /// on-chain `settleSession` must reproduce from `matches[]`.
+    /// Native mirror of the in-circuit settlement hash-chain (#153) over the
+    /// active rows of `ext`. Delegates to the shared
+    /// [`crate::pedersen::settlement_chain`] so the gadget, this test, and the
+    /// on-chain `PoseidonBN254.hashSettlementChain` all exercise one
+    /// implementation — the value the contract reproduces from `matches[]`.
     fn settlement_chain(ext: &AuctionExternalInputs, acc0: Fr) -> Fr {
-        let cfg = poseidon_config();
-        let mut acc = acc0;
-        for m in &ext.matches {
-            if m.is_active != Fr::one() {
-                continue;
-            }
-            let mut s = PoseidonSponge::<Fr>::new(&cfg);
-            s.absorb(&vec![
-                acc,
-                m.bid_trader_addr,
-                m.ask_trader_addr,
-                m.match_price,
-                m.match_size,
-            ]);
-            acc = s.squeeze_field_elements::<Fr>(1)[0];
-        }
-        acc
+        let rows: Vec<crate::pedersen::SettlementRow> = ext
+            .matches
+            .iter()
+            .filter(|m| m.is_active == Fr::one())
+            .map(|m| crate::pedersen::SettlementRow {
+                bid_addr: m.bid_trader_addr,
+                ask_addr: m.ask_trader_addr,
+                price: m.match_price,
+                size: m.match_size,
+            })
+            .collect();
+        crate::pedersen::settlement_chain(acc0, &rows)
     }
 
     #[test]
@@ -1148,7 +1148,7 @@ mod tests {
     fn step_rejects_forged_trader_id() {
         let (mut w, prices, sizes) = sample_witness();
         // trader_id no longer matches poseidon(commitment_key)
-        w.matches[0].bid.trader_id = "ab".repeat(32);
+        w.matches[0].bid.trader_id = "01".repeat(32);
         let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let z_0 = initial_z(&ext);
         let circuit = AuctionStepCircuit::new(2).unwrap();
@@ -1156,6 +1156,32 @@ mod tests {
         assert!(
             !satisfied,
             "expected constraint system to be unsatisfied (forged trader id)"
+        );
+    }
+
+    #[test]
+    fn from_witness_rejects_non_canonical_trader_id() {
+        let (mut w, prices, sizes) = sample_witness();
+        w.matches[0].bid.trader_id = hex::encode(Fr::MODULUS.to_bytes_be());
+
+        let err = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap_err();
+
+        assert!(
+            err.to_string().contains("bid trader_id") && err.to_string().contains("not canonical"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn from_witness_rejects_non_canonical_salt() {
+        let (mut w, prices, sizes) = sample_witness();
+        w.matches[0].bid.salt = hex::encode(Fr::MODULUS.to_bytes_be());
+
+        let err = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap_err();
+
+        assert!(
+            err.to_string().contains("bid salt") && err.to_string().contains("not canonical"),
+            "got {err}"
         );
     }
 
@@ -1205,7 +1231,7 @@ mod tests {
             },
             ask: OrderLegWitness {
                 trader_id: trader_id_hex(ask_addr),
-                salt: "44".repeat(32),
+                salt: "11".repeat(32),
                 balance: Decimal::from(1_000_000),
                 position: "0".into(),
                 limit_price: Decimal::from(95),
@@ -1256,6 +1282,21 @@ mod tests {
         );
     }
 
+    /// Scope boundary for #223: the circuit accepts any uniform clearing price
+    /// inside each supplied pair's limit interval.
+    #[test]
+    fn step_accepts_uniform_price_inside_limits() {
+        let (w, prices, sizes) = two_match_witness(Decimal::from(96), Decimal::from(96));
+        let ext = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
+        let z_0 = initial_z(&ext);
+        let circuit = AuctionStepCircuit::new(2).unwrap();
+        let (satisfied, _) = run_step(&circuit, z_0, ext);
+        assert!(
+            satisfied,
+            "uniform crossing price inside every matched pair's limits must satisfy"
+        );
+    }
+
     // ── Input-completeness membership (#157) ─────────────────────────────────
 
     #[test]
@@ -1278,11 +1319,10 @@ mod tests {
         );
     }
 
-    /// The engine's real case: the admitted set is the full live book, a
-    /// superset of the matched legs. Membership still holds for every settled
-    /// leg.
+    /// Scope boundary for #223: membership proves every settled leg came from
+    /// the admitted set, but it does not prove every admitted order was matched.
     #[test]
-    fn step_accepts_admitted_superset() {
+    fn step_accepts_admitted_superset_without_completeness_check() {
         let (w, prices, sizes) = sample_witness();
         let base = AuctionExternalInputs::from_witness(&w, &prices, &sizes, 2).unwrap();
         let mut admitted: Vec<Fr> = base
@@ -1302,7 +1342,7 @@ mod tests {
         let (satisfied, _) = run_step(&circuit, z_0, ext);
         assert!(
             satisfied,
-            "matched legs must be members of the larger admitted set"
+            "extra admitted-but-unmatched orders are outside the circuit's completeness constraints"
         );
     }
 

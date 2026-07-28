@@ -1,3 +1,4 @@
+use dp_crypto::CryptoError;
 use dp_engine::EngineError;
 use dp_types::DarkPoolError;
 use tonic::Status;
@@ -16,8 +17,21 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
         EngineError::Validation(
             e @ (DarkPoolError::PairNotAccepting(_) | DarkPoolError::CannotSuspendDelistedPair(_)),
         ) => Status::failed_precondition(e.to_string()),
+        EngineError::Validation(
+            e @ (DarkPoolError::OrderExpired | DarkPoolError::OrderExpiryTooFar { .. }),
+        ) => Status::failed_precondition(e.to_string()),
         EngineError::Validation(e @ DarkPoolError::TraderAddressMismatch { .. }) => {
             Status::permission_denied(e.to_string())
+        }
+        EngineError::Validation(e @ DarkPoolError::DuplicateOrder) => {
+            Status::already_exists(e.to_string())
+        }
+        EngineError::Validation(
+            e @ (DarkPoolError::TooManyRestingOrdersForTrader { .. }
+            | DarkPoolError::OrderBookCapacityExceeded { .. }),
+        ) => Status::resource_exhausted(e.to_string()),
+        EngineError::Decrypt(CryptoError::DeserializationFailed(e)) => {
+            Status::invalid_argument(e.to_string())
         }
         EngineError::Validation(
             e @ (DarkPoolError::PairRequired
@@ -27,6 +41,11 @@ pub fn engine_error_to_status(err: EngineError) -> Status {
             | DarkPoolError::LimitMustBePositive
             | DarkPoolError::OrderSizeBelowMinimum { .. }
             | DarkPoolError::OrderPriceNotOnTick { .. }
+            | DarkPoolError::SaltInvalid
+            | DarkPoolError::OrderNonceInvalid
+            | DarkPoolError::OrderExpiryInvalid
+            | DarkPoolError::InvalidOrderProof
+            | DarkPoolError::EncryptedPayloadTooLarge { .. }
             | DarkPoolError::InvalidPair(_)),
         ) => Status::invalid_argument(e.to_string()),
         other => Status::internal(other.to_string()),
@@ -86,10 +105,28 @@ mod tests {
                 pair: "ETH/USDC".into(),
                 tick: "0.01".into(),
             },
+            DarkPoolError::SaltInvalid,
+            DarkPoolError::OrderNonceInvalid,
+            DarkPoolError::OrderExpiryInvalid,
+            DarkPoolError::InvalidOrderProof,
+            DarkPoolError::EncryptedPayloadTooLarge { max: 128 * 1024 },
             DarkPoolError::InvalidPair("bad".into()),
         ] {
             let s = engine_error_to_status(EngineError::Validation(err));
             assert_eq!(s.code(), Code::InvalidArgument);
+        }
+    }
+
+    #[test]
+    fn order_freshness_errors_map_to_failed_precondition() {
+        for err in [
+            DarkPoolError::OrderExpired,
+            DarkPoolError::OrderExpiryTooFar {
+                max_seconds: 86_400,
+            },
+        ] {
+            let s = engine_error_to_status(EngineError::Validation(err));
+            assert_eq!(s.code(), Code::FailedPrecondition);
         }
     }
 
@@ -102,6 +139,23 @@ mod tests {
             },
         ));
         assert_eq!(s.code(), Code::PermissionDenied);
+    }
+
+    #[test]
+    fn duplicate_order_maps_to_already_exists() {
+        let s = engine_error_to_status(EngineError::Validation(DarkPoolError::DuplicateOrder));
+        assert_eq!(s.code(), Code::AlreadyExists);
+    }
+
+    #[test]
+    fn capacity_errors_map_to_resource_exhausted() {
+        for err in [
+            DarkPoolError::TooManyRestingOrdersForTrader { max: 128 },
+            DarkPoolError::OrderBookCapacityExceeded { max: 16 * 1024 },
+        ] {
+            let s = engine_error_to_status(EngineError::Validation(err));
+            assert_eq!(s.code(), Code::ResourceExhausted);
+        }
     }
 
     #[test]

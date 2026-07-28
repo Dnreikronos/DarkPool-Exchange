@@ -36,4 +36,10 @@ pub enum EventError {
     #[cfg(feature = "postgres")]
     #[error(transparent)]
     Migrate(#[from] sqlx::migrate::MigrateError),
+    #[cfg(feature = "postgres")]
+    #[error("postgres event store {operation} timed out after {timeout:?}")]
+    Timeout {
+        operation: &'static str,
+        timeout: std::time::Duration,
+    },
 }

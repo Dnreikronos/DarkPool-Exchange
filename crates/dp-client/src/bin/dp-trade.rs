@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use clap::{Parser, ValueEnum};
+use rand::RngCore;
 use rust_decimal::Decimal;
 
 use dp_client::encrypt::{load_operator_pubkey_file, parse_operator_pubkey_hex};
@@ -36,8 +37,15 @@ enum OutputFormat {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "dp-trade", about = "Build an encrypted DarkPool order submission")]
+#[command(
+    name = "dp-trade",
+    about = "Build an encrypted DarkPool order submission"
+)]
 struct Args {
+    /// Trader address bound into the encrypted payload.
+    #[arg(long)]
+    trader: String,
+
     #[arg(long)]
     pair: String,
 
@@ -68,9 +76,14 @@ struct Args {
     #[arg(long)]
     server: Option<String>,
 
-    /// API key, sent as `x-api-key` when --server is used.
+    /// API key, sent as `x-api-key` when --server is used. PlaceOrder requires
+    /// wallet authentication on hardened servers; use --bearer-token there.
     #[arg(long)]
     api_key: Option<String>,
+
+    /// SIWE JWT, sent as `Authorization: Bearer ...` when --server is used.
+    #[arg(long)]
+    bearer_token: Option<String>,
 }
 
 #[tokio::main]
@@ -95,13 +108,18 @@ async fn run() -> Result<(), ClientError> {
         .as_nanos()
         .try_into()
         .map_err(|_| ClientError::InvalidPayload("ttl exceeds i64 nanoseconds".into()))?;
+    let expires_at_unix_nanos = unix_nanos_after(ttl)?;
 
     let payload = OrderPayload {
+        trader: args.trader,
         pair: args.pair,
         side: args.side.into(),
         price: args.price,
         size: args.size,
         commitment_key: args.commitment_key,
+        salt: random_hex32(),
+        nonce: random_hex32(),
+        expires_at_unix_nanos,
         ttl: ttl_nanos,
     };
 
@@ -110,10 +128,38 @@ async fn run() -> Result<(), ClientError> {
     print_submission(&sub, args.output);
 
     if let Some(server) = args.server {
-        submit_http(&server, args.api_key.as_deref(), &sub).await?;
+        eprintln!(
+            "warning: dp-trade sends a development placeholder proof; production servers reject it unless DARKPOOL_ALLOW_UNVERIFIED_ORDER_PROOFS=true"
+        );
+        submit_http(
+            &server,
+            args.api_key.as_deref(),
+            args.bearer_token.as_deref(),
+            &sub,
+        )
+        .await?;
     }
 
     Ok(())
+}
+
+fn random_hex32() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+fn unix_nanos_after(ttl: std::time::Duration) -> Result<i64, ClientError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ClientError::InvalidPayload(format!("system clock before Unix epoch: {e}")))?;
+    let expires = now
+        .checked_add(ttl)
+        .ok_or_else(|| ClientError::InvalidPayload("ttl overflows Unix timestamp".into()))?;
+    expires
+        .as_nanos()
+        .try_into()
+        .map_err(|_| ClientError::InvalidPayload("expiry exceeds i64 nanoseconds".into()))
 }
 
 fn resolve_operator_key(input: &str) -> Result<Vec<u8>, ClientError> {
@@ -157,6 +203,7 @@ fn print_submission(sub: &OrderSubmission, fmt: OutputFormat) {
 async fn submit_http(
     server: &str,
     api_key: Option<&str>,
+    bearer_token: Option<&str>,
     sub: &OrderSubmission,
 ) -> Result<(), ClientError> {
     let url = format!("{}/v1/orders", server.trim_end_matches('/'));
@@ -168,6 +215,9 @@ async fn submit_http(
 
     let client = reqwest::Client::new();
     let mut req = client.post(&url).json(&body);
+    if let Some(token) = bearer_token {
+        req = req.bearer_auth(token);
+    }
     if let Some(k) = api_key {
         req = req.header("x-api-key", k);
     }

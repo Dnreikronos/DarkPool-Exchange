@@ -80,6 +80,14 @@ jobs:
       - name: Build Solidity artifacts
         working-directory: contracts
         run: forge build
+      - name: Run Solidity tests
+        # forge build only compiles the test contracts. Without this step the
+        # on-chain Poseidon port (PoseidonBN254.t.sol, cross-checked against the
+        # circuit's Rust reference vectors) and the settlement-binding logic
+        # (DarkPool.t.sol) are never executed in CI, so a bad constant or a
+        # binding regression would ship green.
+        working-directory: contracts
+        run: forge test
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
       - name: Run tests with coverage
