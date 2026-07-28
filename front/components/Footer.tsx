@@ -91,7 +91,7 @@ export default function Footer() {
 
           <div className="flex items-center gap-3">
             <span
-              className="w-1.5 h-1.5 bg-brand-accent animate-blink inline-block"
+              className="w-1.5 h-1.5 bg-brand-accent animate-blink motion-reduce:animate-none inline-block"
               style={{ borderRadius: 0 }}
             />
             <span className="font-mono text-[11px] text-brand-muted">
