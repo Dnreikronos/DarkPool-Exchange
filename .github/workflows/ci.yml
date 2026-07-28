@@ -196,6 +196,16 @@ jobs:
         #     recorded in BUILDINFO when the artifacts were generated.
         working-directory: .
         run: |
+          # `git diff` below is blind to untracked files, and the .wasm is
+          # never copied over at all, so assert tracking explicitly first.
+          # Without this, an artifact dropped from the index reappears as
+          # untracked output and both halves of the check pass.
+          for f in dp_zk_wasm.js dp_zk_wasm.d.ts dp_zk_wasm_bg.wasm BUILDINFO; do
+            if ! git ls-files --error-unmatch "front/lib/prover/zk-pkg/$f" >/dev/null 2>&1; then
+              echo "::error::front/lib/prover/zk-pkg/$f is not tracked — the frontend build needs it committed"
+              exit 1
+            fi
+          done
           cp crates/dp-zk-wasm/pkg/dp_zk_wasm.js \
              crates/dp-zk-wasm/pkg/dp_zk_wasm.d.ts \
              front/lib/prover/zk-pkg/
