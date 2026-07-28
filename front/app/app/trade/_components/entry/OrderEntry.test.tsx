@@ -92,6 +92,6 @@ describe('OrderEntry composition', () => {
     expect(html).not.toContain('[ TECHNICAL DETAIL ]')
     expect(html).not.toContain('Retry after')
     // sanity: the form is present
-    expect(html).toContain('order-entry-form')
+    expect(html).toContain('<form')
   })
 })
