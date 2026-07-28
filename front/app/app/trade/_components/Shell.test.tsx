@@ -146,7 +146,10 @@ describe('Shell wiring (#207)', () => {
     renderShell()
     await waitForBook()
     const [bidButton] = screen.getAllByRole('button', { name: /^Bid / })
-    const price = (bidButton.getAttribute('aria-label') ?? '').replace('Bid ', '')
+    // The row's accessible name is "Bid <price>, size <size>, total <total>"
+    // (#205) — capture just the price rather than assuming it is the whole
+    // label, so this stays about click-to-fill and not about label wording.
+    const price = /^Bid ([^,]+)/.exec(bidButton.getAttribute('aria-label') ?? '')?.[1] ?? ''
     expect(price).not.toBe('')
     fireEvent.click(bidButton)
     const priceInput = screen.getByLabelText('[ PRICE · USDC ]') as HTMLInputElement
