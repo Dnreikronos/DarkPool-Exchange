@@ -176,25 +176,37 @@ jobs:
         run: wasm-pack build --release --target web --features wasm --no-default-features
       - name: Run native tests
         run: cargo test -p dp-zk-wasm
-      - name: Verify committed browser artifacts match this build
+      - name: Verify committed browser artifacts are not stale
         # front/lib/prover/zk-pkg/ is committed so the Next.js build (CI
         # and Vercel) resolves the prover worker's import without a Rust
-        # toolchain in the frontend pipeline. This step is what keeps the
-        # checked-in copy honest — same regenerate-and-diff pattern the
-        # Frontend job uses for the proto-generated SDK.
+        # toolchain in the frontend pipeline. This step keeps that copy
+        # honest — a circuit change shipped against a stale prover would
+        # otherwise pass every check and fail only in production.
         #
-        # The wasm-bindgen glue (.js/.d.ts) tracks the crate's public API.
-        # The .wasm bytes also depend on the Rust toolchain, so a stable
-        # bump can fail this on an unrelated PR — the fix is the same
-        # either way: run `just build-wasm-zk` and commit the result.
+        # Two halves, because the artifacts differ in reproducibility:
+        #
+        #   .js / .d.ts — wasm-bindgen output, byte-identical across
+        #     machines, so compare directly. Catches API drift such as
+        #     prove_order_wasm gaining its pk_bytes parameter.
+        #
+        #   .wasm — NOT reproducible: Rust patch version, LLVM and
+        #     embedded paths all move the bytes, so a direct comparison
+        #     fails on unrelated toolchain bumps. Compare a hash of the
+        #     prover's sources instead (scripts/zk-artifact-hash.sh),
+        #     recorded in BUILDINFO when the artifacts were generated.
         working-directory: .
         run: |
-          cp crates/dp-zk-wasm/pkg/dp_zk_wasm_bg.wasm \
-             crates/dp-zk-wasm/pkg/dp_zk_wasm.js \
+          cp crates/dp-zk-wasm/pkg/dp_zk_wasm.js \
              crates/dp-zk-wasm/pkg/dp_zk_wasm.d.ts \
              front/lib/prover/zk-pkg/
           if ! git diff --exit-code -- front/lib/prover/zk-pkg; then
-            echo "::error::front/lib/prover/zk-pkg is stale — run 'just build-wasm-zk' and commit the result"
+            echo "::error::zk-pkg bindings differ from this build — run 'just build-wasm-zk' and commit the result"
+            exit 1
+          fi
+          recorded=$(sed -n 's/^sources: //p' front/lib/prover/zk-pkg/BUILDINFO)
+          actual=$(./scripts/zk-artifact-hash.sh)
+          if [ "$recorded" != "$actual" ]; then
+            echo "::error::prover sources changed since zk-pkg was built (recorded $recorded, actual $actual) — run 'just build-wasm-zk' and commit the result"
             exit 1
           fi
       - name: Record bundle size

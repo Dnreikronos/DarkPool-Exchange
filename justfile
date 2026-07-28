@@ -230,6 +230,10 @@ build-wasm-zk:
     cp crates/dp-zk-wasm/pkg/dp_zk_wasm_bg.wasm front/lib/prover/zk-pkg/
     cp crates/dp-zk-wasm/pkg/dp_zk_wasm.js front/lib/prover/zk-pkg/
     cp crates/dp-zk-wasm/pkg/dp_zk_wasm.d.ts front/lib/prover/zk-pkg/
+    # Unlike the other pkg/ dirs, these artifacts are committed — the
+    # frontend build has no Rust toolchain. Record what produced them so
+    # CI can fail when the prover sources move without a rebuild.
+    ./scripts/write-zk-buildinfo.sh
 
 # Build WASM and report bundle size
 wasm-size: build-wasm

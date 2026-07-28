@@ -70,6 +70,7 @@ front/lib/prover/zk-pkg/*
 !front/lib/prover/zk-pkg/dp_zk_wasm.d.ts
 !front/lib/prover/zk-pkg/dp_zk_wasm.js
 !front/lib/prover/zk-pkg/dp_zk_wasm_bg.wasm
+!front/lib/prover/zk-pkg/BUILDINFO
 crates/dp-client/pkg/
 crates/dp-zk-wasm/pkg/
 
