@@ -177,4 +177,28 @@ describe('Shell wiring (#207)', () => {
       'Awaiting wallet connection and order entry form (F1.9).'
     )
   })
+
+  // The Shell renders every panel twice — once per layout — and both trees
+  // stay in the DOM because the split is CSS-only. Any static DOM id inside
+  // a panel therefore collides, silently repointing aria-labelledby /
+  // aria-controls at the first match in document order. The axe suite in
+  // Shell.a11y.test.tsx does NOT catch this: its WCAG-tag filter excludes
+  // the duplicate-id rules. Assert it directly instead.
+  it('emits no duplicate DOM ids across the desktop and mobile layouts', async () => {
+    renderShell()
+    await waitForBook()
+    fireEvent.click(screen.getByRole('button', { name: 'Open order entry' }))
+    await waitFor(() => {
+      if (screen.getAllByLabelText('[ PRICE · USDC ]').length < 2) {
+        throw new Error('sheet form not mounted yet')
+      }
+    })
+
+    const counts = new Map<string, number>()
+    for (const el of document.querySelectorAll('[id]')) {
+      counts.set(el.id, (counts.get(el.id) ?? 0) + 1)
+    }
+    const duplicates = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
+    expect(duplicates).toEqual([])
+  })
 })
