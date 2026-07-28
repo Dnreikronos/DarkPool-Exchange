@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import { AxisBottom } from '@visx/axis'
 import { curveStepAfter, curveStepBefore } from '@visx/curve'
 import { Group } from '@visx/group'
@@ -171,9 +171,14 @@ export function DepthChart({ className }: DepthChartProps = {}) {
   const orderbook = useMockStore((s) => s.orderbook)
   const series = useMemo(() => buildDepthSeries(orderbook), [orderbook])
   const isEmpty = series.bids.length === 0 && series.asks.length === 0
+  // Instance-scoped: the Shell renders the chart panel in both the desktop
+  // and the mobile layout, and both are in the DOM at once (the split is
+  // CSS-only). A static id would resolve every figure's accessible name to
+  // whichever caption came first in document order.
+  const captionId = useId()
 
   return (
-    <figure className={cn('flex h-full flex-col', className)} aria-labelledby="depth-chart-caption">
+    <figure className={cn('flex h-full flex-col', className)} aria-labelledby={captionId}>
       <DepthChartHeader series={series} />
       <div className="relative flex-1 min-h-[160px]">
         <ParentSize debounceTime={0}>
@@ -191,7 +196,7 @@ export function DepthChart({ className }: DepthChartProps = {}) {
           </div>
         )}
       </div>
-      <figcaption id="depth-chart-caption" className="sr-only">
+      <figcaption id={captionId} className="sr-only">
         Cumulative bid and ask depth for the active pair.
       </figcaption>
     </figure>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ColorType,
   CrosshairMode,
@@ -201,12 +201,14 @@ export function PriceHistoryChart({
   )
 
   const isEmpty = points.length < MIN_AUCTIONS_FOR_CHART
+  // Instance-scoped: the Shell renders the chart panel in both the desktop
+  // and the mobile layout, and both are in the DOM at once (the split is
+  // CSS-only). The caption is per-instance state (timeframe, print count),
+  // so a static id would label the mobile figure with the desktop's text.
+  const captionId = useId()
 
   return (
-    <figure
-      className={cn('flex h-full flex-col', className)}
-      aria-labelledby="price-history-caption"
-    >
+    <figure className={cn('flex h-full flex-col', className)} aria-labelledby={captionId}>
       <PriceHistoryHeader
         timeframe={timeframe}
         onChange={setTimeframe}
@@ -219,7 +221,7 @@ export function PriceHistoryChart({
           <PriceHistoryChartView points={points} rightEdgeUnixSec={anchorNow} />
         )}
       </div>
-      <figcaption id="price-history-caption" className="sr-only">
+      <figcaption id={captionId} className="sr-only">
         Clearing price history, {TIMEFRAME_LABEL[timeframe]} window, {points.length} prints.
       </figcaption>
     </figure>

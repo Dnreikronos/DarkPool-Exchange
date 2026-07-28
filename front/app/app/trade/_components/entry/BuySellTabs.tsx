@@ -15,6 +15,12 @@ export interface BuySellTabsProps {
   value: OrderSide
   onChange: (next: OrderSide) => void
   disabled?: boolean
+  /**
+   * id of the form panel the tabs control (`aria-controls`). Passed in by
+   * OrderEntry because the panel id is instance-scoped — the Shell mounts
+   * the form twice (desktop grid + mobile sheet).
+   */
+  controlsId?: string
 }
 
 interface OptionProps {
@@ -22,11 +28,12 @@ interface OptionProps {
   label: string
   active: boolean
   disabled?: boolean
+  controlsId?: string
   onClick: () => void
 }
 
 const Option = React.forwardRef<HTMLButtonElement, OptionProps>(function Option(
-  { side, label, active, disabled, onClick },
+  { side, label, active, disabled, controlsId, onClick },
   ref
 ) {
   return (
@@ -35,7 +42,7 @@ const Option = React.forwardRef<HTMLButtonElement, OptionProps>(function Option(
       type="button"
       role="tab"
       aria-selected={active}
-      aria-controls="order-entry-form"
+      aria-controls={controlsId}
       data-side={side}
       data-state={active ? 'active' : 'inactive'}
       // Roving tabindex: one Tab stop for the whole tablist; arrows move
@@ -60,7 +67,7 @@ const Option = React.forwardRef<HTMLButtonElement, OptionProps>(function Option(
   )
 })
 
-export function BuySellTabs({ value, onChange, disabled }: BuySellTabsProps) {
+export function BuySellTabs({ value, onChange, disabled, controlsId }: BuySellTabsProps) {
   const buyRef = React.useRef<HTMLButtonElement>(null)
   const sellRef = React.useRef<HTMLButtonElement>(null)
 
@@ -97,6 +104,7 @@ export function BuySellTabs({ value, onChange, disabled }: BuySellTabsProps) {
         label="[ BUY ]"
         active={value === 'buy'}
         disabled={disabled}
+        controlsId={controlsId}
         onClick={() => onChange('buy')}
       />
       <Option
@@ -105,6 +113,7 @@ export function BuySellTabs({ value, onChange, disabled }: BuySellTabsProps) {
         label="[ SELL ]"
         active={value === 'sell'}
         disabled={disabled}
+        controlsId={controlsId}
         onClick={() => onChange('sell')}
       />
     </div>

@@ -67,6 +67,11 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
   const priceErrorId = React.useId()
   const sizeErrorId = React.useId()
   const formErrorId = React.useId()
+  // Instance-scoped ids: the Shell mounts the panel twice (desktop grid +
+  // mobile sheet), so static ids would be duplicate-id-aria violations.
+  const formId = React.useId()
+  const priceId = React.useId()
+  const sizeId = React.useId()
 
   const form = useOrderForm({
     isConnected,
@@ -175,16 +180,21 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
       </header>
       <form
         ref={formRef}
-        id="order-entry-form"
+        id={formId}
         onSubmit={handleSubmit}
         aria-describedby={formError ? formErrorId : undefined}
         className="flex flex-1 flex-col gap-4 p-4"
         noValidate
       >
-        <BuySellTabs value={form.side} onChange={form.setSide} disabled={submit.isRunning} />
+        <BuySellTabs
+          value={form.side}
+          onChange={form.setSide}
+          disabled={submit.isRunning}
+          controlsId={formId}
+        />
 
         <DecimalInput
-          id="order-entry-price"
+          id={priceId}
           label={`[ PRICE · ${QUOTE_TOKEN} ]`}
           unit={QUOTE_TOKEN}
           value={form.price}
@@ -201,7 +211,7 @@ export const OrderEntry = React.forwardRef<OrderEntryHandle, OrderEntryProps>(fu
         )}
 
         <DecimalInput
-          id="order-entry-size"
+          id={sizeId}
           label={`[ SIZE · ${BASE_TOKEN} ]`}
           unit={BASE_TOKEN}
           value={form.size}
