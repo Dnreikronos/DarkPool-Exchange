@@ -48,10 +48,24 @@ coverage/
 # rust
 
 # WASM build output (regenerate with `just build-wasm` / `just build-wasm-zk`)
+#
+# dp-client: only the type declaration is tracked. lib/prover/index.ts
+# reaches this module through a `webpackIgnore: true` dynamic import, so
+# the bundler never has to resolve it and the build stays green without
+# the artifact.
 front/lib/prover/pkg/*
 !front/lib/prover/pkg/dp_client.d.ts
+#
+# dp-zk-wasm: the built artifacts ARE tracked. prover.worker.ts imports
+# them statically, so `next build` — in CI and on Vercel — fails outright
+# when they are missing, and neither pipeline has a Rust toolchain.
+# Committing them keeps the frontend build self-contained; the WASM
+# (dp-zk-wasm) CI job rebuilds and diffs them so the copy cannot go stale.
+# Refresh with `just build-wasm-zk`.
 front/lib/prover/zk-pkg/*
 !front/lib/prover/zk-pkg/dp_zk_wasm.d.ts
+!front/lib/prover/zk-pkg/dp_zk_wasm.js
+!front/lib/prover/zk-pkg/dp_zk_wasm_bg.wasm
 crates/dp-client/pkg/
 crates/dp-zk-wasm/pkg/
 

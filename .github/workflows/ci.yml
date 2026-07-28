@@ -168,6 +168,27 @@ jobs:
         run: wasm-pack build --release --target web --features wasm --no-default-features
       - name: Run native tests
         run: cargo test -p dp-zk-wasm
+      - name: Verify committed browser artifacts match this build
+        # front/lib/prover/zk-pkg/ is committed so the Next.js build (CI
+        # and Vercel) resolves the prover worker's import without a Rust
+        # toolchain in the frontend pipeline. This step is what keeps the
+        # checked-in copy honest — same regenerate-and-diff pattern the
+        # Frontend job uses for the proto-generated SDK.
+        #
+        # The wasm-bindgen glue (.js/.d.ts) tracks the crate's public API.
+        # The .wasm bytes also depend on the Rust toolchain, so a stable
+        # bump can fail this on an unrelated PR — the fix is the same
+        # either way: run `just build-wasm-zk` and commit the result.
+        working-directory: .
+        run: |
+          cp crates/dp-zk-wasm/pkg/dp_zk_wasm_bg.wasm \
+             crates/dp-zk-wasm/pkg/dp_zk_wasm.js \
+             crates/dp-zk-wasm/pkg/dp_zk_wasm.d.ts \
+             front/lib/prover/zk-pkg/
+          if ! git diff --exit-code -- front/lib/prover/zk-pkg; then
+            echo "::error::front/lib/prover/zk-pkg is stale — run 'just build-wasm-zk' and commit the result"
+            exit 1
+          fi
       - name: Record bundle size
         run: |
           SIZE=$(wc -c < pkg/dp_zk_wasm_bg.wasm)

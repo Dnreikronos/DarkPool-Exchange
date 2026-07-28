@@ -9,6 +9,13 @@ public
 # drift from the next codegen run and break the CI stale-SDK check.
 lib/sdk/proto/
 
+# Generated WASM bindings — emitted by wasm-pack via `just build-wasm`
+# and `just build-wasm-zk`. Same reasoning as the SDK above: prettier
+# rewrote these once already, which is exactly what the CI stale-artifact
+# check (rebuild + diff, in the WASM (dp-zk-wasm) job) would trip on.
+lib/prover/pkg/
+lib/prover/zk-pkg/
+
 # Markdown (often hand-aligned tables we don't want reflowed)
 *.md
 
