@@ -4,7 +4,7 @@ export default function Ticker() {
 
   return (
     <div className="border-b border-t border-brand-border py-2.5 overflow-hidden w-screen relative left-1/2 -translate-x-1/2">
-      <div className="flex whitespace-nowrap animate-marquee">
+      <div className="flex whitespace-nowrap animate-marquee motion-reduce:animate-none">
         <span className="font-mono text-[10px] text-brand-accent tracking-[0.15em]">
           {text}{text}{text}{text}
         </span>

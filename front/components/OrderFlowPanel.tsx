@@ -18,7 +18,7 @@ function StatusDot({ status }: { status: string }) {
         : 'bg-brand-border2'
   return (
     <span
-      className={`inline-block w-1.5 h-1.5 ${color} ${status === 'PROVING' ? 'animate-blink' : ''}`}
+      className={`inline-block w-1.5 h-1.5 ${color} ${status === 'PROVING' ? 'animate-blink motion-reduce:animate-none' : ''}`}
       style={{ borderRadius: 0 }}
     />
   )
@@ -31,7 +31,7 @@ export default function OrderFlowPanel() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-brand-border">
         <div className="flex items-center gap-2">
           <span
-            className="w-1.5 h-1.5 bg-brand-accent animate-blink inline-block"
+            className="w-1.5 h-1.5 bg-brand-accent animate-blink motion-reduce:animate-none inline-block"
             style={{ borderRadius: 0 }}
           />
           <span className="font-mono text-[10px] text-brand-accent tracking-[0.15em]">

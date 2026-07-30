@@ -7,7 +7,7 @@ import { HistoryBoot } from './_components/HistoryBoot'
 import { OnboardingMount } from './_components/onboarding'
 import { SettlementWatcher } from './_components/SettlementWatcher'
 import { AuctionStrip } from './_shell/AuctionStrip'
-import { ArbitrumHex } from './_shell/icons'
+import { NetworkIndicator } from './_shell/NetworkIndicator'
 import { PairSelector } from './_shell/PairSelector'
 import { Rail } from './_shell/Rail'
 
@@ -80,17 +80,5 @@ function Banner() {
         <ConnectButton />
       </div>
     </header>
-  )
-}
-
-function NetworkIndicator() {
-  return (
-    <div
-      aria-label="Network: Arbitrum, chain 42161, status offline"
-      className="flex h-10 items-center gap-2 px-2"
-    >
-      <ArbitrumHex className="text-brand-muted" />
-      <span className="font-mono text-label-lg uppercase text-brand-muted">ARBITRUM · 42161</span>
-    </div>
   )
 }

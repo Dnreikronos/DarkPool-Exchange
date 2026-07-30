@@ -35,7 +35,7 @@ function TerminalBlock() {
 export default function TerminalFeed() {
   return (
     <div className="fixed top-0 right-0 bottom-0 w-[260px] overflow-hidden pointer-events-none z-[1] hidden md:block">
-      <div className="animate-terminal-scroll font-mono text-[10px] leading-relaxed text-brand-border2 opacity-40 pr-5 pl-4 pt-4 text-right">
+      <div className="animate-terminal-scroll motion-reduce:animate-none font-mono text-[10px] leading-relaxed text-brand-border2 opacity-40 pr-5 pl-4 pt-4 text-right">
         <TerminalBlock />
         <TerminalBlock />
       </div>

@@ -39,7 +39,14 @@ export function DepthRow({ row, side, emphasized = false, mine = false, onSelect
       type={clickable ? 'button' : undefined}
       onClick={handleClick}
       className={`relative grid w-full grid-cols-3 items-center gap-2 px-4 py-1 text-left font-mono transition-colors duration-100 hover:bg-brand-surface focus-visible:bg-brand-surface focus-visible:outline focus-visible:outline-1 focus-visible:outline-brand-accent focus-visible:outline-offset-[-1px] ${sizeClass}`}
-      aria-label={clickable ? `${isBid ? 'Bid' : 'Ask'} ${row.level.price}` : undefined}
+      // An aria-label replaces the button's content as its accessible
+      // name, so the size and total columns below are unreachable unless
+      // they are named here too (#205).
+      aria-label={
+        clickable
+          ? `${isBid ? 'Bid' : 'Ask'} ${row.level.price}, size ${row.level.totalSize}, total ${row.cumulative}`
+          : undefined
+      }
       data-mine={mine || undefined}
     >
       <span
